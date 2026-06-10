@@ -65,6 +65,9 @@ pub enum Token {
     RetireConnectionId(u64),
     AckFrequency(AckRate),
     Datagram(DatagramTracking),
+    /// Experimental MCQUIC control frame.
+    #[cfg(feature = "mcquic")]
+    Mcquic(crate::mcquic::Frame),
     /// A packet marked with [`neqo_common::Ecn::Ect0`].
     EcnEct0,
     /// A PMTUD probe packet.

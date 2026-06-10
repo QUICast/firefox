@@ -742,6 +742,15 @@ impl From<Frame<'_>> for QuicFrame {
                 length: data.len() as u64,
                 raw: None,
             },
+            #[cfg(feature = "mcquic")]
+            Frame::Mcquic(frame) => {
+                let frame_type = frame.frame_type().unwrap_or(0);
+                Self::Unknown {
+                    frame_type_value: Some(frame_type),
+                    raw_frame_type: frame_type,
+                    raw: None,
+                }
+            }
         }
     }
 }

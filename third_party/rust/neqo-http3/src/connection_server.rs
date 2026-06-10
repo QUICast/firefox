@@ -280,6 +280,17 @@ impl Http3ServerHandler {
             .connect_udp_send_datagram(session_id, conn, buf, id, now)
     }
 
+    #[cfg(feature = "mcquic")]
+    pub(crate) fn mcquic_send(
+        &mut self,
+        conn: &mut Connection,
+        frame: neqo_transport::mcquic::Frame,
+    ) -> Res<()> {
+        self.needs_processing = true;
+        conn.mcquic_send(frame)?;
+        Ok(())
+    }
+
     /// Process HTTTP3 layer.
     pub fn process_http3(&mut self, conn: &mut Connection, now: Instant) {
         qtrace!("[{self}] Process http3 internal");

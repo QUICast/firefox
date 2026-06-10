@@ -79,6 +79,7 @@ disable-encryption = [
     "nss/disable-encryption",
 ]
 draft-29 = ["neqo-transport/draft-29"]
+mcquic = ["neqo-transport/mcquic"]
 
 [lib]
 name = "neqo_http3"
@@ -96,6 +97,10 @@ path = "tests/connect_udp.rs"
 [[test]]
 name = "httpconn"
 path = "tests/httpconn.rs"
+
+[[test]]
+name = "mcquic"
+path = "tests/mcquic.rs"
 
 [[test]]
 name = "non_ascii_headers"
@@ -148,9 +153,9 @@ path = "./../neqo-qpack"
 path = "./../neqo-transport"
 
 [dependencies.nss]
-git = "https://github.com/mozilla/nss-rs"
-rev = "0.9.0"
 package = "nss-rs"
+rev = "0.9.0"
+git = "https://github.com/mozilla/nss-rs"
 
 [dependencies.qlog]
 version = "0.16.0"

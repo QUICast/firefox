@@ -57,6 +57,10 @@ pub enum TransportParameterId {
     GreaseQuicBit = 0x2ab2,
     MinAckDelay = 0xff02_de1a,
     MaxDatagramFrameSize = 0x0020,
+    #[cfg(feature = "mcquic")]
+    MulticastClientParams = crate::mcquic::CLIENT_PARAMS_TRANSPORT_PARAMETER_ID,
+    #[cfg(feature = "mcquic")]
+    MulticastServerSupport = crate::mcquic::SERVER_SUPPORT_TRANSPORT_PARAMETER_ID,
     #[cfg(test)]
     TestTransportParameter = 0xce16,
 }
@@ -155,6 +159,8 @@ pub enum TransportParameter {
         current: version::Wire,
         other: Vec<version::Wire>,
     },
+    #[cfg(feature = "mcquic")]
+    MulticastClientParams(crate::mcquic::ClientTransportParams),
 }
 
 impl TransportParameter {
@@ -198,6 +204,10 @@ impl TransportParameter {
                         enc_inner.encode_uint(4, *v);
                     }
                 });
+            }
+            #[cfg(feature = "mcquic")]
+            Self::MulticastClientParams(params) => {
+                enc.encode_vvec_with(|enc_inner| params.encode(enc_inner));
             }
         }
     }
@@ -326,6 +336,12 @@ impl TransportParameter {
                 _ => return Err(Error::TransportParameter),
             },
             TransportParameterId::VersionInformation => Self::decode_versions(&mut d)?,
+            #[cfg(feature = "mcquic")]
+            TransportParameterId::MulticastClientParams => {
+                Self::MulticastClientParams(crate::mcquic::ClientTransportParams::decode(&mut d)?)
+            }
+            #[cfg(feature = "mcquic")]
+            TransportParameterId::MulticastServerSupport => Self::Empty,
             #[cfg(test)]
             TransportParameterId::TestTransportParameter => {
                 Self::Bytes(d.decode_remainder().to_vec())
@@ -499,8 +515,39 @@ impl TransportParameters {
             | TransportParameterId::Scone => {
                 self.set(tp, TransportParameter::Empty);
             }
+            #[cfg(feature = "mcquic")]
+            TransportParameterId::MulticastServerSupport => {
+                self.set(tp, TransportParameter::Empty);
+            }
             _ => panic!("Transport parameter not known or not type empty"),
         }
+    }
+
+    /// Get decoded MCQUIC client transport parameters.
+    #[cfg(feature = "mcquic")]
+    #[must_use]
+    pub fn get_mcquic_client_params(&self) -> Option<&crate::mcquic::ClientTransportParams> {
+        match &self.params[TransportParameterId::MulticastClientParams] {
+            None => None,
+            Some(TransportParameter::MulticastClientParams(params)) => Some(params),
+            _ => panic!("Internal error"),
+        }
+    }
+
+    /// Set MCQUIC client transport parameters.
+    #[cfg(feature = "mcquic")]
+    pub fn set_mcquic_client_params(&mut self, params: crate::mcquic::ClientTransportParams) {
+        self.set(
+            TransportParameterId::MulticastClientParams,
+            TransportParameter::MulticastClientParams(params),
+        );
+    }
+
+    /// Return whether the peer advertised MCQUIC server support.
+    #[cfg(feature = "mcquic")]
+    #[must_use]
+    pub fn get_mcquic_server_support(&self) -> bool {
+        self.get_empty(TransportParameterId::MulticastServerSupport)
     }
 
     /// Set version information.
@@ -549,6 +596,15 @@ impl TransportParameters {
     /// or equal to the promised value.
     pub(crate) fn ok_for_0rtt(&self, remembered: &Self) -> bool {
         for (k, v_rem) in &remembered.params {
+            #[cfg(feature = "mcquic")]
+            if matches!(
+                k,
+                TransportParameterId::MulticastClientParams
+                    | TransportParameterId::MulticastServerSupport
+            ) {
+                continue;
+            }
+
             // Skip checks for these, which don't affect 0-RTT.
             if v_rem.is_none()
                 || matches!(
@@ -984,6 +1040,44 @@ mod tests {
         let (id, decoded) = TransportParameter::decode(&mut dec).unwrap().unwrap();
         assert_eq!(id, PreferredAddress);
         assert_eq!(decoded, spa);
+    }
+
+    #[cfg(feature = "mcquic")]
+    #[test]
+    fn mcquic_client_params_encode_decode() {
+        let params = crate::mcquic::ClientTransportParams {
+            limits: crate::mcquic::ClientLimits {
+                ipv4_channels_allowed: true,
+                ipv6_channels_allowed: false,
+                max_aggregate_rate_kibps: 100_000,
+                max_channel_ids: 32,
+            },
+            hash_algorithms: vec![1, 2],
+            encryption_algorithms: vec![0x1301, 0x1303],
+        };
+        let mut tps = TransportParameters::default();
+        tps.set_mcquic_client_params(params.clone());
+
+        let mut enc = Encoder::default();
+        tps.encode(&mut enc);
+        let decoded =
+            TransportParameters::decode(&mut enc.as_decoder()).expect("decode transport params");
+
+        assert_eq!(decoded.get_mcquic_client_params(), Some(&params));
+    }
+
+    #[cfg(feature = "mcquic")]
+    #[test]
+    fn mcquic_server_support_encode_decode() {
+        let mut tps = TransportParameters::default();
+        tps.set_empty(MulticastServerSupport);
+
+        let mut enc = Encoder::default();
+        tps.encode(&mut enc);
+        let decoded =
+            TransportParameters::decode(&mut enc.as_decoder()).expect("decode transport params");
+
+        assert!(decoded.get_mcquic_server_support());
     }
 
     fn mutate_spa<F>(wrecker: F) -> TransportParameter

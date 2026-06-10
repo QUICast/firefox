@@ -4546,6 +4546,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "mcrx-core"
+version = "0.2.7"
+dependencies = [
+ "bytes",
+ "libc",
+ "socket2",
+ "thiserror 2.0.12",
+ "windows-sys",
+]
+
+[[package]]
 name = "md-5"
 version = "0.10.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5451,6 +5462,7 @@ dependencies = [
  "firefox-on-glean",
  "libc",
  "log",
+ "mcrx-core",
  "neqo-common",
  "neqo-http3",
  "neqo-qpack",

@@ -5,6 +5,8 @@
 
 // The class implementing a QUIC connection.
 
+#[cfg(feature = "mcquic")]
+use std::collections::{BTreeMap, VecDeque};
 use std::{
     cell::RefCell,
     cmp::{max, min},
@@ -307,6 +309,15 @@ pub struct Connection {
     /// This is responsible for the `QuicDatagrams`' handling:
     /// <https://datatracker.ietf.org/doc/html/draft-ietf-quic-datagram>
     quic_datagrams: QuicDatagrams,
+    /// Experimental MCQUIC control frames received from the peer.
+    #[cfg(feature = "mcquic")]
+    mcquic_recv: VecDeque<crate::mcquic::Frame>,
+    /// Experimental MCQUIC control frames queued for unicast delivery.
+    #[cfg(feature = "mcquic")]
+    mcquic_send: VecDeque<crate::mcquic::Frame>,
+    /// Integrity hash lengths learned from peer `MC_ANNOUNCE` frames.
+    #[cfg(feature = "mcquic")]
+    mcquic_integrity_hash_lens: BTreeMap<Vec<u8>, usize>,
 
     crypto: Crypto,
     acks: AckTracker,
@@ -472,6 +483,12 @@ impl Connection {
             conn_params,
             hrtime: hrtime::Time::get(Self::LOOSE_TIMER_RESOLUTION),
             quic_datagrams,
+            #[cfg(feature = "mcquic")]
+            mcquic_recv: VecDeque::new(),
+            #[cfg(feature = "mcquic")]
+            mcquic_send: VecDeque::new(),
+            #[cfg(feature = "mcquic")]
+            mcquic_integrity_hash_lens: BTreeMap::new(),
             #[cfg(any(test, feature = "build-fuzzing-corpus"))]
             test_frame_writer: None,
         };
@@ -1886,7 +1903,7 @@ impl Connection {
         while d.remaining() > 0 {
             #[cfg(feature = "build-fuzzing-corpus")]
             let pos = d.offset();
-            let f = Frame::decode(&mut d)?;
+            let f = self.decode_frame(&mut d)?;
             #[cfg(feature = "build-fuzzing-corpus")]
             neqo_common::write_item_to_fuzzing_corpus("frame", &packet[pos..d.offset()]);
             ack_eliciting |= f.ack_eliciting();
@@ -1929,6 +1946,55 @@ impl Connection {
         };
 
         Ok(largest_received && !probing)
+    }
+
+    #[cfg(not(feature = "mcquic"))]
+    fn decode_frame<'a>(&self, dec: &mut Decoder<'a>) -> Res<Frame<'a>> {
+        Frame::decode(dec)
+    }
+
+    #[cfg(feature = "mcquic")]
+    fn decode_frame<'a>(&self, dec: &mut Decoder<'a>) -> Res<Frame<'a>> {
+        let mut peek = Decoder::from(dec.as_ref());
+        let frame_type_start = peek.offset();
+        let frame_type = peek.decode_varint().ok_or(Error::NoMoreData)?;
+
+        if Encoder::varint_len(frame_type) != peek.offset() - frame_type_start {
+            return Err(Error::ProtocolViolation);
+        }
+
+        if !crate::mcquic::is_frame_type(frame_type) {
+            return Frame::decode(dec);
+        }
+
+        let frame_type_start = dec.offset();
+        let decoded_frame_type = dec.decode_varint().ok_or(Error::NoMoreData)?;
+        debug_assert_eq!(decoded_frame_type, frame_type);
+        if Encoder::varint_len(decoded_frame_type) != dec.offset() - frame_type_start {
+            return Err(Error::ProtocolViolation);
+        }
+
+        let integrity_hash_len = self.mcquic_integrity_hash_len_for_frame(frame_type, dec)?;
+        crate::mcquic::Frame::decode_payload(frame_type, dec, integrity_hash_len).map(Frame::Mcquic)
+    }
+
+    #[cfg(feature = "mcquic")]
+    fn mcquic_integrity_hash_len_for_frame(
+        &self,
+        frame_type: u64,
+        dec: &Decoder,
+    ) -> Res<Option<usize>> {
+        if frame_type != crate::mcquic::FRAME_TYPE_INTEGRITY_WITH_LENGTH {
+            return Ok(None);
+        }
+
+        let mut peek = Decoder::from(dec.as_ref());
+        let channel_id_len = peek.decode_uint::<u8>().ok_or(Error::NoMoreData)?;
+        let channel_id = peek
+            .decode(usize::from(channel_id_len))
+            .ok_or(Error::NoMoreData)?;
+
+        Ok(self.mcquic_integrity_hash_lens.get(channel_id).copied())
     }
 
     /// During connection setup, the first path needs to be setup.
@@ -2293,6 +2359,24 @@ impl Connection {
             .is_some_and(|r| r.get_empty(GreaseQuicBit))
     }
 
+    #[cfg(feature = "mcquic")]
+    fn mcquic_negotiated(&self) -> bool {
+        let tph = self.tps.borrow();
+        let Some(remote) = tph.remote_handshake() else {
+            return false;
+        };
+        match self.role {
+            Role::Client => {
+                tph.local().get_mcquic_client_params().is_some()
+                    && remote.get_mcquic_server_support()
+            }
+            Role::Server => {
+                tph.local().get_mcquic_server_support()
+                    && remote.get_mcquic_client_params().is_some()
+            }
+        }
+    }
+
     /// Write the frames that are exchanged in the application data space.
     /// The order of calls here determines the relative priority of frames.
     fn write_appdata_frames(
@@ -2306,64 +2390,74 @@ impl Connection {
             |p| p.borrow().rtt().estimate(),
         );
 
-        let stats = &mut self.stats.borrow_mut();
-        let frame_stats = &mut stats.frame_tx;
-        if self.role == Role::Server
-            && let Some(t) = self.state_signaling.write_done(builder)
         {
-            tokens.push(t);
-            frame_stats.handshake_done += 1;
-        }
+            let stats = &mut self.stats.borrow_mut();
+            let frame_stats = &mut stats.frame_tx;
+            if self.role == Role::Server
+                && let Some(t) = self.state_signaling.write_done(builder)
+            {
+                tokens.push(t);
+                frame_stats.handshake_done += 1;
+            }
 
-        self.streams
-            .write_frames(TransmissionPriority::Critical, builder, tokens, frame_stats);
-        if builder.is_full() {
-            return;
-        }
-
-        self.streams
-            .write_maintenance_frames(builder, tokens, frame_stats, now, rtt);
-        if builder.is_full() {
-            return;
-        }
-
-        self.streams.write_frames(
-            TransmissionPriority::Important,
-            builder,
-            tokens,
-            frame_stats,
-        );
-        if builder.is_full() {
-            return;
-        }
-
-        // NEW_CONNECTION_ID, RETIRE_CONNECTION_ID, and ACK_FREQUENCY.
-        self.cid_manager.write_frames(builder, tokens, frame_stats);
-        if builder.is_full() {
-            return;
-        }
-
-        self.paths.write_frames(builder, tokens, frame_stats);
-        if builder.is_full() {
-            return;
-        }
-
-        for prio in [TransmissionPriority::High, TransmissionPriority::Normal] {
             self.streams
-                .write_frames(prio, builder, tokens, &mut stats.frame_tx);
+                .write_frames(TransmissionPriority::Critical, builder, tokens, frame_stats);
+            if builder.is_full() {
+                return;
+            }
+
+            self.streams
+                .write_maintenance_frames(builder, tokens, frame_stats, now, rtt);
+            if builder.is_full() {
+                return;
+            }
+
+            self.streams.write_frames(
+                TransmissionPriority::Important,
+                builder,
+                tokens,
+                frame_stats,
+            );
+            if builder.is_full() {
+                return;
+            }
+
+            // NEW_CONNECTION_ID, RETIRE_CONNECTION_ID, and ACK_FREQUENCY.
+            self.cid_manager.write_frames(builder, tokens, frame_stats);
+            if builder.is_full() {
+                return;
+            }
+
+            self.paths.write_frames(builder, tokens, frame_stats);
+            if builder.is_full() {
+                return;
+            }
+
+            for prio in [TransmissionPriority::High, TransmissionPriority::Normal] {
+                self.streams
+                    .write_frames(prio, builder, tokens, &mut stats.frame_tx);
+                if builder.is_full() {
+                    return;
+                }
+            }
+
+            // Datagrams are best-effort and unreliable.  Let streams starve them for now.
+            self.quic_datagrams.write_frames(builder, tokens, stats);
             if builder.is_full() {
                 return;
             }
         }
 
-        // Datagrams are best-effort and unreliable.  Let streams starve them for now.
-        self.quic_datagrams.write_frames(builder, tokens, stats);
-        if builder.is_full() {
-            return;
+        #[cfg(feature = "mcquic")]
+        {
+            if self.write_mcquic_frames(builder, tokens) || builder.is_full() {
+                return;
+            }
         }
 
         // CRYPTO here only includes NewSessionTicket, plus NEW_TOKEN.
         // Both of these are only used for resumption and so can be relatively low priority.
+        let stats = &mut self.stats.borrow_mut();
         let frame_stats = &mut stats.frame_tx;
         self.crypto.write_frame(
             PacketNumberSpace::ApplicationData,
@@ -2383,6 +2477,33 @@ impl Connection {
 
         self.streams
             .write_frames(TransmissionPriority::Low, builder, tokens, frame_stats);
+    }
+
+    #[cfg(feature = "mcquic")]
+    fn write_mcquic_frames(
+        &mut self,
+        builder: &mut packet::Builder<&mut Vec<u8>>,
+        tokens: &mut recovery::Tokens,
+    ) -> bool {
+        while let Some(frame) = self.mcquic_send.pop_front() {
+            let encoded = frame
+                .to_vec()
+                .expect("MCQUIC frames are validated when queued");
+            if encoded.len() > builder.remaining() {
+                self.mcquic_send.push_front(frame);
+                return false;
+            }
+
+            let requires_packet_end = frame.requires_packet_end();
+            builder.encode(&encoded);
+            if frame.retransmit_on_loss() {
+                tokens.push(recovery::Token::Mcquic(frame));
+            }
+            if requires_packet_end {
+                return true;
+            }
+        }
+        false
     }
 
     // Maybe send a probe.  Return true if the packet was ack-eliciting.
@@ -3457,9 +3578,38 @@ impl Connection {
                 self.quic_datagrams
                     .handle_datagram(data, &mut self.stats.borrow_mut())?;
             }
+            #[cfg(feature = "mcquic")]
+            Frame::Mcquic(frame) => {
+                self.input_mcquic_frame(frame)?;
+            }
             _ => unreachable!("All other frames are for streams"),
         }
 
+        Ok(())
+    }
+
+    #[cfg(feature = "mcquic")]
+    fn input_mcquic_frame(&mut self, frame: crate::mcquic::Frame) -> Res<()> {
+        if !self.mcquic_negotiated() {
+            return Err(Error::ProtocolViolation);
+        }
+
+        let expected_sender = match self.role {
+            Role::Client => crate::mcquic::Sender::Server,
+            Role::Server => crate::mcquic::Sender::Client,
+        };
+        if frame.sender() != expected_sender {
+            return Err(Error::ProtocolViolation);
+        }
+
+        if let crate::mcquic::Frame::Announce(announce) = &frame {
+            let hash_len =
+                crate::mcquic::integrity_hash_len_from_id(announce.integrity_hash_algorithm)?;
+            self.mcquic_integrity_hash_lens
+                .insert(announce.channel_id.clone(), hash_len);
+        }
+
+        self.mcquic_recv.push_back(frame);
         Ok(())
     }
 
@@ -3491,6 +3641,12 @@ impl Connection {
                         self.events
                             .datagram_outcome(dgram_tracker, OutgoingDatagramOutcome::Lost);
                         self.stats.borrow_mut().datagram_tx.lost += 1;
+                    }
+                    #[cfg(feature = "mcquic")]
+                    recovery::Token::Mcquic(frame) => {
+                        if frame.retransmit_on_loss() {
+                            self.mcquic_send.push_back(frame.clone());
+                        }
                     }
                     recovery::Token::EcnEct0 => self.paths.lost_ecn(&mut self.stats.borrow_mut()),
                     // PMTUD probe loss is handled by the PMTUD state machine.
@@ -3562,6 +3718,8 @@ impl Connection {
                     recovery::Token::Datagram(dgram_tracker) => self
                         .events
                         .datagram_outcome(dgram_tracker, OutgoingDatagramOutcome::Acked),
+                    #[cfg(feature = "mcquic")]
+                    recovery::Token::Mcquic(_) => (),
                     recovery::Token::EcnEct0 => self.paths.acked_ecn(),
                     // We don't care about these being ACK'ed
                     recovery::Token::HandshakeDone | recovery::Token::PmtudProbe => (),
@@ -3965,6 +4123,65 @@ impl Connection {
     pub fn send_datagram<I: Into<DatagramTracking>>(&mut self, buf: Vec<u8>, id: I) -> Res<()> {
         self.quic_datagrams
             .add_datagram(buf, id.into(), &mut self.stats.borrow_mut())
+    }
+
+    /// Queue an experimental MCQUIC control frame for unicast delivery.
+    ///
+    /// # Errors
+    ///
+    /// Returns `NotAvailable` if MCQUIC was not negotiated, or an encoding
+    /// error if the frame is malformed.
+    #[cfg(feature = "mcquic")]
+    pub fn mcquic_send(&mut self, frame: crate::mcquic::Frame) -> Res<()> {
+        if !self.mcquic_negotiated() {
+            return Err(Error::NotAvailable);
+        }
+
+        let expected_sender = match self.role {
+            Role::Client => crate::mcquic::Sender::Client,
+            Role::Server => crate::mcquic::Sender::Server,
+        };
+        if frame.sender() != expected_sender {
+            return Err(Error::ProtocolViolation);
+        }
+
+        frame.to_vec()?;
+        self.mcquic_send.push_back(frame);
+        Ok(())
+    }
+
+    /// Pop the next received experimental MCQUIC control frame.
+    #[cfg(feature = "mcquic")]
+    pub fn mcquic_recv(&mut self) -> Option<crate::mcquic::Frame> {
+        self.mcquic_recv.pop_front()
+    }
+
+    /// Return whether an experimental MCQUIC control frame is ready.
+    #[cfg(feature = "mcquic")]
+    #[must_use]
+    pub fn mcquic_readable(&self) -> bool {
+        !self.mcquic_recv.is_empty()
+    }
+
+    /// Return whether the peer advertised MCQUIC server support.
+    #[cfg(feature = "mcquic")]
+    #[must_use]
+    pub fn peer_mcquic_server_support(&self) -> bool {
+        self.tps
+            .borrow()
+            .remote_handshake()
+            .is_some_and(TransportParameters::get_mcquic_server_support)
+    }
+
+    /// Return the peer's MCQUIC client transport parameters, if present.
+    #[cfg(feature = "mcquic")]
+    #[must_use]
+    pub fn peer_mcquic_client_params(&self) -> Option<crate::mcquic::ClientTransportParams> {
+        self.tps
+            .borrow()
+            .remote_handshake()
+            .and_then(TransportParameters::get_mcquic_client_params)
+            .cloned()
     }
 
     /// Return the PLMTU of the primary path.

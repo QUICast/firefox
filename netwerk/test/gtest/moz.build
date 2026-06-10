@@ -27,6 +27,7 @@ UNIFIED_SOURCES += [
     "TestIsValidIp.cpp",
     "TestLinkHeader.cpp",
     "TestLocalNetworkAccess.cpp",
+    "TestMcquicMulticastReceiver.cpp",
     "TestMIMEInputStream.cpp",
     "TestMozURL.cpp",
     "TestNoVarySearchUtils.cpp",

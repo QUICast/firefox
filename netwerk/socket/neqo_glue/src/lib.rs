@@ -4,6 +4,8 @@
 
 #![expect(clippy::missing_panics_doc, reason = "OK here")]
 
+#[cfg(feature = "mcquic")]
+use std::collections::BTreeMap;
 #[cfg(feature = "fuzzing")]
 use std::time::Duration;
 use std::{
@@ -28,6 +30,7 @@ use firefox_on_glean::{
 use libc::{c_int, AF_INET, AF_INET6};
 use libc::{c_uchar, size_t};
 use log::debug;
+use mcrx_core::{Context as McrxContext, McrxError, SourceFilter, SubscriptionConfig};
 use neqo_common::{
     datagram, event::Provider as _, qdebug, qerror, qlog::Qlog, qwarn, Datagram, Decoder, Encoder,
     Header, Role, Tos,
@@ -123,6 +126,11 @@ pub struct NeqoHttp3Conn {
     /// WouldBlock. To be sent once UDP socket has write-availability again.
     buffered_outbound_datagram: Option<datagram::Batch>,
 
+    #[cfg(feature = "mcquic")]
+    mcquic_client_limits: Option<neqo_transport::mcquic::ClientLimits>,
+    #[cfg(feature = "mcquic")]
+    mcquic_channels: BTreeMap<Vec<u8>, neqo_transport::mcquic::ChannelReceiveState>,
+
     datagram_segment_size_sent: LocalMemoryDistribution<'static>,
     datagram_segment_size_received: LocalMemoryDistribution<'static>,
     datagram_size_sent: LocalMemoryDistribution<'static>,
@@ -142,6 +150,921 @@ impl Drop for NeqoHttp3Conn {
 #[repr(C)]
 pub union NetAddr {
     private: [u8; 0],
+}
+
+#[repr(C)]
+pub struct McquicMcrxReceiver {
+    context: McrxContext,
+}
+
+#[repr(C)]
+pub struct McquicMcrxPacket {
+    pub subscription_id: u64,
+    pub source_ip: nsCString,
+    pub source_port: u16,
+    pub group_ip: nsCString,
+    pub dst_port: u16,
+    pub socket_local_ip: nsCString,
+    pub socket_local_port: u16,
+    pub configured_interface_ip: nsCString,
+    pub has_configured_interface_index: bool,
+    pub configured_interface_index: u32,
+    pub destination_local_ip: nsCString,
+    pub has_ingress_interface_index: bool,
+    pub ingress_interface_index: u32,
+    pub payload: ThinVec<u8>,
+}
+
+impl Default for McquicMcrxPacket {
+    fn default() -> Self {
+        Self {
+            subscription_id: 0,
+            source_ip: nsCString::new(),
+            source_port: 0,
+            group_ip: nsCString::new(),
+            dst_port: 0,
+            socket_local_ip: nsCString::new(),
+            socket_local_port: 0,
+            configured_interface_ip: nsCString::new(),
+            has_configured_interface_index: false,
+            configured_interface_index: 0,
+            destination_local_ip: nsCString::new(),
+            has_ingress_interface_index: false,
+            ingress_interface_index: 0,
+            payload: ThinVec::new(),
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum McquicControlFrameTag {
+    NoFrame,
+    Announce,
+    Key,
+    Integrity,
+    Join,
+    Leave,
+    Retire,
+    State,
+    Ack,
+    Limits,
+}
+
+#[repr(C)]
+pub struct McquicControlFrameExternal {
+    pub tag: McquicControlFrameTag,
+    pub channel_id: ThinVec<u8>,
+    pub source_ip: nsCString,
+    pub group_ip: nsCString,
+    pub udp_port: u16,
+    pub key_sequence: u64,
+    pub packet_number_start: u64,
+    pub packet_hash_count: u64,
+    pub largest_acknowledged: u64,
+    pub state_sequence: u64,
+    pub channel_state: u8,
+}
+
+impl Default for McquicControlFrameExternal {
+    fn default() -> Self {
+        Self {
+            tag: McquicControlFrameTag::NoFrame,
+            channel_id: ThinVec::new(),
+            source_ip: nsCString::new(),
+            group_ip: nsCString::new(),
+            udp_port: 0,
+            key_sequence: 0,
+            packet_number_start: 0,
+            packet_hash_count: 0,
+            largest_acknowledged: 0,
+            state_sequence: 0,
+            channel_state: 0,
+        }
+    }
+}
+
+#[repr(C)]
+pub struct McquicChannelDatagram {
+    pub channel_id: ThinVec<u8>,
+    pub packet_number: u64,
+    pub payload: ThinVec<u8>,
+}
+
+impl Default for McquicChannelDatagram {
+    fn default() -> Self {
+        Self {
+            channel_id: ThinVec::new(),
+            packet_number: 0,
+            payload: ThinVec::new(),
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum McquicMoqDatagramFormat {
+    Unknown,
+    NativeMoqtObject,
+    LegacyMoq1Object,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum McquicMoqObjectStatus {
+    Unknown,
+    Normal,
+    EndOfGroup,
+    EndOfTrack,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum McquicMoqControlMessageTag {
+    Unknown,
+    Setup,
+    Subscribe,
+    SubscribeOk,
+    RequestOk,
+    RequestError,
+}
+
+#[repr(C)]
+pub struct McquicMoqDatagramExternal {
+    pub format: McquicMoqDatagramFormat,
+    pub track_alias: u64,
+    pub has_track_alias: bool,
+    pub group_id: u64,
+    pub object_id: u64,
+    pub publisher_sequence: u64,
+    pub pts_millis: u64,
+    pub status: McquicMoqObjectStatus,
+    pub end_of_group: bool,
+    pub keyframe: bool,
+    pub config: bool,
+    pub independent: bool,
+    pub payload_len: u64,
+    pub has_publisher_priority: bool,
+    pub publisher_priority: u8,
+    pub has_multicast_packet_number: bool,
+    pub multicast_packet_number: u64,
+    pub namespace: nsCString,
+    pub track_name: nsCString,
+    pub multicast_channel: ThinVec<u8>,
+}
+
+impl Default for McquicMoqDatagramExternal {
+    fn default() -> Self {
+        Self {
+            format: McquicMoqDatagramFormat::Unknown,
+            track_alias: 0,
+            has_track_alias: false,
+            group_id: 0,
+            object_id: 0,
+            publisher_sequence: 0,
+            pts_millis: 0,
+            status: McquicMoqObjectStatus::Unknown,
+            end_of_group: false,
+            keyframe: false,
+            config: false,
+            independent: false,
+            payload_len: 0,
+            has_publisher_priority: false,
+            publisher_priority: 0,
+            has_multicast_packet_number: false,
+            multicast_packet_number: 0,
+            namespace: nsCString::new(),
+            track_name: nsCString::new(),
+            multicast_channel: ThinVec::new(),
+        }
+    }
+}
+
+#[repr(C)]
+pub struct McquicMoqControlMessageExternal {
+    pub tag: McquicMoqControlMessageTag,
+    pub consumed: u64,
+    pub request_id: u64,
+    pub track_alias: u64,
+    pub error_code: u64,
+    pub retry_interval: u64,
+    pub namespace: nsCString,
+    pub track_name: nsCString,
+    pub reason: nsCString,
+}
+
+impl Default for McquicMoqControlMessageExternal {
+    fn default() -> Self {
+        Self {
+            tag: McquicMoqControlMessageTag::Unknown,
+            consumed: 0,
+            request_id: 0,
+            track_alias: 0,
+            error_code: 0,
+            retry_interval: 0,
+            namespace: nsCString::new(),
+            track_name: nsCString::new(),
+            reason: nsCString::new(),
+        }
+    }
+}
+
+#[repr(C)]
+pub struct McquicSendPendingAcksResult {
+    pub result: nsresult,
+    pub sent: bool,
+}
+
+const MCQUIC_MOQT_MESSAGE_SETUP: u64 = 0x2f00;
+const MCQUIC_MOQT_MESSAGE_SUBSCRIBE: u64 = 0x03;
+const MCQUIC_MOQT_MESSAGE_SUBSCRIBE_OK: u64 = 0x04;
+const MCQUIC_MOQT_MESSAGE_REQUEST_ERROR: u64 = 0x05;
+const MCQUIC_MOQT_MESSAGE_REQUEST_OK: u64 = 0x07;
+
+const MCQUIC_MOQT_SETUP_OPTION_PATH: u64 = 0x01;
+const MCQUIC_MOQT_SETUP_OPTION_AUTHORITY: u64 = 0x05;
+const MCQUIC_MOQT_SETUP_OPTION_IMPLEMENTATION: u64 = 0x07;
+const MCQUIC_MOQT_SUBSCRIBE_REQUEST_ID: u64 = 0;
+const MCQUIC_MOQT_MAX_VARINT: u64 = (1u64 << 62) - 1;
+const MCQUIC_MOQT_MAX_NAMESPACE_FIELDS: usize = 32;
+const MCQUIC_MOQT_MAX_FULL_TRACK_NAME_BYTES: usize = 4096;
+const MCQUIC_MOQT_STREAM_READ_SIZE: usize = 4096;
+const MCQUIC_MOQT_IMPLEMENTATION: &[u8] = b"firefox-neqo-mcquic/0.1";
+
+const MCQUIC_MOQT_DATAGRAM_PROPERTIES: u64 = 0x01;
+const MCQUIC_MOQT_DATAGRAM_END_OF_GROUP: u64 = 0x02;
+const MCQUIC_MOQT_DATAGRAM_ZERO_OBJECT_ID: u64 = 0x04;
+const MCQUIC_MOQT_DATAGRAM_DEFAULT_PRIORITY: u64 = 0x08;
+const MCQUIC_MOQT_DATAGRAM_STATUS: u64 = 0x20;
+
+const MCQUIC_MOQ1_MAGIC: &[u8; 4] = b"MOQ1";
+const MCQUIC_MOQ1_VERSION: u8 = 1;
+const MCQUIC_MOQ1_FLAG_KEYFRAME: u8 = 0x01;
+const MCQUIC_MOQ1_FLAG_CONFIG: u8 = 0x02;
+const MCQUIC_MOQ1_FLAG_END_OF_GROUP: u8 = 0x04;
+const MCQUIC_MOQ1_FLAG_INDEPENDENT: u8 = 0x08;
+const MCQUIC_MOQ1_FLAG_HAS_MULTICAST_PROVENANCE: u8 = 0x10;
+const MCQUIC_MOQ1_FIXED_HEADER_LEN: usize = 4 + 1 + 1 + 2 + 2 + 2 + 4 + 8 + 8 + 8 + 8 + 8;
+
+struct McquicMoqReader<'a> {
+    input: &'a [u8],
+    offset: usize,
+}
+
+impl<'a> McquicMoqReader<'a> {
+    const fn new(input: &'a [u8]) -> Self {
+        Self { input, offset: 0 }
+    }
+
+    const fn remaining(&self) -> usize {
+        self.input.len().saturating_sub(self.offset)
+    }
+
+    fn read_u8(&mut self) -> Option<u8> {
+        let value = *self.input.get(self.offset)?;
+        self.offset += 1;
+        Some(value)
+    }
+
+    fn read_varint(&mut self) -> Option<u64> {
+        let (value, consumed) = mcquic_moq_decode_varint(&self.input[self.offset..])?;
+        self.offset += consumed;
+        Some(value)
+    }
+
+    fn read_exact(&mut self, len: usize) -> Option<&'a [u8]> {
+        if self.remaining() < len {
+            return None;
+        }
+        let start = self.offset;
+        self.offset += len;
+        Some(&self.input[start..self.offset])
+    }
+
+    fn read_to_end(&mut self) -> &'a [u8] {
+        let start = self.offset;
+        self.offset = self.input.len();
+        &self.input[start..]
+    }
+}
+
+fn mcquic_moq_decode_varint(input: &[u8]) -> Option<(u64, usize)> {
+    let first = *input.first()?;
+    let prefix = first >> 6;
+    let len = 1usize << prefix;
+    if input.len() < len {
+        return None;
+    }
+
+    let value = match len {
+        1 => u64::from(first & 0x3f),
+        2 => u64::from(u16::from_be_bytes([input[0], input[1]]) & 0x3fff),
+        4 => u64::from(u32::from_be_bytes([input[0], input[1], input[2], input[3]]) & 0x3fff_ffff),
+        8 => {
+            u64::from_be_bytes([
+                input[0], input[1], input[2], input[3], input[4], input[5], input[6], input[7],
+            ]) & 0x3fff_ffff_ffff_ffff
+        }
+        _ => unreachable!("QUIC varint prefix only encodes 1, 2, 4, or 8 bytes"),
+    };
+
+    Some((value, len))
+}
+
+fn mcquic_moq_encode_varint(value: u64, out: &mut Vec<u8>) -> Option<()> {
+    if value > MCQUIC_MOQT_MAX_VARINT {
+        return None;
+    }
+
+    if value < (1 << 6) {
+        out.push(value as u8);
+    } else if value < (1 << 14) {
+        out.extend_from_slice(&((value as u16) | 0x4000).to_be_bytes());
+    } else if value < (1 << 30) {
+        out.extend_from_slice(&((value as u32) | 0x8000_0000).to_be_bytes());
+    } else {
+        out.extend_from_slice(&(value | 0xc000_0000_0000_0000).to_be_bytes());
+    }
+
+    Some(())
+}
+
+fn mcquic_moq_encode_control_message(message_type: u64, payload: &[u8]) -> Option<Vec<u8>> {
+    let payload_len: u16 = payload.len().try_into().ok()?;
+    let mut out = Vec::with_capacity(payload.len() + 4);
+    mcquic_moq_encode_varint(message_type, &mut out)?;
+    out.extend_from_slice(&payload_len.to_be_bytes());
+    out.extend_from_slice(payload);
+    Some(out)
+}
+
+fn mcquic_moq_encode_key_value_bytes(
+    out: &mut Vec<u8>,
+    previous_type: &mut u64,
+    ty: u64,
+    value: &[u8],
+) -> Option<()> {
+    if ty <= *previous_type || ty % 2 == 0 {
+        return None;
+    }
+
+    mcquic_moq_encode_varint(ty.checked_sub(*previous_type)?, out)?;
+    mcquic_moq_encode_varint(value.len().try_into().ok()?, out)?;
+    out.extend_from_slice(value);
+    *previous_type = ty;
+    Some(())
+}
+
+fn mcquic_moq_encode_setup(authority: &[u8]) -> Option<Vec<u8>> {
+    let mut payload = Vec::new();
+    let mut previous_type = 0;
+    mcquic_moq_encode_key_value_bytes(
+        &mut payload,
+        &mut previous_type,
+        MCQUIC_MOQT_SETUP_OPTION_PATH,
+        b"/",
+    )?;
+    mcquic_moq_encode_key_value_bytes(
+        &mut payload,
+        &mut previous_type,
+        MCQUIC_MOQT_SETUP_OPTION_AUTHORITY,
+        authority,
+    )?;
+    mcquic_moq_encode_key_value_bytes(
+        &mut payload,
+        &mut previous_type,
+        MCQUIC_MOQT_SETUP_OPTION_IMPLEMENTATION,
+        MCQUIC_MOQT_IMPLEMENTATION,
+    )?;
+    mcquic_moq_encode_control_message(MCQUIC_MOQT_MESSAGE_SETUP, &payload)
+}
+
+fn mcquic_moq_namespace_fields(namespace: &str) -> Option<Vec<&[u8]>> {
+    let fields = namespace
+        .split('/')
+        .filter(|part| !part.is_empty())
+        .map(str::as_bytes)
+        .collect::<Vec<_>>();
+    if fields.is_empty() || fields.len() > MCQUIC_MOQT_MAX_NAMESPACE_FIELDS {
+        return None;
+    }
+    Some(fields)
+}
+
+fn mcquic_moq_encode_full_track_name(
+    namespace: &str,
+    track_name: &[u8],
+    out: &mut Vec<u8>,
+) -> Option<()> {
+    let fields = mcquic_moq_namespace_fields(namespace)?;
+    let full_track_name_len =
+        fields.iter().map(|field| field.len()).sum::<usize>() + track_name.len();
+    if full_track_name_len > MCQUIC_MOQT_MAX_FULL_TRACK_NAME_BYTES {
+        return None;
+    }
+
+    mcquic_moq_encode_varint(fields.len().try_into().ok()?, out)?;
+    for field in fields {
+        mcquic_moq_encode_varint(field.len().try_into().ok()?, out)?;
+        out.extend_from_slice(field);
+    }
+    mcquic_moq_encode_varint(track_name.len().try_into().ok()?, out)?;
+    out.extend_from_slice(track_name);
+    Some(())
+}
+
+fn mcquic_moq_encode_subscribe(namespace: &str, track_name: &[u8]) -> Option<Vec<u8>> {
+    let mut payload = Vec::new();
+    mcquic_moq_encode_varint(MCQUIC_MOQT_SUBSCRIBE_REQUEST_ID, &mut payload)?;
+    mcquic_moq_encode_full_track_name(namespace, track_name, &mut payload)?;
+    mcquic_moq_encode_varint(0, &mut payload)?;
+    mcquic_moq_encode_control_message(MCQUIC_MOQT_MESSAGE_SUBSCRIBE, &payload)
+}
+
+fn mcquic_moq_skip_key_values_bounded(input: &[u8]) -> Option<()> {
+    let mut reader = McquicMoqReader::new(input);
+    let mut previous = None;
+    while reader.remaining() != 0 {
+        previous = Some(mcquic_moq_read_key_value(&mut reader, previous)?);
+    }
+    Some(())
+}
+
+fn mcquic_moq_skip_parameter_list(reader: &mut McquicMoqReader<'_>) -> Option<()> {
+    let count = reader.read_varint()?;
+    let mut previous = None;
+    for _ in 0..count {
+        previous = Some(mcquic_moq_read_key_value(reader, previous)?);
+    }
+    Some(())
+}
+
+fn mcquic_moq_read_key_value(
+    reader: &mut McquicMoqReader<'_>,
+    previous: Option<u64>,
+) -> Option<u64> {
+    let delta = reader.read_varint()?;
+    let previous_value = previous.unwrap_or_default();
+    let ty = previous_value.checked_add(delta)?;
+    if let Some(previous) = previous {
+        if ty <= previous {
+            return None;
+        }
+    }
+
+    if ty % 2 == 0 {
+        reader.read_varint()?;
+    } else {
+        let len = reader.read_varint()? as usize;
+        reader.read_exact(len)?;
+    }
+    Some(ty)
+}
+
+fn mcquic_moq_decode_full_track_name(reader: &mut McquicMoqReader<'_>) -> Option<(String, String)> {
+    let field_count = reader.read_varint()? as usize;
+    if field_count == 0 || field_count > MCQUIC_MOQT_MAX_NAMESPACE_FIELDS {
+        return None;
+    }
+
+    let mut namespace = Vec::with_capacity(field_count);
+    let mut full_track_name_len = 0usize;
+    for _ in 0..field_count {
+        let field_len = reader.read_varint()? as usize;
+        if field_len == 0 {
+            return None;
+        }
+        let field = reader.read_exact(field_len)?;
+        full_track_name_len = full_track_name_len.checked_add(field.len())?;
+        namespace.push(str::from_utf8(field).ok()?.to_string());
+    }
+
+    let track_name_len = reader.read_varint()? as usize;
+    let track_name = reader.read_exact(track_name_len)?;
+    full_track_name_len = full_track_name_len.checked_add(track_name.len())?;
+    if full_track_name_len > MCQUIC_MOQT_MAX_FULL_TRACK_NAME_BYTES {
+        return None;
+    }
+
+    Some((
+        namespace.join("/"),
+        str::from_utf8(track_name).ok()?.to_string(),
+    ))
+}
+
+fn mcquic_decode_moqt_control_message(input: &[u8]) -> Option<McquicMoqControlMessageExternal> {
+    let mut reader = McquicMoqReader::new(input);
+    let message_type = reader.read_varint()?;
+    let message_len = usize::from(u16::from_be_bytes(reader.read_exact(2)?.try_into().ok()?));
+    let payload = reader.read_exact(message_len)?;
+    let consumed = reader.offset as u64;
+    let mut payload_reader = McquicMoqReader::new(payload);
+
+    match message_type {
+        MCQUIC_MOQT_MESSAGE_SETUP => {
+            mcquic_moq_skip_key_values_bounded(payload_reader.read_to_end())?;
+            Some(McquicMoqControlMessageExternal {
+                tag: McquicMoqControlMessageTag::Setup,
+                consumed,
+                ..McquicMoqControlMessageExternal::default()
+            })
+        }
+        MCQUIC_MOQT_MESSAGE_SUBSCRIBE => {
+            let request_id = payload_reader.read_varint()?;
+            let (namespace, track_name) = mcquic_moq_decode_full_track_name(&mut payload_reader)?;
+            mcquic_moq_skip_parameter_list(&mut payload_reader)?;
+            if payload_reader.remaining() != 0 {
+                return None;
+            }
+            Some(McquicMoqControlMessageExternal {
+                tag: McquicMoqControlMessageTag::Subscribe,
+                consumed,
+                request_id,
+                namespace: nsCString::from(namespace),
+                track_name: nsCString::from(track_name),
+                ..McquicMoqControlMessageExternal::default()
+            })
+        }
+        MCQUIC_MOQT_MESSAGE_SUBSCRIBE_OK => {
+            let track_alias = payload_reader.read_varint()?;
+            mcquic_moq_skip_parameter_list(&mut payload_reader)?;
+            mcquic_moq_skip_key_values_bounded(payload_reader.read_to_end())?;
+            Some(McquicMoqControlMessageExternal {
+                tag: McquicMoqControlMessageTag::SubscribeOk,
+                consumed,
+                track_alias,
+                ..McquicMoqControlMessageExternal::default()
+            })
+        }
+        MCQUIC_MOQT_MESSAGE_REQUEST_OK => {
+            mcquic_moq_skip_parameter_list(&mut payload_reader)?;
+            mcquic_moq_skip_key_values_bounded(payload_reader.read_to_end())?;
+            Some(McquicMoqControlMessageExternal {
+                tag: McquicMoqControlMessageTag::RequestOk,
+                consumed,
+                ..McquicMoqControlMessageExternal::default()
+            })
+        }
+        MCQUIC_MOQT_MESSAGE_REQUEST_ERROR => {
+            let error_code = payload_reader.read_varint()?;
+            let retry_interval = payload_reader.read_varint()?;
+            let reason_len = payload_reader.read_varint()? as usize;
+            let reason = payload_reader.read_exact(reason_len)?;
+            let _redirect = (payload_reader.remaining() != 0).then(|| payload_reader.read_to_end());
+            Some(McquicMoqControlMessageExternal {
+                tag: McquicMoqControlMessageTag::RequestError,
+                consumed,
+                error_code,
+                retry_interval,
+                reason: nsCString::from(String::from_utf8_lossy(reason).into_owned()),
+                ..McquicMoqControlMessageExternal::default()
+            })
+        }
+        _ => None,
+    }
+}
+
+fn mcquic_moqt_object_status(value: u64) -> Option<McquicMoqObjectStatus> {
+    match value {
+        0 => Some(McquicMoqObjectStatus::Normal),
+        3 => Some(McquicMoqObjectStatus::EndOfGroup),
+        4 => Some(McquicMoqObjectStatus::EndOfTrack),
+        _ => None,
+    }
+}
+
+fn mcquic_decode_native_moqt_object_datagram(payload: &[u8]) -> Option<McquicMoqDatagramExternal> {
+    let mut reader = McquicMoqReader::new(payload);
+    let datagram_type = reader.read_varint()?;
+    let in_allowed_range =
+        (0x00..=0x0f).contains(&datagram_type) || (0x20..=0x2f).contains(&datagram_type);
+    let has_properties = datagram_type & MCQUIC_MOQT_DATAGRAM_PROPERTIES != 0;
+    let end_of_group = datagram_type & MCQUIC_MOQT_DATAGRAM_END_OF_GROUP != 0;
+    let zero_object_id = datagram_type & MCQUIC_MOQT_DATAGRAM_ZERO_OBJECT_ID != 0;
+    let default_priority = datagram_type & MCQUIC_MOQT_DATAGRAM_DEFAULT_PRIORITY != 0;
+    let has_status = datagram_type & MCQUIC_MOQT_DATAGRAM_STATUS != 0;
+    if !in_allowed_range || (has_status && end_of_group) {
+        return None;
+    }
+
+    let track_alias = reader.read_varint()?;
+    let group_id = reader.read_varint()?;
+    let object_id = if zero_object_id {
+        0
+    } else {
+        reader.read_varint()?
+    };
+    let publisher_priority = if default_priority {
+        None
+    } else {
+        Some(reader.read_u8()?)
+    };
+    if has_properties {
+        let property_len = reader.read_varint()? as usize;
+        if property_len == 0 {
+            return None;
+        }
+        reader.read_exact(property_len)?;
+    }
+
+    let (status, object_payload_len) = if has_status {
+        let status = mcquic_moqt_object_status(reader.read_varint()?)?;
+        if reader.remaining() != 0 {
+            return None;
+        }
+        (status, 0)
+    } else {
+        (
+            McquicMoqObjectStatus::Normal,
+            reader.read_to_end().len() as u64,
+        )
+    };
+
+    Some(McquicMoqDatagramExternal {
+        format: McquicMoqDatagramFormat::NativeMoqtObject,
+        track_alias,
+        has_track_alias: true,
+        group_id,
+        object_id,
+        publisher_sequence: group_id,
+        status,
+        end_of_group: end_of_group || status == McquicMoqObjectStatus::EndOfGroup,
+        payload_len: object_payload_len,
+        has_publisher_priority: publisher_priority.is_some(),
+        publisher_priority: publisher_priority.unwrap_or_default(),
+        ..McquicMoqDatagramExternal::default()
+    })
+}
+
+fn mcquic_decode_legacy_moq1_object_datagram(payload: &[u8]) -> Option<McquicMoqDatagramExternal> {
+    if payload.len() < MCQUIC_MOQ1_FIXED_HEADER_LEN {
+        return None;
+    }
+    if &payload[0..4] != MCQUIC_MOQ1_MAGIC || payload[4] != MCQUIC_MOQ1_VERSION {
+        return None;
+    }
+
+    let flags = payload[5];
+    let namespace_len = u16::from_be_bytes(payload.get(6..8)?.try_into().ok()?) as usize;
+    let track_name_len = u16::from_be_bytes(payload.get(8..10)?.try_into().ok()?) as usize;
+    let multicast_channel_len = u16::from_be_bytes(payload.get(10..12)?.try_into().ok()?) as usize;
+    let object_payload_len = u32::from_be_bytes(payload.get(12..16)?.try_into().ok()?) as usize;
+    let group_id = u64::from_be_bytes(payload.get(16..24)?.try_into().ok()?);
+    let object_id = u64::from_be_bytes(payload.get(24..32)?.try_into().ok()?);
+    let publisher_sequence = u64::from_be_bytes(payload.get(32..40)?.try_into().ok()?);
+    let pts_millis = u64::from_be_bytes(payload.get(40..48)?.try_into().ok()?);
+    let multicast_packet_number = u64::from_be_bytes(payload.get(48..56)?.try_into().ok()?);
+
+    let total_len = MCQUIC_MOQ1_FIXED_HEADER_LEN
+        .checked_add(namespace_len)?
+        .checked_add(track_name_len)?
+        .checked_add(multicast_channel_len)?
+        .checked_add(object_payload_len)?;
+    if payload.len() != total_len {
+        return None;
+    }
+
+    let namespace_start = MCQUIC_MOQ1_FIXED_HEADER_LEN;
+    let namespace_end = namespace_start + namespace_len;
+    let track_name_end = namespace_end + track_name_len;
+    let multicast_channel_end = track_name_end + multicast_channel_len;
+    let namespace = str::from_utf8(&payload[namespace_start..namespace_end]).ok()?;
+    let track_name = str::from_utf8(&payload[namespace_end..track_name_end]).ok()?;
+    let has_multicast_packet_number = flags & MCQUIC_MOQ1_FLAG_HAS_MULTICAST_PROVENANCE != 0;
+
+    Some(McquicMoqDatagramExternal {
+        format: McquicMoqDatagramFormat::LegacyMoq1Object,
+        group_id,
+        object_id,
+        publisher_sequence,
+        pts_millis,
+        status: McquicMoqObjectStatus::Normal,
+        end_of_group: flags & MCQUIC_MOQ1_FLAG_END_OF_GROUP != 0,
+        keyframe: flags & MCQUIC_MOQ1_FLAG_KEYFRAME != 0,
+        config: flags & MCQUIC_MOQ1_FLAG_CONFIG != 0,
+        independent: flags & MCQUIC_MOQ1_FLAG_INDEPENDENT != 0,
+        payload_len: object_payload_len as u64,
+        has_multicast_packet_number,
+        multicast_packet_number: has_multicast_packet_number
+            .then_some(multicast_packet_number)
+            .unwrap_or_default(),
+        namespace: nsCString::from(namespace),
+        track_name: nsCString::from(track_name),
+        multicast_channel: payload[track_name_end..multicast_channel_end]
+            .to_vec()
+            .into(),
+        ..McquicMoqDatagramExternal::default()
+    })
+}
+
+fn parse_mcquic_mcrx_ip(value: &nsACString) -> Result<IpAddr, nsresult> {
+    str::from_utf8(value)
+        .map_err(|_| NS_ERROR_INVALID_ARG)?
+        .parse()
+        .map_err(|_| NS_ERROR_INVALID_ARG)
+}
+
+fn parse_optional_mcquic_mcrx_ip(value: &nsACString) -> Result<Option<IpAddr>, nsresult> {
+    if value.is_empty() {
+        Ok(None)
+    } else {
+        parse_mcquic_mcrx_ip(value).map(Some)
+    }
+}
+
+fn mcquic_mcrx_error_to_nsresult(err: &McrxError) -> nsresult {
+    match err {
+        McrxError::InvalidDestinationPort
+        | McrxError::InvalidMulticastGroup
+        | McrxError::InvalidSourceAddress
+        | McrxError::InvalidIpv4SsmGroup
+        | McrxError::InvalidIpv6SsmGroup
+        | McrxError::SourceAddressFamilyMismatch
+        | McrxError::InterfaceAddressFamilyMismatch
+        | McrxError::InvalidInterfaceIndex
+        | McrxError::InterfaceIndexRequiresIpv6
+        | McrxError::ExistingSocketAddressFamilyMismatch
+        | McrxError::ExistingSocketPortMismatch { .. } => NS_ERROR_INVALID_ARG,
+        McrxError::DuplicateSubscription | McrxError::SubscriptionAlreadyJoined => {
+            NS_ERROR_FILE_ALREADY_EXISTS
+        }
+        McrxError::SubscriptionNotFound | McrxError::SubscriptionNotJoined => {
+            NS_ERROR_NOT_AVAILABLE
+        }
+        McrxError::SocketBindFailed(_) => NS_ERROR_SOCKET_ADDRESS_IN_USE,
+        _ => NS_ERROR_UNEXPECTED,
+    }
+}
+
+fn socket_addr_ip_string(addr: Option<SocketAddr>) -> nsCString {
+    addr.map_or_else(nsCString::new, |addr| {
+        nsCString::from(addr.ip().to_string())
+    })
+}
+
+fn ip_string(addr: Option<IpAddr>) -> nsCString {
+    addr.map_or_else(nsCString::new, |addr| nsCString::from(addr.to_string()))
+}
+
+fn fill_mcquic_mcrx_packet(out: &mut McquicMcrxPacket, packet: mcrx_core::PacketWithMetadata) {
+    let source = packet.packet.source;
+    let socket_local_addr = packet.metadata.socket_local_addr;
+
+    out.subscription_id = packet.packet.subscription_id.0;
+    out.source_ip = nsCString::from(source.ip().to_string());
+    out.source_port = source.port();
+    out.group_ip = nsCString::from(packet.packet.group.to_string());
+    out.dst_port = packet.packet.dst_port;
+    out.socket_local_ip = socket_addr_ip_string(socket_local_addr);
+    out.socket_local_port = socket_local_addr.map_or(0, |addr| addr.port());
+    out.configured_interface_ip = ip_string(packet.metadata.configured_interface);
+    out.has_configured_interface_index = packet.metadata.configured_interface_index.is_some();
+    out.configured_interface_index = packet.metadata.configured_interface_index.unwrap_or(0);
+    out.destination_local_ip = ip_string(packet.metadata.destination_local_ip);
+    out.has_ingress_interface_index = packet.metadata.ingress_interface_index.is_some();
+    out.ingress_interface_index = packet.metadata.ingress_interface_index.unwrap_or(0);
+    out.payload = packet.packet.payload.as_ref().into();
+}
+
+#[cfg(feature = "mcquic")]
+fn default_mcquic_client_limits() -> neqo_transport::mcquic::ClientLimits {
+    neqo_transport::mcquic::ClientLimits {
+        ipv4_channels_allowed: true,
+        ipv6_channels_allowed: true,
+        max_aggregate_rate_kibps: 100_000,
+        max_channel_ids: 32,
+    }
+}
+
+#[cfg(feature = "mcquic")]
+fn mcquic_transport_error_to_nsresult(err: neqo_transport::Error) -> nsresult {
+    match err {
+        neqo_transport::Error::NotAvailable => NS_ERROR_NOT_AVAILABLE,
+        neqo_transport::Error::FrameEncoding
+        | neqo_transport::Error::InvalidInput
+        | neqo_transport::Error::ProtocolViolation
+        | neqo_transport::Error::UnknownFrameType => NS_ERROR_INVALID_ARG,
+        neqo_transport::Error::Decrypt | neqo_transport::Error::InvalidPacket => {
+            NS_ERROR_NET_HTTP3_PROTOCOL_ERROR
+        }
+        _ => NS_ERROR_NET_HTTP3_PROTOCOL_ERROR,
+    }
+}
+
+#[cfg(feature = "mcquic")]
+fn mcquic_http3_error_to_nsresult(err: Http3Error) -> nsresult {
+    match err {
+        Http3Error::Transport(err) => mcquic_transport_error_to_nsresult(err),
+        Http3Error::InvalidInput => NS_ERROR_INVALID_ARG,
+        Http3Error::Unavailable => NS_ERROR_NOT_AVAILABLE,
+        _ => NS_ERROR_NET_HTTP3_PROTOCOL_ERROR,
+    }
+}
+
+#[cfg(feature = "mcquic")]
+fn set_mcquic_control_channel_id(out: &mut McquicControlFrameExternal, channel_id: &[u8]) {
+    out.channel_id = channel_id.into();
+}
+
+#[cfg(feature = "mcquic")]
+fn fill_mcquic_control_frame(
+    out: &mut McquicControlFrameExternal,
+    frame: &neqo_transport::mcquic::Frame,
+) {
+    *out = McquicControlFrameExternal::default();
+    match frame {
+        neqo_transport::mcquic::Frame::Announce(announce) => {
+            out.tag = McquicControlFrameTag::Announce;
+            set_mcquic_control_channel_id(out, &announce.channel_id);
+            out.source_ip = nsCString::from(announce.source.to_string());
+            out.group_ip = nsCString::from(announce.group.to_string());
+            out.udp_port = announce.udp_port;
+        }
+        neqo_transport::mcquic::Frame::Key(key) => {
+            out.tag = McquicControlFrameTag::Key;
+            set_mcquic_control_channel_id(out, &key.channel_id);
+            out.key_sequence = key.key_sequence;
+            out.packet_number_start = key.from_packet_number;
+        }
+        neqo_transport::mcquic::Frame::Integrity(integrity) => {
+            out.tag = McquicControlFrameTag::Integrity;
+            set_mcquic_control_channel_id(out, &integrity.channel_id);
+            out.packet_number_start = integrity.packet_number_start;
+            out.packet_hash_count = integrity.packet_hash_count.unwrap_or(0);
+        }
+        neqo_transport::mcquic::Frame::Join(join) => {
+            out.tag = McquicControlFrameTag::Join;
+            set_mcquic_control_channel_id(out, &join.channel_id);
+            out.key_sequence = join.mc_key_sequence;
+            out.state_sequence = join.mc_state_sequence;
+        }
+        neqo_transport::mcquic::Frame::Leave(leave) => {
+            out.tag = McquicControlFrameTag::Leave;
+            set_mcquic_control_channel_id(out, &leave.channel_id);
+            out.state_sequence = leave.mc_state_sequence;
+            out.packet_number_start = leave.after_packet_number;
+        }
+        neqo_transport::mcquic::Frame::Retire(retire) => {
+            out.tag = McquicControlFrameTag::Retire;
+            set_mcquic_control_channel_id(out, &retire.channel_id);
+            out.packet_number_start = retire.after_packet_number;
+        }
+        neqo_transport::mcquic::Frame::State(state) => {
+            out.tag = McquicControlFrameTag::State;
+            set_mcquic_control_channel_id(out, &state.channel_id);
+            out.state_sequence = state.sequence;
+            out.channel_state = state.state.into();
+        }
+        neqo_transport::mcquic::Frame::Ack(ack) => {
+            out.tag = McquicControlFrameTag::Ack;
+            set_mcquic_control_channel_id(out, &ack.channel_id);
+            out.largest_acknowledged = ack.largest_acknowledged;
+        }
+        neqo_transport::mcquic::Frame::Limits(limits) => {
+            out.tag = McquicControlFrameTag::Limits;
+            out.state_sequence = limits.sequence;
+        }
+    }
+}
+
+#[cfg(feature = "mcquic")]
+fn apply_mcquic_control_frame(conn: &mut NeqoHttp3Conn, frame: &neqo_transport::mcquic::Frame) {
+    match frame {
+        neqo_transport::mcquic::Frame::Announce(announce) => {
+            match neqo_transport::mcquic::ChannelReceiveState::new(announce.clone()) {
+                Ok(state) => {
+                    qdebug!(
+                        "MCQUIC created receive state for channel {} bytes",
+                        announce.channel_id.len()
+                    );
+                    conn.mcquic_channels
+                        .insert(announce.channel_id.clone(), state);
+                }
+                Err(err) => {
+                    qwarn!("MCQUIC failed to create channel receive state: {err}");
+                }
+            }
+        }
+        neqo_transport::mcquic::Frame::Key(key) => {
+            let Some(channel) = conn.mcquic_channels.get_mut(&key.channel_id) else {
+                qwarn!("MCQUIC received MC_KEY for unknown channel");
+                return;
+            };
+            if let Err(err) = channel.insert_key(key.clone()) {
+                qwarn!("MCQUIC failed to insert MC_KEY: {err}");
+            }
+        }
+        neqo_transport::mcquic::Frame::Integrity(integrity) => {
+            let Some(channel) = conn.mcquic_channels.get_mut(&integrity.channel_id) else {
+                qwarn!("MCQUIC received MC_INTEGRITY for unknown channel");
+                return;
+            };
+            if let Err(err) = channel.insert_integrity(integrity.clone()) {
+                qwarn!("MCQUIC failed to insert MC_INTEGRITY: {err}");
+            }
+        }
+        _ => {}
+    }
 }
 
 extern "C" {
@@ -355,6 +1278,7 @@ impl NeqoHttp3Conn {
         max_stream_data: u64,
         version_negotiation: bool,
         webtransport: bool,
+        mcquic_enabled: bool,
         qlog_dir: &nsACString,
         idle_timeout: u32,
         fast_pto: u32,
@@ -363,6 +1287,8 @@ impl NeqoHttp3Conn {
     ) -> Result<RefPtr<Self>, nsresult> {
         // Nss init.
         init().map_err(|_| NS_ERROR_UNEXPECTED)?;
+        #[cfg(not(feature = "mcquic"))]
+        let _ = mcquic_enabled;
 
         let socket = socket
             .map(|socket| {
@@ -499,6 +1425,22 @@ impl NeqoHttp3Conn {
             params = params.idle_timeout(Duration::from_millis(10));
         }
 
+        #[cfg(feature = "mcquic")]
+        let mcquic_client_limits = mcquic_enabled.then(default_mcquic_client_limits);
+
+        #[cfg(feature = "mcquic")]
+        if mcquic_enabled {
+            if let Some(limits) = mcquic_client_limits.clone() {
+                params = params.mcquic_client_params(Some(
+                    neqo_transport::mcquic::ClientTransportParams {
+                        limits,
+                        hash_algorithms: vec![1],
+                        encryption_algorithms: vec![0x1301],
+                    },
+                ));
+            }
+        }
+
         let http3_settings = Http3Parameters::default()
             .max_table_size_encoder(max_table_size)
             .max_table_size_decoder(max_table_size)
@@ -600,6 +1542,10 @@ impl NeqoHttp3Conn {
             datagram_segments_received: networking::http_3_udp_datagram_segments_received
                 .start_buffer(),
             buffered_outbound_datagram: None,
+            #[cfg(feature = "mcquic")]
+            mcquic_client_limits,
+            #[cfg(feature = "mcquic")]
+            mcquic_channels: BTreeMap::new(),
             would_block_counter: WouldBlockCounter::new(),
         }));
         unsafe { RefPtr::from_raw(conn).ok_or(NS_ERROR_NOT_CONNECTED) }
@@ -999,6 +1945,498 @@ unsafe impl RefCounted for NeqoHttp3Conn {
     }
 }
 
+#[no_mangle]
+pub extern "C" fn neqo_mcquic_mcrx_receiver_new(result: &mut *mut McquicMcrxReceiver) -> nsresult {
+    *result = ptr::null_mut();
+
+    let receiver = Box::new(McquicMcrxReceiver {
+        context: McrxContext::new(),
+    });
+    *result = Box::into_raw(receiver);
+    NS_OK
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn neqo_mcquic_mcrx_receiver_free(receiver: *mut McquicMcrxReceiver) {
+    if !receiver.is_null() {
+        drop(Box::from_raw(receiver));
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn neqo_mcquic_mcrx_receiver_add_ssm_subscription(
+    receiver: &mut McquicMcrxReceiver,
+    source: &nsACString,
+    group: &nsACString,
+    dst_port: u16,
+    interface: &nsACString,
+    has_interface_index: bool,
+    interface_index: u32,
+    subscription_id: &mut u64,
+) -> nsresult {
+    *subscription_id = 0;
+
+    let source = match parse_mcquic_mcrx_ip(source) {
+        Ok(source) => source,
+        Err(result) => return result,
+    };
+    let group = match parse_mcquic_mcrx_ip(group) {
+        Ok(group) => group,
+        Err(result) => return result,
+    };
+    let interface = match parse_optional_mcquic_mcrx_ip(interface) {
+        Ok(interface) => interface,
+        Err(result) => return result,
+    };
+
+    let config = SubscriptionConfig {
+        group,
+        source: SourceFilter::Source(source),
+        dst_port,
+        interface,
+        interface_index: has_interface_index.then_some(interface_index),
+    };
+
+    match receiver.context.add_subscription(config) {
+        Ok(id) => {
+            *subscription_id = id.0;
+            qdebug!("MCQUIC mcrx added SSM subscription {}", *subscription_id);
+            NS_OK
+        }
+        Err(err) => {
+            qwarn!("MCQUIC mcrx add SSM subscription failed: {err}");
+            mcquic_mcrx_error_to_nsresult(&err)
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn neqo_mcquic_mcrx_receiver_join(
+    receiver: &mut McquicMcrxReceiver,
+    subscription_id: u64,
+) -> nsresult {
+    match receiver
+        .context
+        .join_subscription(mcrx_core::SubscriptionId(subscription_id))
+    {
+        Ok(()) => {
+            qdebug!("MCQUIC mcrx joined subscription {subscription_id}");
+            NS_OK
+        }
+        Err(err) => {
+            qwarn!("MCQUIC mcrx join failed for subscription {subscription_id}: {err}");
+            mcquic_mcrx_error_to_nsresult(&err)
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn neqo_mcquic_mcrx_receiver_leave(
+    receiver: &mut McquicMcrxReceiver,
+    subscription_id: u64,
+) -> nsresult {
+    match receiver
+        .context
+        .leave_subscription(mcrx_core::SubscriptionId(subscription_id))
+    {
+        Ok(()) => NS_OK,
+        Err(err) => mcquic_mcrx_error_to_nsresult(&err),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn neqo_mcquic_mcrx_receiver_remove(
+    receiver: &mut McquicMcrxReceiver,
+    subscription_id: u64,
+) -> nsresult {
+    if receiver
+        .context
+        .remove_subscription(mcrx_core::SubscriptionId(subscription_id))
+    {
+        NS_OK
+    } else {
+        NS_ERROR_NOT_AVAILABLE
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn neqo_mcquic_mcrx_receiver_poll(
+    receiver: &mut McquicMcrxReceiver,
+    packet: &mut McquicMcrxPacket,
+) -> nsresult {
+    match receiver.context.try_recv_any_with_metadata() {
+        Ok(Some(received)) => {
+            fill_mcquic_mcrx_packet(packet, received);
+            qdebug!(
+                "MCQUIC mcrx received {} bytes from {}:{}",
+                packet.payload.len(),
+                packet.source_ip,
+                packet.source_port
+            );
+            NS_OK
+        }
+        Ok(None) => NS_BASE_STREAM_WOULD_BLOCK,
+        Err(err) => {
+            qwarn!("MCQUIC mcrx poll failed: {err}");
+            mcquic_mcrx_error_to_nsresult(&err)
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn neqo_mcquic_decode_moq_datagram(
+    payload: &ThinVec<u8>,
+    datagram: &mut McquicMoqDatagramExternal,
+) -> bool {
+    *datagram = McquicMoqDatagramExternal::default();
+
+    if let Some(decoded) = mcquic_decode_native_moqt_object_datagram(payload.as_slice())
+        .or_else(|| mcquic_decode_legacy_moq1_object_datagram(payload.as_slice()))
+    {
+        *datagram = decoded;
+        true
+    } else {
+        false
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn neqo_mcquic_moq_encode_setup_subscribe(
+    authority: &nsACString,
+    track_namespace: &nsACString,
+    track_name: &nsACString,
+    payload: &mut ThinVec<u8>,
+) -> nsresult {
+    *payload = ThinVec::new();
+
+    let authority = match str::from_utf8(authority) {
+        Ok(authority) if !authority.is_empty() => authority,
+        _ => return NS_ERROR_INVALID_ARG,
+    };
+    let track_namespace = match str::from_utf8(track_namespace) {
+        Ok(track_namespace) => track_namespace,
+        Err(_) => return NS_ERROR_INVALID_ARG,
+    };
+    let track_name = match str::from_utf8(track_name) {
+        Ok(track_name) if !track_name.is_empty() => track_name,
+        _ => return NS_ERROR_INVALID_ARG,
+    };
+
+    let Some(setup) = mcquic_moq_encode_setup(authority.as_bytes()) else {
+        return NS_ERROR_INVALID_ARG;
+    };
+    let Some(subscribe) = mcquic_moq_encode_subscribe(track_namespace, track_name.as_bytes())
+    else {
+        return NS_ERROR_INVALID_ARG;
+    };
+
+    let mut out = Vec::with_capacity(setup.len() + subscribe.len());
+    out.extend_from_slice(&setup);
+    out.extend_from_slice(&subscribe);
+    *payload = out.into();
+    NS_OK
+}
+
+#[no_mangle]
+pub extern "C" fn neqo_mcquic_moq_decode_control_message(
+    payload: &ThinVec<u8>,
+    message: &mut McquicMoqControlMessageExternal,
+) -> bool {
+    *message = McquicMoqControlMessageExternal::default();
+
+    if let Some(decoded) = mcquic_decode_moqt_control_message(payload.as_slice()) {
+        *message = decoded;
+        true
+    } else {
+        false
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn neqo_http3conn_mcquic_moq_open_stream(
+    conn: &mut NeqoHttp3Conn,
+    stream_id: &mut u64,
+) -> nsresult {
+    *stream_id = 0;
+
+    #[cfg(feature = "mcquic")]
+    {
+        match conn.conn.mcquic_moq_open_stream() {
+            Ok(id) => {
+                *stream_id = id.as_u64();
+                NS_OK
+            }
+            Err(err) => mcquic_http3_error_to_nsresult(err),
+        }
+    }
+
+    #[cfg(not(feature = "mcquic"))]
+    {
+        let _ = conn;
+        NS_ERROR_NOT_AVAILABLE
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn neqo_http3conn_mcquic_moq_send_stream_data(
+    conn: &mut NeqoHttp3Conn,
+    stream_id: u64,
+    payload: &ThinVec<u8>,
+    sent: &mut u32,
+) -> nsresult {
+    *sent = 0;
+
+    #[cfg(feature = "mcquic")]
+    {
+        match conn
+            .conn
+            .mcquic_moq_send_stream_data(StreamId::from(stream_id), payload.as_slice())
+        {
+            Ok(amount) => {
+                *sent = amount.try_into().unwrap_or(u32::MAX);
+                NS_OK
+            }
+            Err(err) => mcquic_http3_error_to_nsresult(err),
+        }
+    }
+
+    #[cfg(not(feature = "mcquic"))]
+    {
+        let _ = (conn, stream_id, payload);
+        NS_ERROR_NOT_AVAILABLE
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn neqo_http3conn_mcquic_moq_recv_stream_data(
+    conn: &mut NeqoHttp3Conn,
+    stream_id: u64,
+    payload: &mut ThinVec<u8>,
+    fin: &mut bool,
+) -> nsresult {
+    *payload = ThinVec::new();
+    *fin = false;
+
+    #[cfg(feature = "mcquic")]
+    {
+        let mut buf = vec![0; MCQUIC_MOQT_STREAM_READ_SIZE];
+        match conn
+            .conn
+            .mcquic_moq_recv_stream_data(StreamId::from(stream_id), &mut buf)
+        {
+            Ok((0, false)) => NS_BASE_STREAM_WOULD_BLOCK,
+            Ok((amount, stream_fin)) => {
+                *payload = buf[..amount].into();
+                *fin = stream_fin;
+                NS_OK
+            }
+            Err(Http3Error::NoMoreData) => {
+                *fin = true;
+                NS_OK
+            }
+            Err(err) => mcquic_http3_error_to_nsresult(err),
+        }
+    }
+
+    #[cfg(not(feature = "mcquic"))]
+    {
+        let _ = (conn, stream_id);
+        NS_ERROR_NOT_AVAILABLE
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn neqo_http3conn_mcquic_recv_control_frame(
+    conn: &mut NeqoHttp3Conn,
+    frame: &mut McquicControlFrameExternal,
+) -> nsresult {
+    *frame = McquicControlFrameExternal::default();
+
+    #[cfg(feature = "mcquic")]
+    {
+        let Some(mcquic_frame) = conn.conn.mcquic_recv() else {
+            return NS_OK;
+        };
+        fill_mcquic_control_frame(frame, &mcquic_frame);
+        apply_mcquic_control_frame(conn, &mcquic_frame);
+        return NS_OK;
+    }
+
+    #[cfg(not(feature = "mcquic"))]
+    {
+        let _ = conn;
+        NS_ERROR_NOT_AVAILABLE
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn neqo_http3conn_mcquic_process_channel_packet(
+    conn: &mut NeqoHttp3Conn,
+    channel_id: &nsACString,
+    packet: &ThinVec<u8>,
+) -> nsresult {
+    #[cfg(feature = "mcquic")]
+    {
+        let channel_id = channel_id.to_vec();
+        let Some(channel) = conn.mcquic_channels.get_mut(&channel_id) else {
+            qwarn!("MCQUIC protected packet for unknown channel");
+            return NS_ERROR_NOT_AVAILABLE;
+        };
+        match channel.process_protected_packet(packet.as_slice()) {
+            Ok(datagrams) => {
+                qdebug!(
+                    "MCQUIC processed protected channel packet; released {} datagrams",
+                    datagrams.len()
+                );
+                NS_OK
+            }
+            Err(err) => {
+                qwarn!("MCQUIC failed to process protected channel packet: {err}");
+                mcquic_transport_error_to_nsresult(err)
+            }
+        }
+    }
+
+    #[cfg(not(feature = "mcquic"))]
+    {
+        let _ = (conn, channel_id, packet);
+        NS_ERROR_NOT_AVAILABLE
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn neqo_http3conn_mcquic_pop_channel_datagram(
+    conn: &mut NeqoHttp3Conn,
+    datagram: &mut McquicChannelDatagram,
+) -> bool {
+    *datagram = McquicChannelDatagram::default();
+
+    #[cfg(feature = "mcquic")]
+    {
+        for channel in conn.mcquic_channels.values_mut() {
+            if let Some(released) = channel.pop_datagram() {
+                datagram.channel_id = released.channel_id.into();
+                datagram.packet_number = released.packet_number;
+                datagram.payload = released.data.into();
+                return true;
+            }
+        }
+        false
+    }
+
+    #[cfg(not(feature = "mcquic"))]
+    {
+        let _ = conn;
+        false
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn neqo_http3conn_mcquic_send_limits(
+    conn: &mut NeqoHttp3Conn,
+    sequence: u64,
+) -> nsresult {
+    #[cfg(feature = "mcquic")]
+    {
+        let Some(limits) = conn.mcquic_client_limits.clone() else {
+            return NS_ERROR_NOT_AVAILABLE;
+        };
+        let max_joined_count = limits.max_channel_ids;
+        let frame = neqo_transport::mcquic::Frame::Limits(neqo_transport::mcquic::Limits {
+            sequence,
+            limits,
+            max_joined_count,
+        });
+        match conn.conn.mcquic_send(frame) {
+            Ok(()) => NS_OK,
+            Err(err) => mcquic_http3_error_to_nsresult(err),
+        }
+    }
+
+    #[cfg(not(feature = "mcquic"))]
+    {
+        let _ = (conn, sequence);
+        NS_ERROR_NOT_AVAILABLE
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn neqo_http3conn_mcquic_send_joined_state(
+    conn: &mut NeqoHttp3Conn,
+    channel_id: &nsACString,
+    sequence: u64,
+) -> nsresult {
+    #[cfg(feature = "mcquic")]
+    {
+        let frame = neqo_transport::mcquic::Frame::State(neqo_transport::mcquic::State {
+            channel_id: channel_id.to_vec(),
+            sequence,
+            state: neqo_transport::mcquic::ChannelState::Joined,
+            reason_scope: neqo_transport::mcquic::StateReasonScope::Transport,
+            reason_code: neqo_transport::mcquic::STATE_REASON_REQUESTED_BY_SERVER,
+            reason_phrase: b"joined".to_vec(),
+        });
+        match conn.conn.mcquic_send(frame) {
+            Ok(()) => NS_OK,
+            Err(err) => mcquic_http3_error_to_nsresult(err),
+        }
+    }
+
+    #[cfg(not(feature = "mcquic"))]
+    {
+        let _ = (conn, channel_id, sequence);
+        NS_ERROR_NOT_AVAILABLE
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn neqo_http3conn_mcquic_send_pending_acks(
+    conn: &mut NeqoHttp3Conn,
+) -> McquicSendPendingAcksResult {
+    #[cfg(feature = "mcquic")]
+    {
+        let mut pending = Vec::new();
+        for (channel_id, channel) in &mut conn.mcquic_channels {
+            if let Some(ack) = channel.pending_ack() {
+                pending.push((channel_id.clone(), ack));
+            }
+        }
+
+        let sent = !pending.is_empty();
+        for (_, ack) in &pending {
+            if let Err(err) = conn
+                .conn
+                .mcquic_send(neqo_transport::mcquic::Frame::Ack(ack.clone()))
+            {
+                return McquicSendPendingAcksResult {
+                    result: mcquic_http3_error_to_nsresult(err),
+                    sent: false,
+                };
+            }
+        }
+
+        for (channel_id, _) in pending {
+            if let Some(channel) = conn.mcquic_channels.get_mut(&channel_id) {
+                channel.mark_ack_sent();
+            }
+        }
+
+        McquicSendPendingAcksResult {
+            result: NS_OK,
+            sent,
+        }
+    }
+
+    #[cfg(not(feature = "mcquic"))]
+    {
+        let _ = conn;
+        McquicSendPendingAcksResult {
+            result: NS_ERROR_NOT_AVAILABLE,
+            sent: false,
+        }
+    }
+}
+
 // Allocate a new NeqoHttp3Conn object.
 #[no_mangle]
 pub extern "C" fn neqo_http3conn_new(
@@ -1012,6 +2450,7 @@ pub extern "C" fn neqo_http3conn_new(
     max_stream_data: u64,
     version_negotiation: bool,
     webtransport: bool,
+    mcquic_enabled: bool,
     qlog_dir: &nsACString,
     idle_timeout: u32,
     fast_pto: u32,
@@ -1032,6 +2471,7 @@ pub extern "C" fn neqo_http3conn_new(
         max_stream_data,
         version_negotiation,
         webtransport,
+        mcquic_enabled,
         qlog_dir,
         idle_timeout,
         fast_pto,
@@ -1059,6 +2499,7 @@ pub extern "C" fn neqo_http3conn_new_use_nspr_for_io(
     max_stream_data: u64,
     version_negotiation: bool,
     webtransport: bool,
+    mcquic_enabled: bool,
     qlog_dir: &nsACString,
     idle_timeout: u32,
     fast_pto: u32,
@@ -1077,6 +2518,7 @@ pub extern "C" fn neqo_http3conn_new_use_nspr_for_io(
         max_stream_data,
         version_negotiation,
         webtransport,
+        mcquic_enabled,
         qlog_dir,
         idle_timeout,
         fast_pto,
@@ -2981,24 +4423,28 @@ fn probe_apple_fast_path_inner(send_fd: c_int, recv_fd: c_int) -> io::Result<()>
     use neqo_common::Ecn;
     use rustix::{
         fs::{fcntl_getfl, fcntl_setfl, OFlags},
-        net::{getsockname, sockopt::{set_socket_timeout, Timeout}},
+        net::{
+            getsockname,
+            sockopt::{set_socket_timeout, Timeout},
+        },
     };
 
     // Wrap a raw fd in neqo_udp::Socket, enable the fast path, restore blocking
     // mode (UdpSocketState::new sets non-blocking), and return the socket's
     // local address.
-    let make_socket = |fd: c_int| -> io::Result<(neqo_udp::Socket<BorrowedFd<'static>>, SocketAddr)> {
-        let bfd = unsafe { BorrowedFd::borrow_raw(fd) };
-        let socket = neqo_udp::Socket::new(bfd)?;
-        // SAFETY: The C++ caller has verified via dlsym that the APIs are present.
-        unsafe { socket.enable_apple_fast_path() };
-        fcntl_setfl(bfd, fcntl_getfl(bfd)? & !OFlags::NONBLOCK)?;
-        set_socket_timeout(bfd, Timeout::Recv, Some(Duration::from_secs(1)))?;
-        let addr: SocketAddr = getsockname(bfd)?
-            .try_into()
-            .map_err(|e: rustix::io::Errno| io::Error::from_raw_os_error(e.raw_os_error()))?;
-        Ok((socket, addr))
-    };
+    let make_socket =
+        |fd: c_int| -> io::Result<(neqo_udp::Socket<BorrowedFd<'static>>, SocketAddr)> {
+            let bfd = unsafe { BorrowedFd::borrow_raw(fd) };
+            let socket = neqo_udp::Socket::new(bfd)?;
+            // SAFETY: The C++ caller has verified via dlsym that the APIs are present.
+            unsafe { socket.enable_apple_fast_path() };
+            fcntl_setfl(bfd, fcntl_getfl(bfd)? & !OFlags::NONBLOCK)?;
+            set_socket_timeout(bfd, Timeout::Recv, Some(Duration::from_secs(1)))?;
+            let addr: SocketAddr = getsockname(bfd)?
+                .try_into()
+                .map_err(|e: rustix::io::Errno| io::Error::from_raw_os_error(e.raw_os_error()))?;
+            Ok((socket, addr))
+        };
     let (sender, send_addr) = make_socket(send_fd)?;
     let (receiver, recv_addr) = make_socket(recv_fd)?;
 
@@ -3073,5 +4519,119 @@ pub extern "C" fn neqo_glue_test_parse_headers(
             true
         }
         Err(_) => false,
+    }
+}
+
+#[cfg(test)]
+mod mcquic_moq_decoder_tests {
+    use super::{
+        neqo_mcquic_decode_moq_datagram, McquicMoqDatagramExternal, McquicMoqDatagramFormat,
+        McquicMoqObjectStatus, MCQUIC_MOQ1_FLAG_END_OF_GROUP,
+        MCQUIC_MOQ1_FLAG_HAS_MULTICAST_PROVENANCE, MCQUIC_MOQ1_FLAG_INDEPENDENT,
+        MCQUIC_MOQ1_FLAG_KEYFRAME, MCQUIC_MOQ1_MAGIC, MCQUIC_MOQ1_VERSION,
+        MCQUIC_MOQT_DATAGRAM_DEFAULT_PRIORITY, MCQUIC_MOQT_DATAGRAM_END_OF_GROUP,
+    };
+    use thin_vec::ThinVec;
+
+    fn encode_varint(value: u64, out: &mut Vec<u8>) {
+        if value < (1 << 6) {
+            out.push(value as u8);
+        } else if value < (1 << 14) {
+            out.extend_from_slice(&((value as u16) | 0x4000).to_be_bytes());
+        } else if value < (1 << 30) {
+            out.extend_from_slice(&((value as u32) | 0x8000_0000).to_be_bytes());
+        } else {
+            out.extend_from_slice(&(value | 0xc000_0000_0000_0000).to_be_bytes());
+        }
+    }
+
+    fn decode(payload: Vec<u8>) -> Option<McquicMoqDatagramExternal> {
+        let payload: ThinVec<u8> = payload.into();
+        let mut decoded = McquicMoqDatagramExternal::default();
+        neqo_mcquic_decode_moq_datagram(&payload, &mut decoded).then_some(decoded)
+    }
+
+    #[test]
+    fn decodes_native_moqt_object_datagram() {
+        let mut payload = Vec::new();
+        encode_varint(
+            MCQUIC_MOQT_DATAGRAM_DEFAULT_PRIORITY | MCQUIC_MOQT_DATAGRAM_END_OF_GROUP,
+            &mut payload,
+        );
+        encode_varint(9, &mut payload);
+        encode_varint(42, &mut payload);
+        encode_varint(7, &mut payload);
+        payload.extend_from_slice(b"qvf1");
+
+        let decoded = decode(payload).expect("native MoQT object DATAGRAM decodes");
+
+        assert_eq!(decoded.format, McquicMoqDatagramFormat::NativeMoqtObject);
+        assert!(decoded.has_track_alias);
+        assert_eq!(decoded.track_alias, 9);
+        assert_eq!(decoded.group_id, 42);
+        assert_eq!(decoded.object_id, 7);
+        assert_eq!(decoded.publisher_sequence, 42);
+        assert_eq!(decoded.status, McquicMoqObjectStatus::Normal);
+        assert!(decoded.end_of_group);
+        assert_eq!(decoded.payload_len, 4);
+    }
+
+    #[test]
+    fn decodes_legacy_huginn_moq1_object_datagram() {
+        let namespace = b"ratatoskr/demo";
+        let track_name = b"h264-qvf1";
+        let multicast_channel = b"qcast-demo-v1";
+        let object_payload = b"qvf1";
+        let flags = MCQUIC_MOQ1_FLAG_KEYFRAME
+            | MCQUIC_MOQ1_FLAG_END_OF_GROUP
+            | MCQUIC_MOQ1_FLAG_INDEPENDENT
+            | MCQUIC_MOQ1_FLAG_HAS_MULTICAST_PROVENANCE;
+        let mut payload = Vec::new();
+        payload.extend_from_slice(MCQUIC_MOQ1_MAGIC);
+        payload.push(MCQUIC_MOQ1_VERSION);
+        payload.push(flags);
+        payload.extend_from_slice(&(namespace.len() as u16).to_be_bytes());
+        payload.extend_from_slice(&(track_name.len() as u16).to_be_bytes());
+        payload.extend_from_slice(&(multicast_channel.len() as u16).to_be_bytes());
+        payload.extend_from_slice(&(object_payload.len() as u32).to_be_bytes());
+        payload.extend_from_slice(&44u64.to_be_bytes());
+        payload.extend_from_slice(&9u64.to_be_bytes());
+        payload.extend_from_slice(&1044u64.to_be_bytes());
+        payload.extend_from_slice(&1466u64.to_be_bytes());
+        payload.extend_from_slice(&88u64.to_be_bytes());
+        payload.extend_from_slice(namespace);
+        payload.extend_from_slice(track_name);
+        payload.extend_from_slice(multicast_channel);
+        payload.extend_from_slice(object_payload);
+
+        let decoded = decode(payload).expect("legacy Huginn MOQ1 DATAGRAM decodes");
+
+        assert_eq!(decoded.format, McquicMoqDatagramFormat::LegacyMoq1Object);
+        assert!(!decoded.has_track_alias);
+        assert_eq!(decoded.namespace.to_utf8().as_ref(), "ratatoskr/demo");
+        assert_eq!(decoded.track_name.to_utf8().as_ref(), "h264-qvf1");
+        assert_eq!(decoded.multicast_channel.as_slice(), multicast_channel);
+        assert_eq!(decoded.group_id, 44);
+        assert_eq!(decoded.object_id, 9);
+        assert_eq!(decoded.publisher_sequence, 1044);
+        assert_eq!(decoded.pts_millis, 1466);
+        assert!(decoded.keyframe);
+        assert!(decoded.independent);
+        assert!(decoded.end_of_group);
+        assert_eq!(decoded.payload_len, 4);
+        assert!(decoded.has_multicast_packet_number);
+        assert_eq!(decoded.multicast_packet_number, 88);
+    }
+
+    #[test]
+    fn rejects_unknown_moq_payload() {
+        let payload: ThinVec<u8> = b"not a moq object".to_vec().into();
+        let mut decoded = McquicMoqDatagramExternal {
+            format: McquicMoqDatagramFormat::NativeMoqtObject,
+            ..McquicMoqDatagramExternal::default()
+        };
+
+        assert!(!neqo_mcquic_decode_moq_datagram(&payload, &mut decoded));
+        assert_eq!(decoded.format, McquicMoqDatagramFormat::Unknown);
     }
 }

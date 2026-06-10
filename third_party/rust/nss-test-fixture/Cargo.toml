@@ -1,0 +1,21 @@
+[package]
+name = "test-fixture"
+version = "0.1.0"
+authors = ["Martin Thomson <mt@lowentropy.net>"]
+edition = "2024"
+rust-version = "1.90.0"
+license = "MIT/Apache-2.0"
+
+[dependencies]
+log = { version = "0.4.0", default-features = false }
+nss-rs = { git = "https://github.com/mozilla/nss-rs", rev = "0.9.0" }
+
+[features]
+bench = ["nss-rs/bench"]
+disable-random = []
+
+[package.metadata.cargo-machete]
+ignored = ["log"]
+
+[lib]
+bench = false

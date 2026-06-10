@@ -56,6 +56,32 @@ pub enum FrameType {
     // draft-ietf-quic-datagram
     Datagram = 0x30,
     DatagramWithLen = 0x31,
+    #[cfg(feature = "mcquic")]
+    McKey = crate::mcquic::FRAME_TYPE_KEY,
+    #[cfg(feature = "mcquic")]
+    McJoin = crate::mcquic::FRAME_TYPE_JOIN,
+    #[cfg(feature = "mcquic")]
+    McLeave = crate::mcquic::FRAME_TYPE_LEAVE,
+    #[cfg(feature = "mcquic")]
+    McIntegrity = crate::mcquic::FRAME_TYPE_INTEGRITY,
+    #[cfg(feature = "mcquic")]
+    McIntegrityWithLength = crate::mcquic::FRAME_TYPE_INTEGRITY_WITH_LENGTH,
+    #[cfg(feature = "mcquic")]
+    McAck = crate::mcquic::FRAME_TYPE_ACK,
+    #[cfg(feature = "mcquic")]
+    McAckEcn = crate::mcquic::FRAME_TYPE_ACK_ECN,
+    #[cfg(feature = "mcquic")]
+    McLimits = crate::mcquic::FRAME_TYPE_LIMITS,
+    #[cfg(feature = "mcquic")]
+    McRetire = crate::mcquic::FRAME_TYPE_RETIRE,
+    #[cfg(feature = "mcquic")]
+    McState = crate::mcquic::FRAME_TYPE_STATE,
+    #[cfg(feature = "mcquic")]
+    McStateApplication = crate::mcquic::FRAME_TYPE_STATE_APPLICATION,
+    #[cfg(feature = "mcquic")]
+    McAnnounceV4 = crate::mcquic::FRAME_TYPE_ANNOUNCE_V4,
+    #[cfg(feature = "mcquic")]
+    McAnnounceV6 = crate::mcquic::FRAME_TYPE_ANNOUNCE_V6,
 }
 
 impl From<FrameType> for u64 {
@@ -66,7 +92,7 @@ impl From<FrameType> for u64 {
 
 impl From<FrameType> for u8 {
     fn from(val: FrameType) -> Self {
-        val as Self
+        u8::try_from(u64::from(val)).expect("frame type fits in u8")
     }
 }
 
@@ -243,11 +269,13 @@ pub enum Frame<'a> {
         data: &'a [u8],
         fill: bool,
     },
+    #[cfg(feature = "mcquic")]
+    Mcquic(crate::mcquic::Frame),
 }
 
 impl<'a> Frame<'a> {
     #[must_use]
-    pub const fn get_type(&self) -> FrameType {
+    pub fn get_type(&self) -> FrameType {
         match self {
             Self::Padding { .. } => FrameType::Padding,
             Self::Ping => FrameType::Ping,
@@ -285,6 +313,8 @@ impl<'a> Frame<'a> {
                 false => FrameType::Datagram,
                 true => FrameType::DatagramWithLen,
             },
+            #[cfg(feature = "mcquic")]
+            Self::Mcquic(frame) => mcquic_frame_type(frame),
         }
     }
 
@@ -321,11 +351,13 @@ impl<'a> Frame<'a> {
     /// If the frame causes a recipient to generate an ACK within its
     /// advertised maximum acknowledgement delay.
     #[must_use]
-    pub const fn ack_eliciting(&self) -> bool {
-        !matches!(
-            self,
-            Self::Ack { .. } | Self::Padding { .. } | Self::ConnectionClose { .. }
-        )
+    pub fn ack_eliciting(&self) -> bool {
+        match self {
+            Self::Ack { .. } | Self::Padding { .. } | Self::ConnectionClose { .. } => false,
+            #[cfg(feature = "mcquic")]
+            Self::Mcquic(crate::mcquic::Frame::Ack(_)) => false,
+            _ => true,
+        }
     }
 
     /// If the frame can be sent in a path probe
@@ -423,6 +455,8 @@ impl<'a> Frame<'a> {
                 ..
             } => pt != packet::Type::ZeroRtt,
             Self::NewToken { .. } | Self::ConnectionClose { .. } => pt == packet::Type::Short,
+            #[cfg(feature = "mcquic")]
+            Self::Mcquic(_) => pt == packet::Type::Short,
             _ => pt == packet::Type::ZeroRtt || pt == packet::Type::Short,
         }
     }
@@ -499,6 +533,11 @@ impl<'a> Frame<'a> {
         // frame parsing, a frame type MUST use the shortest possible encoding.
         if Encoder::varint_len(t) != dec.offset() - pos {
             return Err(Error::ProtocolViolation);
+        }
+
+        #[cfg(feature = "mcquic")]
+        if crate::mcquic::is_frame_type(t) {
+            return crate::mcquic::Frame::decode_payload(t, dec, None).map(Self::Mcquic);
         }
 
         let t = t.try_into()?;
@@ -676,8 +715,30 @@ impl<'a> Frame<'a> {
                 };
                 Ok(Self::Datagram { data, fill })
             }
+            #[cfg(feature = "mcquic")]
+            FrameType::McKey
+            | FrameType::McJoin
+            | FrameType::McLeave
+            | FrameType::McIntegrity
+            | FrameType::McIntegrityWithLength
+            | FrameType::McAck
+            | FrameType::McAckEcn
+            | FrameType::McLimits
+            | FrameType::McRetire
+            | FrameType::McState
+            | FrameType::McStateApplication
+            | FrameType::McAnnounceV4
+            | FrameType::McAnnounceV6 => {
+                unreachable!("MCQUIC frames are decoded before this match")
+            }
         }
     }
+}
+
+#[cfg(feature = "mcquic")]
+fn mcquic_frame_type(frame: &crate::mcquic::Frame) -> FrameType {
+    let frame_type = frame.frame_type().expect("valid MCQUIC frame type");
+    FrameType::try_from(frame_type).expect("known MCQUIC frame type")
 }
 
 /// Extension trait for [`Encoder`] that automates writing to fuzzing corpus.

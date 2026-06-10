@@ -59,6 +59,37 @@ impl Http3Parameters {
         self
     }
 
+    #[cfg(feature = "mcquic")]
+    #[must_use]
+    pub fn mcquic_client_params(
+        mut self,
+        params: Option<neqo_transport::mcquic::ClientTransportParams>,
+    ) -> Self {
+        self.conn_params = self.conn_params.mcquic_client_params(params);
+        self
+    }
+
+    #[cfg(feature = "mcquic")]
+    #[must_use]
+    pub fn get_mcquic_client_params(
+        &self,
+    ) -> Option<&neqo_transport::mcquic::ClientTransportParams> {
+        self.conn_params.get_mcquic_client_params()
+    }
+
+    #[cfg(feature = "mcquic")]
+    #[must_use]
+    pub fn mcquic_server_support(mut self, enabled: bool) -> Self {
+        self.conn_params = self.conn_params.mcquic_server_support(enabled);
+        self
+    }
+
+    #[cfg(feature = "mcquic")]
+    #[must_use]
+    pub const fn mcquic_server_support_enabled(&self) -> bool {
+        self.conn_params.mcquic_server_support_enabled()
+    }
+
     /// # Panics
     ///
     /// The table size must be smaller than 1 << 30 by the spec.

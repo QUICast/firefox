@@ -73,6 +73,7 @@ EXPORTS.mozilla.net += [
     "HttpTransactionChild.h",
     "HttpTransactionParent.h",
     "HttpTransactionShell.h",
+    "McquicMulticastReceiver.h",
     "nsAHttpTransaction.h",
     "nsServerTiming.h",
     "NullHttpChannel.h",
@@ -86,6 +87,7 @@ EXPORTS.mozilla.net += [
 ]
 
 SOURCES += [
+    "McquicMulticastReceiver.cpp",
     "nsHttpChannelAuthProvider.cpp",  # redefines GetAuthType
 ]
 

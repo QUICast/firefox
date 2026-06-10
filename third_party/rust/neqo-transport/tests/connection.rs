@@ -10,6 +10,7 @@ use neqo_common::{Datagram, Decoder, Encoder, Role};
 use neqo_transport::{
     CloseReason, ConnectionParameters, Error, MIN_INITIAL_PACKET_SIZE, State, StreamType, Version,
 };
+use nss::RecordProtectionOps as _;
 use test_fixture::{
     CountingConnectionIdGenerator, DEFAULT_ALPN, default_client, default_server,
     header_protection::{self, decode_initial_header, initial_aead_and_hp},
@@ -21,6 +22,255 @@ fn connect() {
     let (client, server) = test_fixture::connect();
     assert_dscp(&client.stats());
     assert_dscp(&server.stats());
+}
+
+#[cfg(feature = "mcquic")]
+mod mcquic_tests {
+    use std::net::{IpAddr, Ipv4Addr};
+
+    use neqo_transport::{
+        Connection,
+        mcquic::{
+            Ack, Announce, ChannelState, ClientLimits, ClientTransportParams, Frame, Integrity,
+            Join, Key, Limits, STATE_REASON_REQUESTED_BY_SERVER, State as McState,
+            StateReasonScope,
+        },
+    };
+
+    use super::*;
+
+    fn client_params() -> ClientTransportParams {
+        ClientTransportParams {
+            limits: ClientLimits {
+                ipv4_channels_allowed: true,
+                ipv6_channels_allowed: false,
+                max_aggregate_rate_kibps: 100_000,
+                max_channel_ids: 32,
+            },
+            hash_algorithms: vec![1],
+            encryption_algorithms: vec![0x1301],
+        }
+    }
+
+    fn connected_mcquic() -> (Connection, Connection, ClientTransportParams) {
+        let params = client_params();
+        let mut client = new_client::<CountingConnectionIdGenerator>(
+            ConnectionParameters::default().mcquic_client_params(Some(params.clone())),
+        );
+        let mut server = new_server::<CountingConnectionIdGenerator, &str>(
+            DEFAULT_ALPN,
+            ConnectionParameters::default().mcquic_server_support(true),
+        );
+
+        test_fixture::handshake(&mut client, &mut server);
+        assert_eq!(*client.state(), State::Confirmed);
+        assert_eq!(*server.state(), State::Confirmed);
+
+        (client, server, params)
+    }
+
+    fn connected_with_params(
+        client_params: Option<ClientTransportParams>,
+        server_support: bool,
+    ) -> (Connection, Connection) {
+        let mut client = new_client::<CountingConnectionIdGenerator>(
+            ConnectionParameters::default().mcquic_client_params(client_params),
+        );
+        let mut server = new_server::<CountingConnectionIdGenerator, &str>(
+            DEFAULT_ALPN,
+            ConnectionParameters::default().mcquic_server_support(server_support),
+        );
+
+        test_fixture::handshake(&mut client, &mut server);
+        assert_eq!(*client.state(), State::Confirmed);
+        assert_eq!(*server.state(), State::Confirmed);
+
+        (client, server)
+    }
+
+    fn channel_id() -> Vec<u8> {
+        b"demo-channel".to_vec()
+    }
+
+    fn announce_frame() -> Frame {
+        Frame::Announce(Announce {
+            channel_id: channel_id(),
+            source: IpAddr::V4(Ipv4Addr::new(192, 0, 2, 1)),
+            group: IpAddr::V4(Ipv4Addr::new(233, 252, 0, 1)),
+            udp_port: 4433,
+            header_protection_algorithm: 0x1301,
+            header_secret: vec![0x11; 32],
+            aead_algorithm: 0x1301,
+            integrity_hash_algorithm: 1,
+            max_rate_kibps: 10_000,
+            max_ack_delay_ms: 25,
+        })
+    }
+
+    fn key_frame() -> Frame {
+        Frame::Key(Key {
+            channel_id: channel_id(),
+            key_sequence: 1,
+            from_packet_number: 0,
+            secret: vec![0x22; 32],
+        })
+    }
+
+    fn integrity_frame() -> Frame {
+        Frame::Integrity(Integrity {
+            channel_id: channel_id(),
+            packet_number_start: 0,
+            packet_hash_count: Some(1),
+            packet_hashes: vec![0x33; 32],
+        })
+    }
+
+    fn join_frame() -> Frame {
+        Frame::Join(Join {
+            channel_id: channel_id(),
+            mc_limits_sequence: 1,
+            mc_state_sequence: 0,
+            mc_key_sequence: 1,
+        })
+    }
+
+    fn limits_frame() -> Frame {
+        Frame::Limits(Limits {
+            sequence: 1,
+            limits: client_params().limits,
+            max_joined_count: 8,
+        })
+    }
+
+    fn state_frame() -> Frame {
+        Frame::State(McState {
+            channel_id: channel_id(),
+            sequence: 1,
+            state: ChannelState::Joined,
+            reason_scope: StateReasonScope::Transport,
+            reason_code: STATE_REASON_REQUESTED_BY_SERVER,
+            reason_phrase: b"joined".to_vec(),
+        })
+    }
+
+    fn ack_frame() -> Frame {
+        Frame::Ack(Ack {
+            channel_id: channel_id(),
+            largest_acknowledged: 10,
+            ack_delay: 0,
+            first_ack_range: 0,
+            ack_ranges: vec![],
+            ecn_counts: None,
+        })
+    }
+
+    #[test]
+    fn transport_params_negotiate() {
+        let (client, server, params) = connected_mcquic();
+
+        assert!(client.peer_mcquic_server_support());
+        assert_eq!(server.peer_mcquic_client_params(), Some(params));
+    }
+
+    #[test]
+    fn client_sends_limits_after_negotiation() {
+        let (mut client, mut server, _) = connected_mcquic();
+        let frame = limits_frame();
+
+        client.mcquic_send(frame.clone()).expect("queue MC_LIMITS");
+        let dgram = client.process_output(now()).dgram().expect("MC_LIMITS");
+        server.process_input(dgram, now());
+
+        assert!(server.mcquic_readable());
+        assert_eq!(server.mcquic_recv(), Some(frame));
+        assert_eq!(server.mcquic_recv(), None);
+    }
+
+    #[test]
+    fn server_frames_reach_client() {
+        let (mut client, mut server, _) = connected_mcquic();
+        let frames = vec![
+            announce_frame(),
+            key_frame(),
+            integrity_frame(),
+            join_frame(),
+        ];
+
+        for frame in &frames {
+            server
+                .mcquic_send(frame.clone())
+                .expect("queue server frame");
+        }
+        let dgram = server.process_output(now()).dgram().expect("server frames");
+        client.process_input(dgram, now());
+
+        assert!(client.mcquic_readable());
+        for frame in frames {
+            assert_eq!(client.mcquic_recv(), Some(frame));
+        }
+        assert_eq!(client.mcquic_recv(), None);
+    }
+
+    #[test]
+    fn client_state_and_ack_reach_server() {
+        let (mut client, mut server, _) = connected_mcquic();
+        let frames = vec![state_frame(), ack_frame()];
+
+        for frame in &frames {
+            client
+                .mcquic_send(frame.clone())
+                .expect("queue client frame");
+        }
+        let dgram = client.process_output(now()).dgram().expect("client frames");
+        server.process_input(dgram, now());
+
+        assert!(server.mcquic_readable());
+        for frame in frames {
+            assert_eq!(server.mcquic_recv(), Some(frame));
+        }
+        assert_eq!(server.mcquic_recv(), None);
+    }
+
+    #[test]
+    fn wrong_sender_is_rejected_by_send_api() {
+        let (mut client, mut server, _) = connected_mcquic();
+
+        assert_eq!(
+            client.mcquic_send(announce_frame()),
+            Err(Error::ProtocolViolation)
+        );
+        assert_eq!(
+            server.mcquic_send(limits_frame()),
+            Err(Error::ProtocolViolation)
+        );
+    }
+
+    #[test]
+    fn client_does_not_negotiate_without_local_params() {
+        let (mut client, mut server) = connected_with_params(None, true);
+
+        assert!(client.peer_mcquic_server_support());
+        assert_eq!(server.peer_mcquic_client_params(), None);
+        assert_eq!(client.mcquic_send(limits_frame()), Err(Error::NotAvailable));
+        assert_eq!(
+            server.mcquic_send(announce_frame()),
+            Err(Error::NotAvailable)
+        );
+    }
+
+    #[test]
+    fn server_does_not_negotiate_without_local_support() {
+        let params = client_params();
+        let (mut client, mut server) = connected_with_params(Some(params.clone()), false);
+
+        assert!(!client.peer_mcquic_server_support());
+        assert_eq!(server.peer_mcquic_client_params(), Some(params));
+        assert_eq!(client.mcquic_send(limits_frame()), Err(Error::NotAvailable));
+        assert_eq!(
+            server.mcquic_send(announce_frame()),
+            Err(Error::NotAvailable)
+        );
+    }
 }
 
 #[test]
@@ -216,6 +466,10 @@ fn packet_without_frames() {
 }
 
 /// Test that the stack permits a packet containing only padding.
+#[cfg_attr(
+    feature = "disable-encryption",
+    ignore = "null AEAD accepts the modified packet, so the client stays in WaitInitial rather than WaitVersion"
+)]
 #[test]
 fn packet_with_only_padding() {
     let mut client = new_client::<CountingConnectionIdGenerator>(

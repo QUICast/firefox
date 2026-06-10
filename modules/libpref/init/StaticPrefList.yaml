@@ -16060,6 +16060,18 @@
   value: true
   mirror: always
 
+# Enable experimental, privileged HTTP/3 MCQUIC multicast receive plumbing.
+- name: network.http.http3.mcquic.enabled
+  type: RelaxedAtomicBool
+  value: false
+  mirror: always
+
+# Enable experimental, privileged MCQUIC native MoQT subscriber control stream.
+- name: network.http.http3.mcquic.moq_subscribe.enabled
+  type: RelaxedAtomicBool
+  value: false
+  mirror: always
+
 # Receive buffer size of QUIC socket
 - name: network.http.http3.recvBufferSize
   type: RelaxedAtomicInt32

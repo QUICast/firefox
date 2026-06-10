@@ -173,6 +173,8 @@ use frames::HFrame;
 pub use neqo_common::Header;
 use neqo_common::MessageType;
 use neqo_qpack::Error as QpackError;
+#[cfg(feature = "mcquic")]
+pub use neqo_transport::mcquic;
 use neqo_transport::{AppError, Connection, Error as TransportError, recv_stream, send_stream};
 pub use neqo_transport::{Output, StreamId, streams::SendOrder};
 pub use priority::Priority;

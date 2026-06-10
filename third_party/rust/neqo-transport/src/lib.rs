@@ -26,6 +26,8 @@ mod fc;
 pub mod frame;
 #[cfg(not(fuzzing))]
 mod frame;
+#[cfg(feature = "mcquic")]
+pub mod mcquic;
 mod pace;
 #[cfg(any(fuzzing, feature = "bench"))]
 pub mod packet;

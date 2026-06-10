@@ -337,6 +337,48 @@ impl Http3Server {
         self.events.has_events()
     }
 
+    #[cfg(feature = "mcquic")]
+    #[must_use]
+    pub fn peer_mcquic_server_support(&self, conn: &ConnectionRef) -> bool {
+        conn.borrow().peer_mcquic_server_support()
+    }
+
+    #[cfg(feature = "mcquic")]
+    #[must_use]
+    pub fn peer_mcquic_client_params(
+        &self,
+        conn: &ConnectionRef,
+    ) -> Option<neqo_transport::mcquic::ClientTransportParams> {
+        conn.borrow().peer_mcquic_client_params()
+    }
+
+    #[cfg(feature = "mcquic")]
+    pub fn mcquic_send(
+        &mut self,
+        conn: &ConnectionRef,
+        frame: neqo_transport::mcquic::Frame,
+    ) -> Res<()> {
+        if let Some(handler) = self.http3_handlers.get(conn) {
+            handler
+                .borrow_mut()
+                .mcquic_send(&mut conn.borrow_mut(), frame)?;
+        } else {
+            conn.borrow_mut().mcquic_send(frame)?;
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "mcquic")]
+    #[must_use]
+    pub fn mcquic_readable(&self, conn: &ConnectionRef) -> bool {
+        conn.borrow().mcquic_readable()
+    }
+
+    #[cfg(feature = "mcquic")]
+    pub fn mcquic_recv(&self, conn: &ConnectionRef) -> Option<neqo_transport::mcquic::Frame> {
+        conn.borrow_mut().mcquic_recv()
+    }
+
     /// Get events that indicate state changes on the connection. This method
     /// correctly handles cases where handling one event can obsolete
     /// previously-queued events, or cause new events to be generated.

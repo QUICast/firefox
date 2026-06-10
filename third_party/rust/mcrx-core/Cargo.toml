@@ -1,0 +1,39 @@
+[package]
+name = "mcrx-core"
+version = "0.2.7"
+edition = "2024"
+license = "BSD-2-Clause"
+description = "Runtime-agnostic and portable multicast receiver library for IPv4 and IPv6 ASM/SSM."
+readme = "README.md"
+repository = "https://github.com/QUICast/mcrx-core"
+homepage = "https://github.com/QUICast/mcrx-core"
+documentation = "https://docs.rs/mcrx-core"
+keywords = ["multicast", "udp", "asm", "ssm", "networking"]
+categories = ["network-programming"]
+
+[features]
+default = []
+metrics = ["dep:serde_json"]
+raw-packets = []
+tokio = ["dep:tokio"]
+
+[dependencies]
+socket2 = { version = "0.6.3", features = ["all"] }
+bytes = "1"
+thiserror = "2.0.12"
+libc = "0.2"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "time", "signal"], optional = true }
+serde_json = { version = "1", optional = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_NetworkManagement_IpHelper", "Win32_NetworkManagement_Ndis", "Win32_Networking_WinSock", "Win32_System_IO"] }
+
+[[bin]]
+name = "mcrx_tokio_recv"
+path = "src/bin/mcrx_tokio_recv.rs"
+required-features = ["tokio"]
+
+[[bin]]
+name = "mcrx_raw_recv"
+path = "src/bin/mcrx_raw_recv.rs"
+required-features = ["raw-packets"]

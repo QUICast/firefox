@@ -49,7 +49,7 @@ buildid_reader_ffi = { path = "../../buildid_reader/ffi" }
 chardetng_c = "1.0.0"
 audio_thread_priority = { version = "0.35", default-features = false }
 mdns_service = { path="../../../../dom/media/webrtc/transport/mdns_service", optional = true }
-neqo_glue = { path = "../../../../netwerk/socket/neqo_glue" }
+neqo_glue = { path = "../../../../netwerk/socket/neqo_glue", features = ["mcquic"] }
 wgpu_bindings = { path = "../../../../gfx/wgpu_bindings" }
 mapped_hyph = { git = "https://github.com/jfkthame/mapped_hyph.git", rev = "eff105f6ad7ec9b79816cfc1985a28e5340ad14b" }
 fog_control = { path = "../../../components/glean" }

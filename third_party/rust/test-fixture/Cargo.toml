@@ -1,0 +1,77 @@
+[package]
+edition = "2024"
+rust-version = "1.90.0"
+name = "test-fixture"
+version = "0.28.1"
+authors = ["The Neqo Authors <necko@mozilla.com>"]
+description = "Neqo, the Mozilla implementation of QUIC in Rust."
+homepage = "https://github.com/mozilla/neqo/"
+readme = "../README.md"
+keywords = [
+    "quic",
+    "http3",
+    "neqo",
+    "mozilla",
+    "ietf",
+    "firefox",
+]
+categories = [
+    "network-programming",
+    "web-programming",
+]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/mozilla/neqo/"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = [
+    "cfg(coverage_nightly)",
+] }
+
+[package.metadata.cargo-machete]
+ignored = ["log"]
+
+[features]
+bench = [
+    "neqo-common/bench",
+    "neqo-http3/bench",
+    "neqo-transport/bench",
+    "nss/bench",
+    "log/release_max_level_info",
+]
+disable-random = []
+
+[lib]
+name = "test_fixture"
+path = "src/lib.rs"
+bench = false
+
+[dependencies.log]
+version = "0.4"
+default-features = false
+
+[dependencies.neqo-common]
+path = "../neqo-common"
+features = ["test-fixture"]
+
+[dependencies.neqo-http3]
+path = "../neqo-http3"
+features = ["draft-29"]
+default-features = false
+
+[dependencies.neqo-transport]
+path = "../neqo-transport"
+features = ["draft-29"]
+default-features = false
+
+[dependencies.nss]
+package = "nss-rs"
+rev = "0.9.0"
+git = "https://github.com/mozilla/nss-rs"
+
+[dependencies.nss-test-fixture]
+path = "../nss-test-fixture"
+package = "test-fixture"
+
+[dependencies.qlog]
+version = "0.16.0"
+default-features = false

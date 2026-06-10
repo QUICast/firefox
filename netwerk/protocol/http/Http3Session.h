@@ -7,6 +7,7 @@
 
 #include "HttpTrafficAnalyzer.h"
 #include "mozilla/Array.h"
+#include "mozilla/UniquePtr.h"
 #include "mozilla/WeakPtr.h"
 #include "mozilla/net/NeqoHttp3Conn.h"
 #include "nsAHttpConnection.h"
@@ -104,6 +105,7 @@ class Http3StreamBase;
 class QuicSocketControl;
 class Http3WebTransportSession;
 class Http3WebTransportStream;
+class McquicMulticastReceiver;
 class nsHttpConnection;
 
 // IID for the Http3Session interface
@@ -320,6 +322,14 @@ class Http3Session final : public Http3SessionBase,
   nsresult ProcessOutput(nsIUDPSocket* socket);
   nsresult ProcessInput(nsIUDPSocket* socket);
   nsresult ProcessEvents();
+  nsresult EnsureMcquicReceiver();
+  nsresult SendMcquicLimits();
+  nsresult EnsureMcquicMoqSubscribe();
+  nsresult ProcessMcquicMoqControlStream();
+  nsresult ProcessMcquicControlFrames();
+  nsresult ProcessMcquicPackets();
+  void ProcessMcquicValidatedDatagrams();
+  void ScheduleMcquicPoll();
 
   nsresult ProcessTransactionRead(uint64_t stream_id);
   nsresult ProcessTransactionRead(Http3StreamBase* stream);
@@ -362,6 +372,34 @@ class Http3Session final : public Http3SessionBase,
 
   RefPtr<NeqoHttp3Conn> mHttp3Connection;
   RefPtr<nsAHttpConnection> mConnection;
+
+  struct McquicChannelInfo {
+    nsCString mSource;
+    nsCString mGroup;
+    nsCString mInterface;
+    uint16_t mPort = 0;
+    uint64_t mSubscriptionId = 0;
+    bool mJoined = false;
+  };
+
+  struct McquicMoqTrackInfo {
+    nsCString mNamespace;
+    nsCString mTrackName;
+  };
+
+  UniquePtr<McquicMulticastReceiver> mMcquicReceiver;
+  nsTHashMap<nsCStringHashKey, McquicChannelInfo> mMcquicChannels;
+  nsTHashMap<nsUint64HashKey, nsCString> mMcquicSubscriptionToChannel;
+  nsTHashMap<nsUint64HashKey, McquicMoqTrackInfo> mMcquicMoqTrackAliases;
+  nsTArray<uint8_t> mMcquicMoqControlBuffer;
+  uint64_t mMcquicLimitsSequence = 0;
+  uint64_t mMcquicStateSequence = 0;
+  uint64_t mMcquicMoqControlStreamId = 0;
+  bool mMcquicLimitsSent = false;
+  bool mMcquicMoqSubscribeQueued = false;
+  bool mMcquicMoqControlFin = false;
+  bool mMcquicNeedsOutput = false;
+
   // We need an extra map to store the mapping of WebTransportSession and
   // WebTransportStreams to handle the case that a stream is already removed
   // from mStreamIdHash and we still need the WebTransportSession.

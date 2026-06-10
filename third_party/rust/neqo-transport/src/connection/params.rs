@@ -157,6 +157,12 @@ pub struct ConnectionParameters {
     /// Whether to recover from spurious congestion events by restoring prior Congestion Controller
     /// state. Detection and metrics are always active regardless of this setting.
     spurious_recovery: bool,
+    /// Experimental MCQUIC client transport parameters.
+    #[cfg(feature = "mcquic")]
+    mcquic_client_params: Option<crate::mcquic::ClientTransportParams>,
+    /// Whether to advertise experimental MCQUIC server support.
+    #[cfg(feature = "mcquic")]
+    mcquic_server_support: bool,
 }
 
 impl Default for ConnectionParameters {
@@ -193,6 +199,10 @@ impl Default for ConnectionParameters {
             randomize_first_pn: true,
             scone: false,
             spurious_recovery: true,
+            #[cfg(feature = "mcquic")]
+            mcquic_client_params: None,
+            #[cfg(feature = "mcquic")]
+            mcquic_server_support: false,
         }
     }
 }
@@ -543,6 +553,39 @@ impl ConnectionParameters {
         self
     }
 
+    /// Get configured experimental MCQUIC client transport parameters.
+    #[cfg(feature = "mcquic")]
+    #[must_use]
+    pub const fn get_mcquic_client_params(&self) -> Option<&crate::mcquic::ClientTransportParams> {
+        self.mcquic_client_params.as_ref()
+    }
+
+    /// Configure experimental MCQUIC client transport parameters.
+    #[cfg(feature = "mcquic")]
+    #[must_use]
+    pub fn mcquic_client_params(
+        mut self,
+        params: Option<crate::mcquic::ClientTransportParams>,
+    ) -> Self {
+        self.mcquic_client_params = params;
+        self
+    }
+
+    /// Return whether this endpoint advertises experimental MCQUIC server support.
+    #[cfg(feature = "mcquic")]
+    #[must_use]
+    pub const fn mcquic_server_support_enabled(&self) -> bool {
+        self.mcquic_server_support
+    }
+
+    /// Configure whether this endpoint advertises experimental MCQUIC server support.
+    #[cfg(feature = "mcquic")]
+    #[must_use]
+    pub const fn mcquic_server_support(mut self, enabled: bool) -> Self {
+        self.mcquic_server_support = enabled;
+        self
+    }
+
     /// # Errors
     /// When a connection ID cannot be obtained.
     /// # Panics
@@ -566,6 +609,18 @@ impl ConnectionParameters {
         }
         if self.scone {
             tps.local_mut().set_empty(Scone);
+        }
+        #[cfg(feature = "mcquic")]
+        {
+            if role == Role::Client
+                && let Some(params) = &self.mcquic_client_params
+            {
+                tps.local_mut().set_mcquic_client_params(params.clone());
+            }
+            if role == Role::Server && self.mcquic_server_support {
+                tps.local_mut()
+                    .set_empty(crate::tparams::TransportParameterId::MulticastServerSupport);
+            }
         }
         tps.local_mut().set_integer(
             MaxAckDelay,

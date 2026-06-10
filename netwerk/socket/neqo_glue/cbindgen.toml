@@ -9,6 +9,7 @@ namespace net {
 class NeqoDecoder;
 class NeqoEncoder;
 class NeqoHttp3Conn;
+class McquicMcrxReceiver;
 union NetAddr;
 }  // namespace net
 }  // namespace mozilla
@@ -23,7 +24,7 @@ namespaces = ["mozilla", "net"]
 includes = ["certt.h", "prerror.h", "nsString.h", "nsTArray.h"]
 
 [export]
-exclude = ["NeqoDecoder", "NeqoEncoder", "NeqoHttp3Conn", "NetAddr"]
+exclude = ["NeqoDecoder", "NeqoEncoder", "NeqoHttp3Conn", "McquicMcrxReceiver", "NetAddr"]
 item_types = ["globals", "enums", "structs", "unions", "typedefs", "opaque", "functions", "constants"]
 
 [defines]

@@ -12,6 +12,7 @@
 #include "Http3WebTransportStream.h"
 #include "HttpConnectionUDP.h"
 #include "HttpLog.h"
+#include "McquicMulticastReceiver.h"
 #include "QuicSocketControl.h"
 #include "SSLServerCertVerification.h"
 #include "SSLTokensCache.h"
@@ -19,6 +20,7 @@
 #include "mozilla/RandomNum.h"
 #include "mozilla/RefPtr.h"
 #include "mozilla/ScopeExit.h"
+#include "mozilla/StaticPrefs_network.h"
 #include "mozilla/glean/NetwerkDnsMetrics.h"
 #include "mozilla/glean/NetwerkMetrics.h"
 #include "mozilla/glean/NetwerkProtocolHttpMetrics.h"
@@ -62,6 +64,59 @@ const uint64_t HTTP3_APP_ERROR_VERSION_FALLBACK = 0x110;
 const uint32_t MAX_PTO_COUNTS = 16;
 
 const uint32_t TRANSPORT_ERROR_STATELESS_RESET = 20;
+const uint64_t MCQUIC_POLL_INTERVAL_MS = 20;
+const uint32_t MCQUIC_MAX_PACKETS_PER_POLL = 32;
+
+static nsCString McquicChannelKey(const nsTArray<uint8_t>& aChannelId) {
+  nsCString key;
+  key.Assign(reinterpret_cast<const char*>(aChannelId.Elements()),
+             aChannelId.Length());
+  return key;
+}
+
+static nsCString McquicHexPrefix(const nsTArray<uint8_t>& aBytes,
+                                 size_t aMaxBytes = 8) {
+  nsCString out;
+  size_t limit = aBytes.Length() < aMaxBytes ? aBytes.Length() : aMaxBytes;
+  for (size_t i = 0; i < limit; ++i) {
+    out.AppendPrintf("%02x", aBytes[i]);
+  }
+  return out;
+}
+
+static const char* McquicMoqFormatName(McquicMoqDatagramFormat aFormat) {
+  switch (aFormat) {
+    case McquicMoqDatagramFormat::NativeMoqtObject:
+      return "native-moqt";
+    case McquicMoqDatagramFormat::LegacyMoq1Object:
+      return "legacy-moq1";
+    case McquicMoqDatagramFormat::Unknown:
+      return "unknown";
+  }
+  return "unknown";
+}
+
+static const char* McquicMoqStatusName(McquicMoqObjectStatus aStatus) {
+  switch (aStatus) {
+    case McquicMoqObjectStatus::Normal:
+      return "normal";
+    case McquicMoqObjectStatus::EndOfGroup:
+      return "end-of-group";
+    case McquicMoqObjectStatus::EndOfTrack:
+      return "end-of-track";
+    case McquicMoqObjectStatus::Unknown:
+      return "unknown";
+  }
+  return "unknown";
+}
+
+static nsCString McquicInterfaceForJoin(const nsACString& aSource) {
+  nsCString source(aSource);
+  if (StringBeginsWith(source, "127."_ns) || source.EqualsLiteral("::1")) {
+    return source;
+  }
+  return ""_ns;
+}
 
 NS_IMPL_ADDREF_INHERITED(Http3Session, nsAHttpConnection)
 NS_IMPL_RELEASE_INHERITED(Http3Session, nsAHttpConnection)
@@ -138,15 +193,16 @@ nsresult Http3Session::Init(const nsHttpConnectionInfo* aConnInfo,
   NetAddr peerAddr;
   MOZ_ALWAYS_SUCCEEDS(aPeerAddr->GetNetAddr(&peerAddr));
 
+  bool mcquicEnabled = StaticPrefs::network_http_http3_mcquic_enabled();
   LOG3(
       ("Http3Session::Init origin=%s, alpn=%s, selfAddr=%s, peerAddr=%s,"
        " qpack table size=%u, max blocked streams=%u webtransport=%d "
-       "[this=%p]",
+       "mcquic=%d [this=%p]",
        PromiseFlatCString(mSocketControl->GetHostName()).get(),
        PromiseFlatCString(alpn).get(), selfAddr.ToString().get(),
        peerAddr.ToString().get(), gHttpHandler->DefaultQpackTableSize(),
        gHttpHandler->DefaultHttp3MaxBlockedStreams(),
-       mConnInfo->GetWebTransport(), this));
+       mConnInfo->GetWebTransport(), mcquicEnabled, this));
 
   if (mConnInfo->GetWebTransport()) {
     ExtState(ExtendedConnectKind::WebTransport).mStatus = NEGOTIATING;
@@ -177,8 +233,9 @@ nsresult Http3Session::Init(const nsHttpConnectionInfo* aConnInfo,
         StaticPrefs::network_http_http3_max_data(),
         StaticPrefs::network_http_http3_max_stream_data(),
         StaticPrefs::network_http_http3_version_negotiation_enabled(),
-        mConnInfo->GetWebTransport(), gHttpHandler->Http3QlogDir(), idleTimeout,
-        fastPto, getter_AddRefs(mHttp3Connection));
+        mConnInfo->GetWebTransport(), mcquicEnabled,
+        gHttpHandler->Http3QlogDir(), idleTimeout, fastPto,
+        getter_AddRefs(mHttp3Connection));
   } else {
     rv = NeqoHttp3Conn::Init(
         mSocketControl->GetHostName(), alpn, selfAddr, peerAddr,
@@ -187,8 +244,9 @@ nsresult Http3Session::Init(const nsHttpConnectionInfo* aConnInfo,
         StaticPrefs::network_http_http3_max_data(),
         StaticPrefs::network_http_http3_max_stream_data(),
         StaticPrefs::network_http_http3_version_negotiation_enabled(),
-        mConnInfo->GetWebTransport(), gHttpHandler->Http3QlogDir(), idleTimeout,
-        fastPto, socket->GetFileDescriptor(), isOuterConnection,
+        mConnInfo->GetWebTransport(), mcquicEnabled,
+        gHttpHandler->Http3QlogDir(), idleTimeout, fastPto,
+        socket->GetFileDescriptor(), isOuterConnection,
         getter_AddRefs(mHttp3Connection));
   }
   if (NS_FAILED(rv)) {
@@ -728,6 +786,14 @@ nsresult Http3Session::ProcessEvents() {
         OnTransportStatus(nullptr, NS_NET_STATUS_CONNECTED_TO, 0);
         mUdpConn->OnConnected();
         ReportHttp3Connection();
+        nsresult rv = SendMcquicLimits();
+        if (NS_FAILED(rv)) {
+          return rv;
+        }
+        rv = EnsureMcquicMoqSubscribe();
+        if (NS_FAILED(rv)) {
+          return rv;
+        }
         // Maybe call ResumeSend:
         // In case ZeroRtt has been used and it has been rejected, 2 events will
         // be received: ZeroRttRejected and ConnectionConnected. ZeroRttRejected
@@ -1126,8 +1192,495 @@ nsresult Http3Session::ProcessEvents() {
     }
   }
 
+  rv = ProcessMcquicControlFrames();
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
+
+  rv = ProcessMcquicMoqControlStream();
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
+
   return NS_OK;
-}  // namespace net
+}
+
+nsresult Http3Session::EnsureMcquicReceiver() {
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
+
+  if (!StaticPrefs::network_http_http3_mcquic_enabled()) {
+    return NS_ERROR_NOT_AVAILABLE;
+  }
+
+  if (!mMcquicReceiver) {
+    mMcquicReceiver = MakeUnique<McquicMulticastReceiver>();
+  }
+
+  return mMcquicReceiver->Init();
+}
+
+nsresult Http3Session::SendMcquicLimits() {
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
+
+  if (!StaticPrefs::network_http_http3_mcquic_enabled() || mMcquicLimitsSent) {
+    return NS_OK;
+  }
+
+  nsresult rv = mHttp3Connection->McquicSendLimits(++mMcquicLimitsSequence);
+  if (rv == NS_ERROR_NOT_AVAILABLE) {
+    LOG(("MCQUIC MC_LIMITS API is not available [this=%p]", this));
+    return NS_OK;
+  }
+  if (NS_FAILED(rv)) {
+    LOG(("MCQUIC failed to queue MC_LIMITS [this=%p rv=0x%08" PRIx32 "]", this,
+         static_cast<uint32_t>(rv)));
+    return rv;
+  }
+
+  mMcquicLimitsSent = true;
+  mMcquicNeedsOutput = true;
+  LOG(("MCQUIC queued MC_LIMITS [this=%p sequence=%" PRIu64 "]", this,
+       mMcquicLimitsSequence));
+  return NS_OK;
+}
+
+nsresult Http3Session::EnsureMcquicMoqSubscribe() {
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
+
+  if (!StaticPrefs::network_http_http3_mcquic_enabled() ||
+      !StaticPrefs::network_http_http3_mcquic_moq_subscribe_enabled() ||
+      mMcquicMoqSubscribeQueued) {
+    return NS_OK;
+  }
+
+  nsCString authority(mConnInfo->GetOrigin());
+  authority.AppendPrintf(":%d", mConnInfo->OriginPort());
+  nsCString trackNamespace("ratatoskr/demo"_ns);
+  nsCString trackName("h264-qvf1"_ns);
+  nsTArray<uint8_t> payload;
+  nsresult rv = neqo_mcquic_moq_encode_setup_subscribe(
+      &authority, &trackNamespace, &trackName, &payload);
+  if (NS_FAILED(rv)) {
+    LOG(("MCQUIC MoQ failed to encode SETUP/SUBSCRIBE [this=%p rv=0x%08" PRIx32
+         "]",
+         this, static_cast<uint32_t>(rv)));
+    return rv;
+  }
+
+  uint64_t streamId = 0;
+  rv = mHttp3Connection->McquicMoqOpenStream(&streamId);
+  if (rv == NS_ERROR_NOT_AVAILABLE) {
+    LOG(("MCQUIC MoQ control stream API is not available [this=%p]", this));
+    return NS_OK;
+  }
+  if (NS_FAILED(rv)) {
+    LOG(("MCQUIC MoQ failed to open control stream [this=%p rv=0x%08" PRIx32
+         "]",
+         this, static_cast<uint32_t>(rv)));
+    return rv;
+  }
+
+  uint32_t sent = 0;
+  rv = mHttp3Connection->McquicMoqSendStreamData(streamId, payload, &sent);
+  if (NS_FAILED(rv)) {
+    LOG(("MCQUIC MoQ failed to queue SETUP/SUBSCRIBE [this=%p stream=0x%" PRIx64
+         " rv=0x%08" PRIx32 "]",
+         this, streamId, static_cast<uint32_t>(rv)));
+    return rv;
+  }
+
+  mMcquicMoqControlStreamId = streamId;
+  mMcquicMoqSubscribeQueued = true;
+  mMcquicNeedsOutput = true;
+  LOG(("MCQUIC MoQ queued SETUP/SUBSCRIBE [this=%p stream=0x%" PRIx64
+       " authority=%s track=%s/%s bytes=%zu sent=%u]",
+       this, mMcquicMoqControlStreamId, authority.get(), trackNamespace.get(),
+       trackName.get(), payload.Length(), sent));
+  return NS_OK;
+}
+
+nsresult Http3Session::ProcessMcquicMoqControlStream() {
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
+
+  if (!StaticPrefs::network_http_http3_mcquic_enabled() ||
+      !StaticPrefs::network_http_http3_mcquic_moq_subscribe_enabled() ||
+      !mMcquicMoqSubscribeQueued || mMcquicMoqControlFin) {
+    return NS_OK;
+  }
+
+  for (;;) {
+    nsTArray<uint8_t> payload;
+    bool fin = false;
+    nsresult rv = mHttp3Connection->McquicMoqRecvStreamData(
+        mMcquicMoqControlStreamId, payload, &fin);
+    if (rv == NS_BASE_STREAM_WOULD_BLOCK) {
+      break;
+    }
+    if (NS_FAILED(rv)) {
+      LOG(("MCQUIC MoQ control stream read failed [this=%p stream=0x%" PRIx64
+           " rv=0x%08" PRIx32 "]",
+           this, mMcquicMoqControlStreamId, static_cast<uint32_t>(rv)));
+      return rv;
+    }
+
+    if (!payload.IsEmpty()) {
+      mMcquicMoqControlBuffer.AppendElements(payload);
+    }
+    if (fin) {
+      mMcquicMoqControlFin = true;
+    }
+    if (payload.IsEmpty()) {
+      break;
+    }
+  }
+
+  while (!mMcquicMoqControlBuffer.IsEmpty()) {
+    McquicMoqControlMessageExternal message{};
+    if (!neqo_mcquic_moq_decode_control_message(&mMcquicMoqControlBuffer,
+                                                &message)) {
+      break;
+    }
+    if (message.consumed == 0 ||
+        message.consumed > mMcquicMoqControlBuffer.Length()) {
+      LOG(
+          ("MCQUIC MoQ decoded invalid control message length [this=%p "
+           "stream=0x%" PRIx64 " consumed=%" PRIu64 " buffered=%zu]",
+           this, mMcquicMoqControlStreamId, message.consumed,
+           mMcquicMoqControlBuffer.Length()));
+      mMcquicMoqControlBuffer.Clear();
+      break;
+    }
+
+    switch (message.tag) {
+      case McquicMoqControlMessageTag::Setup:
+        LOG(("MCQUIC MoQ SETUP received [this=%p stream=0x%" PRIx64 "]", this,
+             mMcquicMoqControlStreamId));
+        break;
+      case McquicMoqControlMessageTag::SubscribeOk: {
+        McquicMoqTrackInfo track;
+        track.mNamespace.AssignLiteral("ratatoskr/demo");
+        track.mTrackName.AssignLiteral("h264-qvf1");
+        mMcquicMoqTrackAliases.InsertOrUpdate(message.track_alias, track);
+        LOG(("MCQUIC MoQ SUBSCRIBE_OK received [this=%p stream=0x%" PRIx64
+             " track_alias=%" PRIu64 " track=%s/%s]",
+             this, mMcquicMoqControlStreamId, message.track_alias,
+             track.mNamespace.get(), track.mTrackName.get()));
+      } break;
+      case McquicMoqControlMessageTag::RequestOk:
+        LOG(("MCQUIC MoQ REQUEST_OK received [this=%p stream=0x%" PRIx64 "]",
+             this, mMcquicMoqControlStreamId));
+        break;
+      case McquicMoqControlMessageTag::RequestError:
+        LOG(("MCQUIC MoQ REQUEST_ERROR received [this=%p stream=0x%" PRIx64
+             " error=%" PRIu64 " retry=%" PRIu64 " reason=%s]",
+             this, mMcquicMoqControlStreamId, message.error_code,
+             message.retry_interval, message.reason.get()));
+        break;
+      case McquicMoqControlMessageTag::Subscribe:
+        LOG(
+            ("MCQUIC MoQ SUBSCRIBE received on client control stream [this=%p "
+             "stream=0x%" PRIx64 " request=%" PRIu64 " track=%s/%s]",
+             this, mMcquicMoqControlStreamId, message.request_id,
+             message.namespace_.get(), message.track_name.get()));
+        break;
+      case McquicMoqControlMessageTag::Unknown:
+        break;
+    }
+
+    mMcquicMoqControlBuffer.RemoveElementsAt(
+        0, static_cast<size_t>(message.consumed));
+  }
+
+  return NS_OK;
+}
+
+nsresult Http3Session::ProcessMcquicControlFrames() {
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
+
+  if (!StaticPrefs::network_http_http3_mcquic_enabled()) {
+    return NS_OK;
+  }
+
+  for (;;) {
+    McquicControlFrameExternal frame{};
+    nsresult rv = mHttp3Connection->McquicRecvControlFrame(&frame);
+    if (rv == NS_ERROR_NOT_AVAILABLE) {
+      LOG(("MCQUIC control frame API is not available [this=%p]", this));
+      return NS_OK;
+    }
+    if (NS_FAILED(rv)) {
+      LOG(("MCQUIC control frame processing failed [this=%p rv=0x%08" PRIx32
+           "]",
+           this, static_cast<uint32_t>(rv)));
+      return rv;
+    }
+
+    if (frame.tag == McquicControlFrameTag::NoFrame) {
+      break;
+    }
+
+    nsCString channelId = McquicChannelKey(frame.channel_id);
+    nsCString channelHex = McquicHexPrefix(frame.channel_id);
+
+    switch (frame.tag) {
+      case McquicControlFrameTag::Announce: {
+        LOG(
+            ("MCQUIC MC_ANNOUNCE [this=%p channel=%s source=%s group=%s "
+             "port=%u]",
+             this, channelHex.get(), frame.source_ip.get(),
+             frame.group_ip.get(), frame.udp_port));
+
+        rv = EnsureMcquicReceiver();
+        if (NS_FAILED(rv)) {
+          LOG(
+              ("MCQUIC receiver unavailable for announcement [this=%p "
+               "rv=0x%08" PRIx32 "]",
+               this, static_cast<uint32_t>(rv)));
+          break;
+        }
+
+        McquicChannelInfo oldInfo;
+        if (mMcquicChannels.Remove(channelId, &oldInfo) && mMcquicReceiver) {
+          if (oldInfo.mJoined) {
+            (void)mMcquicReceiver->Leave(oldInfo.mSubscriptionId);
+          }
+          (void)mMcquicReceiver->Remove(oldInfo.mSubscriptionId);
+          mMcquicSubscriptionToChannel.Remove(oldInfo.mSubscriptionId);
+        }
+
+        McquicChannelInfo info;
+        info.mSource = frame.source_ip;
+        info.mGroup = frame.group_ip;
+        info.mInterface = McquicInterfaceForJoin(info.mSource);
+        info.mPort = frame.udp_port;
+
+        rv = mMcquicReceiver->AddSsmSubscription(
+            info.mSource, info.mGroup, info.mPort, info.mInterface, Nothing(),
+            &info.mSubscriptionId);
+        if (NS_FAILED(rv)) {
+          LOG(
+              ("MCQUIC failed to add SSM subscription [this=%p channel=%s "
+               "rv=0x%08" PRIx32 "]",
+               this, channelHex.get(), static_cast<uint32_t>(rv)));
+          break;
+        }
+
+        rv = mMcquicReceiver->Join(info.mSubscriptionId);
+        if (NS_FAILED(rv)) {
+          LOG(
+              ("MCQUIC failed to join SSM subscription [this=%p channel=%s "
+               "id=%" PRIu64 " rv=0x%08" PRIx32 "]",
+               this, channelHex.get(), info.mSubscriptionId,
+               static_cast<uint32_t>(rv)));
+          (void)mMcquicReceiver->Remove(info.mSubscriptionId);
+          break;
+        }
+
+        info.mJoined = true;
+        mMcquicSubscriptionToChannel.InsertOrUpdate(info.mSubscriptionId,
+                                                    channelId);
+        mMcquicChannels.InsertOrUpdate(channelId, info);
+
+        rv = mHttp3Connection->McquicSendJoinedState(channelId,
+                                                     ++mMcquicStateSequence);
+        if (NS_SUCCEEDED(rv)) {
+          mMcquicNeedsOutput = true;
+          LOG(
+              ("MCQUIC queued MC_STATE(JOINED) [this=%p channel=%s "
+               "sequence=%" PRIu64 "]",
+               this, channelHex.get(), mMcquicStateSequence));
+        } else {
+          LOG(
+              ("MCQUIC failed to queue MC_STATE(JOINED) [this=%p channel=%s "
+               "rv=0x%08" PRIx32 "]",
+               this, channelHex.get(), static_cast<uint32_t>(rv)));
+        }
+
+        ScheduleMcquicPoll();
+      } break;
+      case McquicControlFrameTag::Key:
+        LOG(("MCQUIC MC_KEY [this=%p channel=%s key_sequence=%" PRIu64 "]",
+             this, channelHex.get(), frame.key_sequence));
+        ProcessMcquicValidatedDatagrams();
+        break;
+      case McquicControlFrameTag::Integrity:
+        LOG(("MCQUIC MC_INTEGRITY [this=%p channel=%s start=%" PRIu64
+             " hashes=%" PRIu64 "]",
+             this, channelHex.get(), frame.packet_number_start,
+             frame.packet_hash_count));
+        ProcessMcquicValidatedDatagrams();
+        break;
+      case McquicControlFrameTag::Join:
+        LOG(("MCQUIC MC_JOIN [this=%p channel=%s]", this, channelHex.get()));
+        break;
+      case McquicControlFrameTag::Leave:
+        LOG(("MCQUIC MC_LEAVE [this=%p channel=%s]", this, channelHex.get()));
+        break;
+      case McquicControlFrameTag::Retire:
+        LOG(("MCQUIC MC_RETIRE [this=%p channel=%s]", this, channelHex.get()));
+        break;
+      case McquicControlFrameTag::State:
+        LOG(("MCQUIC MC_STATE [this=%p channel=%s state=%u sequence=%" PRIu64
+             "]",
+             this, channelHex.get(), frame.channel_state,
+             frame.state_sequence));
+        break;
+      case McquicControlFrameTag::Ack:
+        LOG(("MCQUIC MC_ACK [this=%p channel=%s largest=%" PRIu64 "]", this,
+             channelHex.get(), frame.largest_acknowledged));
+        break;
+      case McquicControlFrameTag::Limits:
+        LOG(("MCQUIC MC_LIMITS [this=%p]", this));
+        break;
+      case McquicControlFrameTag::NoFrame:
+        break;
+    }
+  }
+
+  return NS_OK;
+}
+
+nsresult Http3Session::ProcessMcquicPackets() {
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
+
+  if (!StaticPrefs::network_http_http3_mcquic_enabled() || !mMcquicReceiver ||
+      mMcquicChannels.IsEmpty()) {
+    return NS_OK;
+  }
+
+  for (uint32_t i = 0; i < MCQUIC_MAX_PACKETS_PER_POLL; ++i) {
+    McquicMcrxPacket packet{};
+    nsresult rv = mMcquicReceiver->Poll(packet);
+    if (rv == NS_BASE_STREAM_WOULD_BLOCK) {
+      break;
+    }
+    if (NS_FAILED(rv)) {
+      LOG(("MCQUIC packet poll failed [this=%p rv=0x%08" PRIx32 "]", this,
+           static_cast<uint32_t>(rv)));
+      break;
+    }
+
+    auto channel = mMcquicSubscriptionToChannel.Lookup(packet.subscription_id);
+    if (!channel) {
+      LOG(("MCQUIC packet for unknown subscription [this=%p id=%" PRIu64 "]",
+           this, packet.subscription_id));
+      continue;
+    }
+
+    rv = mHttp3Connection->McquicProcessChannelPacket(channel.Data(),
+                                                      packet.payload);
+    if (NS_FAILED(rv)) {
+      LOG(("MCQUIC packet validation failed [this=%p id=%" PRIu64
+           " rv=0x%08" PRIx32 "]",
+           this, packet.subscription_id, static_cast<uint32_t>(rv)));
+      continue;
+    }
+
+    ProcessMcquicValidatedDatagrams();
+
+    McquicSendPendingAcksResult ack = mHttp3Connection->McquicSendPendingAcks();
+    if (NS_FAILED(ack.result)) {
+      LOG(("MCQUIC failed to queue MC_ACK [this=%p rv=0x%08" PRIx32 "]", this,
+           static_cast<uint32_t>(ack.result)));
+      continue;
+    }
+    if (ack.sent) {
+      mMcquicNeedsOutput = true;
+      LOG(("MCQUIC queued MC_ACK [this=%p id=%" PRIu64 "]", this,
+           packet.subscription_id));
+    }
+  }
+
+  ScheduleMcquicPoll();
+  return NS_OK;
+}
+
+void Http3Session::ProcessMcquicValidatedDatagrams() {
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
+
+  if (!StaticPrefs::network_http_http3_mcquic_enabled()) {
+    return;
+  }
+
+  for (;;) {
+    McquicChannelDatagram datagram{};
+    if (!mHttp3Connection->McquicPopChannelDatagram(&datagram)) {
+      break;
+    }
+
+    nsCString channelHex = McquicHexPrefix(datagram.channel_id);
+    nsCString payloadHex = McquicHexPrefix(datagram.payload, 16);
+    LOG(("MCQUIC validated DATAGRAM [this=%p channel=%s packet_number=%" PRIu64
+         " payload_len=%zu payload_prefix=%s]",
+         this, channelHex.get(), datagram.packet_number,
+         datagram.payload.Length(), payloadHex.get()));
+
+    McquicMoqDatagramExternal moq{};
+    if (!neqo_mcquic_decode_moq_datagram(&datagram.payload, &moq)) {
+      continue;
+    }
+
+    if (moq.format == McquicMoqDatagramFormat::NativeMoqtObject) {
+      auto track = mMcquicMoqTrackAliases.Lookup(moq.track_alias);
+      if (track) {
+        LOG(
+            ("MCQUIC MoQ object [this=%p format=%s channel=%s "
+             "packet_number=%" PRIu64 " track_alias=%" PRIu64
+             " track=%s/%s group=%" PRIu64 " object=%" PRIu64
+             " status=%s end_of_group=%d payload_len=%" PRIu64 "]",
+             this, McquicMoqFormatName(moq.format), channelHex.get(),
+             datagram.packet_number, moq.track_alias,
+             track.Data().mNamespace.get(), track.Data().mTrackName.get(),
+             moq.group_id, moq.object_id, McquicMoqStatusName(moq.status),
+             moq.end_of_group, moq.payload_len));
+      } else {
+        LOG(
+            ("MCQUIC MoQ object [this=%p format=%s channel=%s "
+             "packet_number=%" PRIu64 " unknown_track_alias=%" PRIu64
+             " group=%" PRIu64 " object=%" PRIu64
+             " status=%s end_of_group=%d payload_len=%" PRIu64 "]",
+             this, McquicMoqFormatName(moq.format), channelHex.get(),
+             datagram.packet_number, moq.track_alias, moq.group_id,
+             moq.object_id, McquicMoqStatusName(moq.status), moq.end_of_group,
+             moq.payload_len));
+      }
+      continue;
+    }
+
+    nsCString objectChannelHex = McquicHexPrefix(moq.multicast_channel, 16);
+    LOG((
+        "MCQUIC MoQ object [this=%p format=%s channel=%s packet_number=%" PRIu64
+        " track=%s/%s group=%" PRIu64 " object=%" PRIu64
+        " publisher_sequence=%" PRIu64 " pts_ms=%" PRIu64
+        " keyframe=%d config=%d independent=%d end_of_group=%d"
+        " payload_len=%" PRIu64
+        " has_multicast_packet=%d"
+        " multicast_packet=%" PRIu64 " object_channel=%s]",
+        this, McquicMoqFormatName(moq.format), channelHex.get(),
+        datagram.packet_number, moq.namespace_.get(), moq.track_name.get(),
+        moq.group_id, moq.object_id, moq.publisher_sequence, moq.pts_millis,
+        moq.keyframe, moq.config, moq.independent, moq.end_of_group,
+        moq.payload_len, moq.has_multicast_packet_number,
+        moq.multicast_packet_number, objectChannelHex.get()));
+  }
+}
+
+void Http3Session::ScheduleMcquicPoll() {
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
+
+  if (!StaticPrefs::network_http_http3_mcquic_enabled() ||
+      mMcquicChannels.IsEmpty() || IsClosing()) {
+    return;
+  }
+
+  TimeStamp pollTime = TimeStamp::Now() +
+                       TimeDuration::FromMilliseconds(MCQUIC_POLL_INTERVAL_MS);
+  if (mTimerShouldTrigger && mTimerShouldTrigger <= pollTime) {
+    return;
+  }
+
+  SetupTimer(MCQUIC_POLL_INTERVAL_MS);
+}
 
 // This function may return a socket error.
 // It will not return an error if socket error is
@@ -1984,8 +2537,13 @@ nsresult Http3Session::SendData(nsIUDPSocket* socket) {
   }
 
   if (NS_SUCCEEDED(rv)) {
+    rv = ProcessMcquicPackets();
+  }
+
+  if (NS_SUCCEEDED(rv)) {
     // Step 2:
     // Call actual network write.
+    mMcquicNeedsOutput = false;
     rv = ProcessOutput(socket);
   }
 
@@ -2000,6 +2558,8 @@ nsresult Http3Session::SendData(nsIUDPSocket* socket) {
     return rv;
   }
 
+  ScheduleMcquicPoll();
+
   // Put the blocked streams back to the queue, since they are ready to write.
   for (const auto& stream : blockedStreams) {
     mReadyForWrite.Push(stream);
@@ -2007,6 +2567,17 @@ nsresult Http3Session::SendData(nsIUDPSocket* socket) {
   }
 
   rv = ProcessEvents();
+
+  if (NS_SUCCEEDED(rv) && mMcquicNeedsOutput) {
+    mMcquicNeedsOutput = false;
+    rv = ProcessOutput(socket);
+    if (rv == NS_BASE_STREAM_WOULD_BLOCK) {
+      rv = NS_OK;
+    }
+    if (NS_SUCCEEDED(rv)) {
+      ScheduleMcquicPoll();
+    }
+  }
 
   // Let the connection know we sent some app data successfully.
   if (stream && NS_SUCCEEDED(rv)) {
