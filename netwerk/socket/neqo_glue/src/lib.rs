@@ -311,6 +311,7 @@ pub struct McquicMoqDatagramExternal {
     pub namespace: nsCString,
     pub track_name: nsCString,
     pub multicast_channel: ThinVec<u8>,
+    pub payload: ThinVec<u8>,
 }
 
 impl Default for McquicMoqDatagramExternal {
@@ -336,6 +337,7 @@ impl Default for McquicMoqDatagramExternal {
             namespace: nsCString::new(),
             track_name: nsCString::new(),
             multicast_channel: ThinVec::new(),
+            payload: ThinVec::new(),
         }
     }
 }
@@ -767,18 +769,16 @@ fn mcquic_decode_native_moqt_object_datagram(payload: &[u8]) -> Option<McquicMoq
         reader.read_exact(property_len)?;
     }
 
-    let (status, object_payload_len) = if has_status {
+    let (status, object_payload) = if has_status {
         let status = mcquic_moqt_object_status(reader.read_varint()?)?;
         if reader.remaining() != 0 {
             return None;
         }
-        (status, 0)
+        (status, Vec::new())
     } else {
-        (
-            McquicMoqObjectStatus::Normal,
-            reader.read_to_end().len() as u64,
-        )
+        (McquicMoqObjectStatus::Normal, reader.read_to_end().to_vec())
     };
+    let object_payload_len = object_payload.len() as u64;
 
     Some(McquicMoqDatagramExternal {
         format: McquicMoqDatagramFormat::NativeMoqtObject,
@@ -792,6 +792,7 @@ fn mcquic_decode_native_moqt_object_datagram(payload: &[u8]) -> Option<McquicMoq
         payload_len: object_payload_len,
         has_publisher_priority: publisher_priority.is_some(),
         publisher_priority: publisher_priority.unwrap_or_default(),
+        payload: object_payload.into(),
         ..McquicMoqDatagramExternal::default()
     })
 }
@@ -853,6 +854,7 @@ fn mcquic_decode_legacy_moq1_object_datagram(payload: &[u8]) -> Option<McquicMoq
         multicast_channel: payload[track_name_end..multicast_channel_end]
             .to_vec()
             .into(),
+        payload: payload[multicast_channel_end..total_len].to_vec().into(),
         ..McquicMoqDatagramExternal::default()
     })
 }

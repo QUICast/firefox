@@ -6,6 +6,7 @@
 #define Http3Session_H_
 
 #include "HttpTrafficAnalyzer.h"
+#include "McquicMoqMediaSink.h"
 #include "mozilla/Array.h"
 #include "mozilla/UniquePtr.h"
 #include "mozilla/WeakPtr.h"
@@ -388,6 +389,8 @@ class Http3Session final : public Http3SessionBase,
   };
 
   UniquePtr<McquicMulticastReceiver> mMcquicReceiver;
+  UniquePtr<McquicMoqMediaSink> mMcquicMoqMediaSink;
+  UniquePtr<McquicMoqAccessUnitConsumer> mMcquicMoqAccessUnitConsumer;
   nsTHashMap<nsCStringHashKey, McquicChannelInfo> mMcquicChannels;
   nsTHashMap<nsUint64HashKey, nsCString> mMcquicSubscriptionToChannel;
   nsTHashMap<nsUint64HashKey, McquicMoqTrackInfo> mMcquicMoqTrackAliases;

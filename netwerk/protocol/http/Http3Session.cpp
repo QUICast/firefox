@@ -1623,6 +1623,7 @@ void Http3Session::ProcessMcquicValidatedDatagrams() {
     if (moq.format == McquicMoqDatagramFormat::NativeMoqtObject) {
       auto track = mMcquicMoqTrackAliases.Lookup(moq.track_alias);
       if (track) {
+        const McquicMoqTrackInfo& trackInfo = track.Data();
         LOG(
             ("MCQUIC MoQ object [this=%p format=%s channel=%s "
              "packet_number=%" PRIu64 " track_alias=%" PRIu64
@@ -1630,9 +1631,55 @@ void Http3Session::ProcessMcquicValidatedDatagrams() {
              " status=%s end_of_group=%d payload_len=%" PRIu64 "]",
              this, McquicMoqFormatName(moq.format), channelHex.get(),
              datagram.packet_number, moq.track_alias,
-             track.Data().mNamespace.get(), track.Data().mTrackName.get(),
+             trackInfo.mNamespace.get(), trackInfo.mTrackName.get(),
              moq.group_id, moq.object_id, McquicMoqStatusName(moq.status),
              moq.end_of_group, moq.payload_len));
+        if (McquicMoqMediaSink::Enabled()) {
+          if (!mMcquicMoqMediaSink) {
+            mMcquicMoqMediaSink = MakeUnique<McquicMoqMediaSink>();
+          }
+          nsresult rv = mMcquicMoqMediaSink->ProcessObject(
+              trackInfo.mNamespace, trackInfo.mTrackName, datagram.channel_id,
+              datagram.packet_number, moq);
+          if (NS_FAILED(rv)) {
+            LOG((
+                "MCQUIC MoQ media sink rejected object [this=%p rv=0x%08" PRIx32
+                " track=%s/%s group=%" PRIu64 " object=%" PRIu64 "]",
+                this, static_cast<uint32_t>(rv), trackInfo.mNamespace.get(),
+                trackInfo.mTrackName.get(), moq.group_id, moq.object_id));
+          }
+          McquicMoqAccessUnit accessUnit;
+          while (mMcquicMoqMediaSink->PopAccessUnit(accessUnit)) {
+            LOG(
+                ("MCQUIC MoQ media access unit ready [this=%p track=%s/%s "
+                 "sequence=%" PRIu64 " pts_ms=%" PRIu64 " payload_len=%zu "
+                 "keyframe=%d config=%d independent=%d]",
+                 this, accessUnit.mNamespace.get(), accessUnit.mTrackName.get(),
+                 accessUnit.mAccessUnitSequence, accessUnit.mPtsMillis,
+                 accessUnit.mPayload.Length(), accessUnit.mKeyframe,
+                 accessUnit.mConfig, accessUnit.mIndependent));
+            if (McquicMoqAccessUnitConsumer::Enabled()) {
+              if (!mMcquicMoqAccessUnitConsumer) {
+                mMcquicMoqAccessUnitConsumer =
+                    CreateMcquicMoqAccessUnitConsumer();
+              }
+              if (mMcquicMoqAccessUnitConsumer) {
+                nsresult consumerRv =
+                    mMcquicMoqAccessUnitConsumer->OnMcquicMoqAccessUnit(
+                        accessUnit);
+                if (NS_FAILED(consumerRv)) {
+                  LOG(
+                      ("MCQUIC MoQ media handoff rejected access unit "
+                       "[this=%p rv=0x%08" PRIx32 " track=%s/%s "
+                       "sequence=%" PRIu64 "]",
+                       this, static_cast<uint32_t>(consumerRv),
+                       accessUnit.mNamespace.get(), accessUnit.mTrackName.get(),
+                       accessUnit.mAccessUnitSequence));
+                }
+              }
+            }
+          }
+        }
       } else {
         LOG(
             ("MCQUIC MoQ object [this=%p format=%s channel=%s "

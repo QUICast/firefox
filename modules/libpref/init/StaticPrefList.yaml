@@ -16072,6 +16072,18 @@
   value: false
   mirror: always
 
+# Enable experimental, privileged MCQUIC MoQT/QVF1 media sink logging.
+- name: network.http.http3.mcquic.moq_media_sink.enabled
+  type: RelaxedAtomicBool
+  value: false
+  mirror: always
+
+# Enable experimental, privileged MCQUIC MoQT/QVF1 media handoff.
+- name: network.http.http3.mcquic.moq_media_handoff.enabled
+  type: RelaxedAtomicBool
+  value: false
+  mirror: always
+
 # Receive buffer size of QUIC socket
 - name: network.http.http3.recvBufferSize
   type: RelaxedAtomicInt32
