@@ -121,6 +121,8 @@ FINAL_TARGET_FILES.actors += [
     "LightweightThemeChild.sys.mjs",
     "LinkHandlerChild.sys.mjs",
     "LinkHandlerParent.sys.mjs",
+    "McquicVideoOverlayChild.sys.mjs",
+    "McquicVideoOverlayParent.sys.mjs",
     "PageInfoChild.sys.mjs",
     "PageInfoPreviewChild.sys.mjs",
     "PageStyleChild.sys.mjs",

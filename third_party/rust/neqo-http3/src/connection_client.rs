@@ -1426,6 +1426,11 @@ impl Http3Client {
         })
     }
 
+    #[cfg(feature = "mcquic")]
+    pub fn mcquic_moq_pop_unicast_datagram(&mut self) -> Option<Vec<u8>> {
+        self.base_handler.pop_mcquic_raw_datagram()
+    }
+
     #[must_use]
     pub const fn webtransport_enabled(&self) -> bool {
         self.base_handler.webtransport_enabled()

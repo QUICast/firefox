@@ -18,6 +18,7 @@
 #include "SSLTokensCache.h"
 #include "ScopedNSSTypes.h"
 #include "mozilla/RandomNum.h"
+#include "mozilla/Preferences.h"
 #include "mozilla/RefPtr.h"
 #include "mozilla/ScopeExit.h"
 #include "mozilla/StaticPrefs_network.h"
@@ -66,6 +67,15 @@ const uint32_t MAX_PTO_COUNTS = 16;
 const uint32_t TRANSPORT_ERROR_STATELESS_RESET = 20;
 const uint64_t MCQUIC_POLL_INTERVAL_MS = 20;
 const uint32_t MCQUIC_MAX_PACKETS_PER_POLL = 32;
+const uint64_t MCQUIC_MOQ_MULTICAST_STALL_MS = 1000;
+const char MCQUIC_MOQ_SUBSCRIBE_ORIGIN_PREF[] =
+    "network.http.http3.mcquic.moq_subscribe.origin";
+const char MCQUIC_MOQ_SUBSCRIBE_NAMESPACE_PREF[] =
+    "network.http.http3.mcquic.moq_subscribe.track_namespace";
+const char MCQUIC_MOQ_SUBSCRIBE_TRACK_PREF[] =
+    "network.http.http3.mcquic.moq_subscribe.track_name";
+const char MCQUIC_MOQ_DEFAULT_NAMESPACE[] = "ratatoskr/demo";
+const char MCQUIC_MOQ_DEFAULT_TRACK[] = "h264-qvf1";
 
 static nsCString McquicChannelKey(const nsTArray<uint8_t>& aChannelId) {
   nsCString key;
@@ -82,6 +92,20 @@ static nsCString McquicHexPrefix(const nsTArray<uint8_t>& aBytes,
     out.AppendPrintf("%02x", aBytes[i]);
   }
   return out;
+}
+
+static bool McquicLooksLikeQvf1(const nsTArray<uint8_t>& aPayload) {
+  return aPayload.Length() >= 4 && aPayload[0] == 'Q' &&
+         aPayload[1] == 'V' && aPayload[2] == 'F' && aPayload[3] == '1';
+}
+
+static nsCString McquicMoqStringPref(const char* aPref,
+                                     const char* aDefaultValue) {
+  nsCString value;
+  if (NS_FAILED(Preferences::GetCString(aPref, value)) || value.IsEmpty()) {
+    value.Assign(aDefaultValue);
+  }
+  return value;
 }
 
 static const char* McquicMoqFormatName(McquicMoqDatagramFormat aFormat) {
@@ -1202,6 +1226,11 @@ nsresult Http3Session::ProcessEvents() {
     return rv;
   }
 
+  rv = ProcessMcquicMoqUnicastDatagrams();
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
+
   return NS_OK;
 }
 
@@ -1253,10 +1282,24 @@ nsresult Http3Session::EnsureMcquicMoqSubscribe() {
     return NS_OK;
   }
 
-  nsCString authority(mConnInfo->GetOrigin());
+  nsCString origin(mConnInfo->GetOrigin());
+  nsCString authority(origin);
   authority.AppendPrintf(":%d", mConnInfo->OriginPort());
-  nsCString trackNamespace("ratatoskr/demo"_ns);
-  nsCString trackName("h264-qvf1"_ns);
+  nsCString allowedOrigin;
+  Preferences::GetCString(MCQUIC_MOQ_SUBSCRIBE_ORIGIN_PREF, allowedOrigin);
+  if (!allowedOrigin.IsEmpty() && !allowedOrigin.Equals(origin) &&
+      !allowedOrigin.Equals(authority)) {
+    LOG(
+        ("MCQUIC MoQ subscription skipped for origin [this=%p origin=%s "
+         "authority=%s allowed=%s]",
+         this, origin.get(), authority.get(), allowedOrigin.get()));
+    return NS_OK;
+  }
+
+  nsCString trackNamespace = McquicMoqStringPref(
+      MCQUIC_MOQ_SUBSCRIBE_NAMESPACE_PREF, MCQUIC_MOQ_DEFAULT_NAMESPACE);
+  nsCString trackName = McquicMoqStringPref(MCQUIC_MOQ_SUBSCRIBE_TRACK_PREF,
+                                            MCQUIC_MOQ_DEFAULT_TRACK);
   nsTArray<uint8_t> payload;
   nsresult rv = neqo_mcquic_moq_encode_setup_subscribe(
       &authority, &trackNamespace, &trackName, &payload);
@@ -1291,6 +1334,8 @@ nsresult Http3Session::EnsureMcquicMoqSubscribe() {
 
   mMcquicMoqControlStreamId = streamId;
   mMcquicMoqSubscribeQueued = true;
+  mMcquicMoqTrackNamespace = trackNamespace;
+  mMcquicMoqTrackName = trackName;
   mMcquicNeedsOutput = true;
   LOG(("MCQUIC MoQ queued SETUP/SUBSCRIBE [this=%p stream=0x%" PRIx64
        " authority=%s track=%s/%s bytes=%zu sent=%u]",
@@ -1358,13 +1403,17 @@ nsresult Http3Session::ProcessMcquicMoqControlStream() {
         break;
       case McquicMoqControlMessageTag::SubscribeOk: {
         McquicMoqTrackInfo track;
-        track.mNamespace.AssignLiteral("ratatoskr/demo");
-        track.mTrackName.AssignLiteral("h264-qvf1");
+        track.mNamespace = mMcquicMoqTrackNamespace;
+        track.mTrackName = mMcquicMoqTrackName;
         mMcquicMoqTrackAliases.InsertOrUpdate(message.track_alias, track);
         LOG(("MCQUIC MoQ SUBSCRIBE_OK received [this=%p stream=0x%" PRIx64
              " track_alias=%" PRIu64 " track=%s/%s]",
              this, mMcquicMoqControlStreamId, message.track_alias,
              track.mNamespace.get(), track.mTrackName.get()));
+        if (mMcquicMoqDeliveryMode == McquicMoqDeliveryMode::None) {
+          SetMcquicMoqDeliveryMode(McquicMoqDeliveryMode::Unicast,
+                                   "subscribe-ok");
+        }
       } break;
       case McquicMoqControlMessageTag::RequestOk:
         LOG(("MCQUIC MoQ REQUEST_OK received [this=%p stream=0x%" PRIx64 "]",
@@ -1389,6 +1438,118 @@ nsresult Http3Session::ProcessMcquicMoqControlStream() {
 
     mMcquicMoqControlBuffer.RemoveElementsAt(
         0, static_cast<size_t>(message.consumed));
+  }
+
+  return NS_OK;
+}
+
+const char* Http3Session::McquicMoqDeliveryModeName(
+    McquicMoqDeliveryMode aMode) {
+  switch (aMode) {
+    case McquicMoqDeliveryMode::None:
+      return "none";
+    case McquicMoqDeliveryMode::Unicast:
+      return "unicast";
+    case McquicMoqDeliveryMode::MulticastJoining:
+      return "multicast-joining";
+    case McquicMoqDeliveryMode::Multicast:
+      return "multicast";
+    case McquicMoqDeliveryMode::Fallback:
+      return "fallback";
+  }
+  return "unknown";
+}
+
+void Http3Session::SetMcquicMoqDeliveryMode(McquicMoqDeliveryMode aMode,
+                                            const char* aReason) {
+  if (mMcquicMoqDeliveryMode == aMode) {
+    return;
+  }
+
+  LOG(
+      ("MCQUIC MoQ delivery mode changed [this=%p from=%s to=%s reason=%s "
+       "unicast_datagrams=%" PRIu64 " multicast_datagrams=%" PRIu64
+       " dropped_unicast=%" PRIu64 "]",
+       this, McquicMoqDeliveryModeName(mMcquicMoqDeliveryMode),
+       McquicMoqDeliveryModeName(aMode), aReason, mMcquicMoqUnicastDatagrams,
+       mMcquicMoqMulticastDatagrams, mMcquicMoqDroppedUnicastDatagrams));
+  mMcquicMoqDeliveryMode = aMode;
+}
+
+void Http3Session::MaybeFallbackMcquicMoqUnicast(const char* aReason) {
+  TimeStamp now = TimeStamp::Now();
+  if (mMcquicMoqDeliveryMode == McquicMoqDeliveryMode::MulticastJoining &&
+      !mMcquicMoqMulticastJoinStarted.IsNull()) {
+    TimeDuration sinceJoin = now - mMcquicMoqMulticastJoinStarted;
+    if (sinceJoin.ToMilliseconds() >= MCQUIC_MOQ_MULTICAST_STALL_MS) {
+      SetMcquicMoqDeliveryMode(McquicMoqDeliveryMode::Fallback, aReason);
+    }
+    return;
+  }
+
+  if (mMcquicMoqDeliveryMode != McquicMoqDeliveryMode::Multicast ||
+      mMcquicMoqLastMulticastDatagram.IsNull()) {
+    return;
+  }
+
+  TimeDuration sinceMulticast = now - mMcquicMoqLastMulticastDatagram;
+  if (sinceMulticast.ToMilliseconds() >= MCQUIC_MOQ_MULTICAST_STALL_MS) {
+    SetMcquicMoqDeliveryMode(McquicMoqDeliveryMode::Fallback, aReason);
+  }
+}
+
+nsresult Http3Session::ProcessMcquicMoqUnicastDatagrams() {
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
+
+  if (!StaticPrefs::network_http_http3_mcquic_enabled() ||
+      !StaticPrefs::network_http_http3_mcquic_moq_subscribe_enabled() ||
+      !mMcquicMoqSubscribeQueued || mMcquicMoqTrackAliases.IsEmpty()) {
+    return NS_OK;
+  }
+
+  MaybeFallbackMcquicMoqUnicast("multicast stale while unicast available");
+
+  for (;;) {
+    nsTArray<uint8_t> payload;
+    if (!mHttp3Connection->McquicMoqPopUnicastDatagram(payload)) {
+      break;
+    }
+
+    ++mMcquicMoqUnicastDatagrams;
+    if (mMcquicMoqDeliveryMode == McquicMoqDeliveryMode::Multicast) {
+      ++mMcquicMoqDroppedUnicastDatagrams;
+      LOG(
+          ("MCQUIC MoQ unicast DATAGRAM suppressed while multicast is fresh "
+           "[this=%p payload_len=%zu total_unicast=%" PRIu64
+           " suppressed=%" PRIu64 "]",
+           this, payload.Length(), mMcquicMoqUnicastDatagrams,
+           mMcquicMoqDroppedUnicastDatagrams));
+      continue;
+    }
+
+    McquicMoqDatagramExternal moq{};
+    if (!neqo_mcquic_decode_moq_datagram(&payload, &moq)) {
+      ++mMcquicMoqDroppedUnicastDatagrams;
+      LOG(
+          ("MCQUIC MoQ unicast DATAGRAM rejected [this=%p payload_len=%zu "
+           "total_unicast=%" PRIu64 " dropped=%" PRIu64 "]",
+           this, payload.Length(), mMcquicMoqUnicastDatagrams,
+           mMcquicMoqDroppedUnicastDatagrams));
+      continue;
+    }
+
+    if (moq.format != McquicMoqDatagramFormat::NativeMoqtObject) {
+      ++mMcquicMoqDroppedUnicastDatagrams;
+      LOG(("MCQUIC MoQ unicast object ignored [this=%p format=%s group=%" PRIu64
+           " object=%" PRIu64 " payload_len=%" PRIu64 "]",
+           this, McquicMoqFormatName(moq.format), moq.group_id, moq.object_id,
+           moq.payload_len));
+      continue;
+    }
+
+    nsTArray<uint8_t> unicastChannel;
+    ProcessMcquicMoqNativeObject(moq, unicastChannel,
+                                 ++mMcquicMoqUnicastSequence, "unicast");
   }
 
   return NS_OK;
@@ -1462,6 +1623,8 @@ nsresult Http3Session::ProcessMcquicControlFrames() {
               ("MCQUIC failed to add SSM subscription [this=%p channel=%s "
                "rv=0x%08" PRIx32 "]",
                this, channelHex.get(), static_cast<uint32_t>(rv)));
+          SetMcquicMoqDeliveryMode(McquicMoqDeliveryMode::Fallback,
+                                   "subscription add failed");
           break;
         }
 
@@ -1473,6 +1636,8 @@ nsresult Http3Session::ProcessMcquicControlFrames() {
                this, channelHex.get(), info.mSubscriptionId,
                static_cast<uint32_t>(rv)));
           (void)mMcquicReceiver->Remove(info.mSubscriptionId);
+          SetMcquicMoqDeliveryMode(McquicMoqDeliveryMode::Fallback,
+                                   "subscription join failed");
           break;
         }
 
@@ -1480,6 +1645,9 @@ nsresult Http3Session::ProcessMcquicControlFrames() {
         mMcquicSubscriptionToChannel.InsertOrUpdate(info.mSubscriptionId,
                                                     channelId);
         mMcquicChannels.InsertOrUpdate(channelId, info);
+        mMcquicMoqMulticastJoinStarted = TimeStamp::Now();
+        SetMcquicMoqDeliveryMode(McquicMoqDeliveryMode::MulticastJoining,
+                                 "mc-announce joined");
 
         rv = mHttp3Connection->McquicSendJoinedState(channelId,
                                                      ++mMcquicStateSequence);
@@ -1573,6 +1741,8 @@ nsresult Http3Session::ProcessMcquicPackets() {
       LOG(("MCQUIC packet validation failed [this=%p id=%" PRIu64
            " rv=0x%08" PRIx32 "]",
            this, packet.subscription_id, static_cast<uint32_t>(rv)));
+      SetMcquicMoqDeliveryMode(McquicMoqDeliveryMode::Fallback,
+                               "multicast validation failed");
       continue;
     }
 
@@ -1595,6 +1765,141 @@ nsresult Http3Session::ProcessMcquicPackets() {
   return NS_OK;
 }
 
+void Http3Session::DrainMcquicMoqAccessUnits(const char* aSource) {
+  if (!mMcquicMoqMediaSink) {
+    return;
+  }
+
+  McquicMoqAccessUnit accessUnit;
+  while (mMcquicMoqMediaSink->PopAccessUnit(accessUnit)) {
+    LOG(
+        ("MCQUIC MoQ media access unit ready [this=%p source=%s track=%s/%s "
+         "sequence=%" PRIu64 " pts_ms=%" PRIu64 " payload_len=%zu "
+         "keyframe=%d config=%d independent=%d]",
+         this, aSource, accessUnit.mNamespace.get(),
+         accessUnit.mTrackName.get(), accessUnit.mAccessUnitSequence,
+         accessUnit.mPtsMillis, accessUnit.mPayload.Length(),
+         accessUnit.mKeyframe, accessUnit.mConfig, accessUnit.mIndependent));
+    if (McquicMoqAccessUnitConsumer::Enabled()) {
+      if (!mMcquicMoqAccessUnitConsumer) {
+        mMcquicMoqAccessUnitConsumer = CreateMcquicMoqAccessUnitConsumer();
+      }
+      if (mMcquicMoqAccessUnitConsumer) {
+        nsresult consumerRv =
+            mMcquicMoqAccessUnitConsumer->OnMcquicMoqAccessUnit(accessUnit);
+        if (NS_FAILED(consumerRv)) {
+          LOG(
+              ("MCQUIC MoQ media handoff rejected access unit "
+               "[this=%p source=%s rv=0x%08" PRIx32 " track=%s/%s "
+               "sequence=%" PRIu64 "]",
+               this, aSource, static_cast<uint32_t>(consumerRv),
+               accessUnit.mNamespace.get(), accessUnit.mTrackName.get(),
+               accessUnit.mAccessUnitSequence));
+        }
+      }
+    }
+  }
+}
+
+void Http3Session::ProcessMcquicMoqNativeObject(
+    const McquicMoqDatagramExternal& aObject,
+    const nsTArray<uint8_t>& aChannelId, uint64_t aPacketNumber,
+    const char* aSource) {
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
+
+  auto track = mMcquicMoqTrackAliases.Lookup(aObject.track_alias);
+  nsCString channelHex = McquicHexPrefix(aChannelId);
+  if (!track) {
+    LOG(
+        ("MCQUIC MoQ object [this=%p source=%s format=%s channel=%s "
+         "transport_number=%" PRIu64 " unknown_track_alias=%" PRIu64
+         " group=%" PRIu64 " object=%" PRIu64
+         " status=%s end_of_group=%d payload_len=%" PRIu64 "]",
+         this, aSource, McquicMoqFormatName(aObject.format), channelHex.get(),
+         aPacketNumber, aObject.track_alias, aObject.group_id,
+         aObject.object_id, McquicMoqStatusName(aObject.status),
+         aObject.end_of_group, aObject.payload_len));
+    return;
+  }
+
+  const McquicMoqTrackInfo& trackInfo = track.Data();
+  LOG(
+      ("MCQUIC MoQ object [this=%p source=%s format=%s channel=%s "
+       "transport_number=%" PRIu64 " track_alias=%" PRIu64
+       " track=%s/%s group=%" PRIu64 " object=%" PRIu64
+       " status=%s end_of_group=%d payload_len=%" PRIu64 "]",
+       this, aSource, McquicMoqFormatName(aObject.format), channelHex.get(),
+       aPacketNumber, aObject.track_alias, trackInfo.mNamespace.get(),
+       trackInfo.mTrackName.get(), aObject.group_id, aObject.object_id,
+       McquicMoqStatusName(aObject.status), aObject.end_of_group,
+       aObject.payload_len));
+  if (!McquicMoqMediaSink::Enabled()) {
+    return;
+  }
+
+  if (!mMcquicMoqMediaSink) {
+    mMcquicMoqMediaSink = MakeUnique<McquicMoqMediaSink>();
+  }
+  nsresult rv = mMcquicMoqMediaSink->ProcessObject(
+      trackInfo.mNamespace, trackInfo.mTrackName, aChannelId, aPacketNumber,
+      aObject);
+  if (NS_FAILED(rv)) {
+    LOG(
+        ("MCQUIC MoQ media sink rejected object [this=%p source=%s "
+         "rv=0x%08" PRIx32 " track=%s/%s group=%" PRIu64 " object=%" PRIu64 "]",
+         this, aSource, static_cast<uint32_t>(rv), trackInfo.mNamespace.get(),
+         trackInfo.mTrackName.get(), aObject.group_id, aObject.object_id));
+  }
+  DrainMcquicMoqAccessUnits(aSource);
+}
+
+void Http3Session::ProcessMcquicMoqRawQvf1Datagram(
+    const McquicChannelDatagram& aDatagram, const nsACString& aChannelHex) {
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
+
+  if (mMcquicMoqTrackNamespace.IsEmpty() || mMcquicMoqTrackName.IsEmpty()) {
+    LOG(("MCQUIC MoQ raw QVF1 multicast skipped [this=%p channel=%s "
+         "packet_number=%" PRIu64 " reason=no-subscribed-track]",
+         this, PromiseFlatCString(aChannelHex).get(), aDatagram.packet_number));
+    return;
+  }
+
+  ++mMcquicMoqMulticastDatagrams;
+  mMcquicMoqLastMulticastDatagram = TimeStamp::Now();
+  SetMcquicMoqDeliveryMode(McquicMoqDeliveryMode::Multicast,
+                           "validated multicast qvf1");
+
+  LOG(("MCQUIC MoQ object [this=%p source=multicast format=raw-qvf1 "
+       "channel=%s transport_number=%" PRIu64 " track=%s/%s payload_len=%zu]",
+       this, PromiseFlatCString(aChannelHex).get(), aDatagram.packet_number,
+       mMcquicMoqTrackNamespace.get(), mMcquicMoqTrackName.get(),
+       aDatagram.payload.Length()));
+
+  if (!McquicMoqMediaSink::Enabled()) {
+    return;
+  }
+
+  if (!mMcquicMoqMediaSink) {
+    mMcquicMoqMediaSink = MakeUnique<McquicMoqMediaSink>();
+  }
+
+  McquicMoqDatagramExternal rawQvf1{};
+  rawQvf1.status = McquicMoqObjectStatus::Normal;
+  rawQvf1.payload_len = aDatagram.payload.Length();
+  rawQvf1.payload.AppendElements(aDatagram.payload);
+
+  nsresult rv = mMcquicMoqMediaSink->ProcessObject(
+      mMcquicMoqTrackNamespace, mMcquicMoqTrackName, aDatagram.channel_id,
+      aDatagram.packet_number, rawQvf1);
+  if (NS_FAILED(rv)) {
+    LOG(("MCQUIC MoQ media sink rejected raw QVF1 [this=%p source=multicast "
+         "rv=0x%08" PRIx32 " track=%s/%s packet_number=%" PRIu64 "]",
+         this, static_cast<uint32_t>(rv), mMcquicMoqTrackNamespace.get(),
+         mMcquicMoqTrackName.get(), aDatagram.packet_number));
+  }
+  DrainMcquicMoqAccessUnits("multicast");
+}
+
 void Http3Session::ProcessMcquicValidatedDatagrams() {
   MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
@@ -1615,82 +1920,23 @@ void Http3Session::ProcessMcquicValidatedDatagrams() {
          this, channelHex.get(), datagram.packet_number,
          datagram.payload.Length(), payloadHex.get()));
 
+    if (McquicLooksLikeQvf1(datagram.payload)) {
+      ProcessMcquicMoqRawQvf1Datagram(datagram, channelHex);
+      continue;
+    }
+
     McquicMoqDatagramExternal moq{};
     if (!neqo_mcquic_decode_moq_datagram(&datagram.payload, &moq)) {
       continue;
     }
 
     if (moq.format == McquicMoqDatagramFormat::NativeMoqtObject) {
-      auto track = mMcquicMoqTrackAliases.Lookup(moq.track_alias);
-      if (track) {
-        const McquicMoqTrackInfo& trackInfo = track.Data();
-        LOG(
-            ("MCQUIC MoQ object [this=%p format=%s channel=%s "
-             "packet_number=%" PRIu64 " track_alias=%" PRIu64
-             " track=%s/%s group=%" PRIu64 " object=%" PRIu64
-             " status=%s end_of_group=%d payload_len=%" PRIu64 "]",
-             this, McquicMoqFormatName(moq.format), channelHex.get(),
-             datagram.packet_number, moq.track_alias,
-             trackInfo.mNamespace.get(), trackInfo.mTrackName.get(),
-             moq.group_id, moq.object_id, McquicMoqStatusName(moq.status),
-             moq.end_of_group, moq.payload_len));
-        if (McquicMoqMediaSink::Enabled()) {
-          if (!mMcquicMoqMediaSink) {
-            mMcquicMoqMediaSink = MakeUnique<McquicMoqMediaSink>();
-          }
-          nsresult rv = mMcquicMoqMediaSink->ProcessObject(
-              trackInfo.mNamespace, trackInfo.mTrackName, datagram.channel_id,
-              datagram.packet_number, moq);
-          if (NS_FAILED(rv)) {
-            LOG((
-                "MCQUIC MoQ media sink rejected object [this=%p rv=0x%08" PRIx32
-                " track=%s/%s group=%" PRIu64 " object=%" PRIu64 "]",
-                this, static_cast<uint32_t>(rv), trackInfo.mNamespace.get(),
-                trackInfo.mTrackName.get(), moq.group_id, moq.object_id));
-          }
-          McquicMoqAccessUnit accessUnit;
-          while (mMcquicMoqMediaSink->PopAccessUnit(accessUnit)) {
-            LOG(
-                ("MCQUIC MoQ media access unit ready [this=%p track=%s/%s "
-                 "sequence=%" PRIu64 " pts_ms=%" PRIu64 " payload_len=%zu "
-                 "keyframe=%d config=%d independent=%d]",
-                 this, accessUnit.mNamespace.get(), accessUnit.mTrackName.get(),
-                 accessUnit.mAccessUnitSequence, accessUnit.mPtsMillis,
-                 accessUnit.mPayload.Length(), accessUnit.mKeyframe,
-                 accessUnit.mConfig, accessUnit.mIndependent));
-            if (McquicMoqAccessUnitConsumer::Enabled()) {
-              if (!mMcquicMoqAccessUnitConsumer) {
-                mMcquicMoqAccessUnitConsumer =
-                    CreateMcquicMoqAccessUnitConsumer();
-              }
-              if (mMcquicMoqAccessUnitConsumer) {
-                nsresult consumerRv =
-                    mMcquicMoqAccessUnitConsumer->OnMcquicMoqAccessUnit(
-                        accessUnit);
-                if (NS_FAILED(consumerRv)) {
-                  LOG(
-                      ("MCQUIC MoQ media handoff rejected access unit "
-                       "[this=%p rv=0x%08" PRIx32 " track=%s/%s "
-                       "sequence=%" PRIu64 "]",
-                       this, static_cast<uint32_t>(consumerRv),
-                       accessUnit.mNamespace.get(), accessUnit.mTrackName.get(),
-                       accessUnit.mAccessUnitSequence));
-                }
-              }
-            }
-          }
-        }
-      } else {
-        LOG(
-            ("MCQUIC MoQ object [this=%p format=%s channel=%s "
-             "packet_number=%" PRIu64 " unknown_track_alias=%" PRIu64
-             " group=%" PRIu64 " object=%" PRIu64
-             " status=%s end_of_group=%d payload_len=%" PRIu64 "]",
-             this, McquicMoqFormatName(moq.format), channelHex.get(),
-             datagram.packet_number, moq.track_alias, moq.group_id,
-             moq.object_id, McquicMoqStatusName(moq.status), moq.end_of_group,
-             moq.payload_len));
-      }
+      ++mMcquicMoqMulticastDatagrams;
+      mMcquicMoqLastMulticastDatagram = TimeStamp::Now();
+      SetMcquicMoqDeliveryMode(McquicMoqDeliveryMode::Multicast,
+                               "validated multicast object");
+      ProcessMcquicMoqNativeObject(moq, datagram.channel_id,
+                                   datagram.packet_number, "multicast");
       continue;
     }
 

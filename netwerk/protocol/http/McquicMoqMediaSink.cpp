@@ -7,9 +7,31 @@
 #include <algorithm>
 #include <cinttypes>
 #include <cstring>
+#include <limits>
 
+#include "H264.h"
 #include "HttpLog.h"
+#include "ImageConversion.h"
+#include "ImageContainer.h"
+#include "MediaData.h"
+#include "MediaDataDecoderProxy.h"
+#include "MediaInfo.h"
+#include "PDMFactory.h"
+#include "VideoUtils.h"
+#include "gfxUtils.h"
+#include "imgIEncoder.h"
+#include "mozilla/Base64.h"
+#include "mozilla/CheckedInt.h"
+#include "mozilla/Services.h"
 #include "mozilla/StaticPrefs_network.h"
+#include "mozilla/gfx/2D.h"
+#include "mozilla/layers/ImageBridgeChild.h"
+#include "mozilla/media/MediaUtils.h"
+#include "nsComponentManagerUtils.h"
+#include "nsIObserverService.h"
+#include "nsISupportsPrimitives.h"
+#include "nsSupportsPrimitives.h"
+#include "nsThreadUtils.h"
 
 namespace mozilla::net {
 
@@ -22,6 +44,8 @@ constexpr uint8_t QVF1_FLAG_KEYFRAME = 0x01;
 constexpr uint8_t QVF1_FLAG_CONFIG = 0x02;
 constexpr uint8_t QVF1_FLAG_END_OF_ACCESS_UNIT = 0x04;
 constexpr uint16_t QVF1_MAX_FRAGMENTS = 1024;
+constexpr gfx::IntSize QVF1_DECODE_SIZE{640, 480};
+constexpr const char* MCQUIC_MOQ_VIDEO_FRAME_TOPIC = "mcquic-moq-video-frame";
 
 struct Qvf1FragmentMetadata {
   uint8_t mFlags = 0;
@@ -50,6 +74,13 @@ static uint64_t ReadBigEndianUint64(const uint8_t* aData) {
   return value;
 }
 
+static media::TimeUnit TimeUnitFromMillis(uint64_t aMillis) {
+  constexpr uint64_t MAX_SAFE_MILLIS =
+      std::numeric_limits<int64_t>::max() / 1000;
+  return media::TimeUnit::FromMicroseconds(
+      static_cast<int64_t>(std::min(aMillis, MAX_SAFE_MILLIS) * 1000));
+}
+
 static nsCString AccessUnitKey(const nsACString& aNamespace,
                                const nsACString& aTrackName,
                                uint64_t aAccessUnitSequence) {
@@ -59,6 +90,143 @@ static nsCString AccessUnitKey(const nsACString& aNamespace,
   key.Append('\0');
   key.AppendPrintf("%" PRIu64, aAccessUnitSequence);
   return key;
+}
+
+static nsresult EncodeVideoFrameAsPngDataUrl(layers::Image* aImage,
+                                             nsCString& aDataUrl) {
+  if (!aImage) {
+    return NS_ERROR_INVALID_ARG;
+  }
+
+  RefPtr<gfx::SourceSurface> surface = GetSourceSurface(aImage);
+  if (!surface) {
+    return NS_ERROR_FAILURE;
+  }
+
+  RefPtr<gfx::DataSourceSurface> dataSurface;
+  if (surface->GetFormat() == gfx::SurfaceFormat::B8G8R8A8 ||
+      surface->GetFormat() == gfx::SurfaceFormat::B8G8R8X8) {
+    dataSurface = surface->GetDataSurface();
+  } else {
+    dataSurface = gfxUtils::CopySurfaceToDataSourceSurfaceWithFormat(
+        surface, gfx::SurfaceFormat::B8G8R8A8);
+  }
+
+  if (!dataSurface) {
+    return NS_ERROR_FAILURE;
+  }
+
+  gfx::DataSourceSurface::ScopedMap map(dataSurface,
+                                        gfx::DataSourceSurface::READ);
+  if (!map.IsMapped() || map.GetStride() <= 0) {
+    return NS_ERROR_FAILURE;
+  }
+
+  const gfx::IntSize size = dataSurface->GetSize();
+  CheckedInt<uint32_t> dataLength =
+      CheckedInt<uint32_t>(map.GetStride()) * CheckedInt<uint32_t>(size.height);
+  if (!dataLength.isValid()) {
+    return NS_ERROR_OUT_OF_MEMORY;
+  }
+
+  nsCOMPtr<imgIEncoder> encoder =
+      do_CreateInstance("@mozilla.org/image/encoder;2?type=image/png");
+  if (!encoder) {
+    return NS_ERROR_FAILURE;
+  }
+
+  nsresult rv = encoder->InitFromData(map.GetData(), dataLength.value(),
+                                      size.width, size.height, map.GetStride(),
+                                      imgIEncoder::INPUT_FORMAT_HOSTARGB,
+                                      u""_ns, VoidCString());
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
+
+  uint32_t pngLength = 0;
+  rv = encoder->GetImageBufferUsed(&pngLength);
+  if (NS_FAILED(rv) || pngLength == 0) {
+    return NS_FAILED(rv) ? rv : NS_ERROR_FAILURE;
+  }
+
+  char* pngData = nullptr;
+  rv = encoder->GetImageBuffer(&pngData);
+  if (NS_FAILED(rv) || !pngData) {
+    return NS_FAILED(rv) ? rv : NS_ERROR_FAILURE;
+  }
+
+  nsCString encoded;
+  rv = mozilla::Base64Encode(pngData, pngLength, encoded);
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
+
+  aDataUrl.AssignLiteral("data:image/png;base64,");
+  aDataUrl.Append(encoded);
+  return NS_OK;
+}
+
+static void NotifyMcquicMoqVideoFrame(nsCString aPayload) {
+  if (!NS_IsMainThread()) {
+    NS_DispatchToMainThread(NS_NewRunnableFunction(
+        "NotifyMcquicMoqVideoFrame", [payload = std::move(aPayload)]() mutable {
+          NotifyMcquicMoqVideoFrame(std::move(payload));
+        }));
+    return;
+  }
+
+  nsCOMPtr<nsIObserverService> obs = services::GetObserverService();
+  if (!obs) {
+    return;
+  }
+
+  nsCOMPtr<nsISupportsCString> subject = new nsSupportsCString();
+  subject->SetData(aPayload);
+  obs->NotifyObservers(subject, MCQUIC_MOQ_VIDEO_FRAME_TOPIC, nullptr);
+}
+
+static void MaybeNotifyOverlayFrame(const McquicMoqAccessUnit& aAccessUnit,
+                                    uint64_t aDecodedFrames,
+                                    VideoData* aVideo) {
+  if (!StaticPrefs::network_http_http3_mcquic_moq_media_overlay_enabled()) {
+    return;
+  }
+
+  nsCString dataUrl;
+  nsresult rv = EncodeVideoFrameAsPngDataUrl(aVideo->mImage, dataUrl);
+  if (NS_FAILED(rv)) {
+    LOG((
+        "MCQUIC MoQ media overlay failed to encode video frame [rv=0x%08" PRIx32
+        " track=%s/%s sequence=%" PRIu64 " decoded_frames=%" PRIu64 "]",
+        static_cast<uint32_t>(rv), aAccessUnit.mNamespace.get(),
+        aAccessUnit.mTrackName.get(), aAccessUnit.mAccessUnitSequence,
+        aDecodedFrames));
+    return;
+  }
+
+  nsCString payload;
+  payload.AppendLiteral("{\"width\":");
+  payload.AppendInt(aVideo->mDisplay.width);
+  payload.AppendLiteral(",\"height\":");
+  payload.AppendInt(aVideo->mDisplay.height);
+  payload.AppendLiteral(",\"sequence\":");
+  payload.AppendInt(aAccessUnit.mAccessUnitSequence);
+  payload.AppendLiteral(",\"ptsMs\":");
+  payload.AppendInt(aAccessUnit.mPtsMillis);
+  payload.AppendLiteral(",\"decodedFrames\":");
+  payload.AppendInt(aDecodedFrames);
+  payload.AppendLiteral(",\"dataUrl\":\"");
+  payload.Append(dataUrl);
+  payload.AppendLiteral("\"}");
+
+  LOG(
+      ("MCQUIC MoQ media overlay publishing video frame [track=%s/%s "
+       "sequence=%" PRIu64 " decoded_frames=%" PRIu64 " display=%dx%d "
+       "data_url_len=%zu]",
+       aAccessUnit.mNamespace.get(), aAccessUnit.mTrackName.get(),
+       aAccessUnit.mAccessUnitSequence, aDecodedFrames, aVideo->mDisplay.width,
+       aVideo->mDisplay.height, dataUrl.Length()));
+  NotifyMcquicMoqVideoFrame(std::move(payload));
 }
 
 static nsresult ParseQvf1Payload(const nsTArray<uint8_t>& aPayload,
@@ -110,16 +278,207 @@ class McquicMoqLoggingAccessUnitConsumer final
   }
 };
 
+class McquicMoqPdmAccessUnitConsumer final
+    : public McquicMoqAccessUnitConsumer {
+ public:
+  McquicMoqPdmAccessUnitConsumer()
+      : mThreadPool(GetMediaThreadPool(MediaThreadType::SUPERVISOR)),
+        mTaskQueue(TaskQueue::Create(do_AddRef(mThreadPool),
+                                     "McquicMoqPdmAccessUnitConsumer")),
+        mImageContainer(MakeAndAddRef<layers::ImageContainer>(
+            layers::ImageUsageType::Webrtc,
+            layers::ImageContainer::ASYNCHRONOUS)),
+        mFactory(new PDMFactory()),
+        mInfo(QVF1_DECODE_SIZE) {
+    mInfo.mMimeType = "video/avc"_ns;
+    mInfo.mExtraData = H264::CreateExtraData(
+        H264_PROFILE::H264_PROFILE_BASE, 0 /* constraint */,
+        H264_LEVEL::H264_LEVEL_3_1, QVF1_DECODE_SIZE);
+  }
+
+  ~McquicMoqPdmAccessUnitConsumer() override { ReleaseDecoder(); }
+
+  nsresult OnMcquicMoqAccessUnit(
+      const McquicMoqAccessUnit& aAccessUnit) override {
+    if (mNeedKeyframe && !aAccessUnit.mKeyframe) {
+      LOG(
+          ("MCQUIC MoQ media decode waiting for key access unit [track=%s/%s "
+           "sequence=%" PRIu64 "]",
+           aAccessUnit.mNamespace.get(), aAccessUnit.mTrackName.get(),
+           aAccessUnit.mAccessUnitSequence));
+      return NS_OK;
+    }
+
+    if (!mDecoder) {
+      nsresult rv = CreateDecoder();
+      if (NS_FAILED(rv)) {
+        LOG(
+            ("MCQUIC MoQ media decode failed to create decoder "
+             "[rv=0x%08" PRIx32 " track=%s/%s sequence=%" PRIu64 "]",
+             static_cast<uint32_t>(rv), aAccessUnit.mNamespace.get(),
+             aAccessUnit.mTrackName.get(), aAccessUnit.mAccessUnitSequence));
+        return rv;
+      }
+    }
+
+    RefPtr compressedFrame = MakeRefPtr<MediaRawData>(
+        aAccessUnit.mPayload.Elements(), aAccessUnit.mPayload.Length());
+    if (!compressedFrame->Data()) {
+      return NS_ERROR_OUT_OF_MEMORY;
+    }
+
+    compressedFrame->mTime = TimeUnitFromMillis(aAccessUnit.mPtsMillis);
+    compressedFrame->mTimecode = compressedFrame->mTime;
+    compressedFrame->mDuration = TimeUnitFromMillis(33);
+    compressedFrame->mKeyframe = aAccessUnit.mKeyframe;
+
+    LOG(
+        ("MCQUIC MoQ media decode accepted access unit [track=%s/%s "
+         "sequence=%" PRIu64 " pts_ms=%" PRIu64 " payload_len=%zu "
+         "keyframe=%d config=%d independent=%d]",
+         aAccessUnit.mNamespace.get(), aAccessUnit.mTrackName.get(),
+         aAccessUnit.mAccessUnitSequence, aAccessUnit.mPtsMillis,
+         aAccessUnit.mPayload.Length(), aAccessUnit.mKeyframe,
+         aAccessUnit.mConfig, aAccessUnit.mIndependent));
+
+    media::Await(
+        do_AddRef(mThreadPool), mDecoder->Decode(compressedFrame),
+        [&](const MediaDataDecoder::DecodedData& aResults) {
+          mResults = aResults.Clone();
+          mError = NS_OK;
+        },
+        [&](const MediaResult& aError) { mError = aError; });
+
+    if (NS_FAILED(mError)) {
+      LOG(("MCQUIC MoQ media decode failed [rv=0x%08" PRIx32
+           " track=%s/%s sequence=%" PRIu64 "]",
+           static_cast<uint32_t>(mError.Code()), aAccessUnit.mNamespace.get(),
+           aAccessUnit.mTrackName.get(), aAccessUnit.mAccessUnitSequence));
+      ReleaseDecoder();
+      return NS_OK;
+    }
+
+    mNeedKeyframe = false;
+    for (const auto& frame : mResults) {
+      if (frame->mType != MediaData::Type::VIDEO_DATA) {
+        continue;
+      }
+      RefPtr<VideoData> video = frame->As<VideoData>();
+      if (!video) {
+        continue;
+      }
+      ++mDecodedFrames;
+      LOG(("MCQUIC MoQ media decoded video frame [track=%s/%s sequence=%" PRIu64
+           " pts_ms=%" PRIu64 " decoded_frames=%" PRIu64
+           " display=%dx%d image=%p]",
+           aAccessUnit.mNamespace.get(), aAccessUnit.mTrackName.get(),
+           aAccessUnit.mAccessUnitSequence, aAccessUnit.mPtsMillis,
+           mDecodedFrames, video->mDisplay.width, video->mDisplay.height,
+           video->mImage.get()));
+      MaybeNotifyOverlayFrame(aAccessUnit, mDecodedFrames, video);
+    }
+    mResults.Clear();
+
+    return NS_OK;
+  }
+
+ private:
+  static CreateDecoderParams::OptionSet DecoderOptions() {
+    return CreateDecoderParams::OptionSet(
+        CreateDecoderParams::Option::LowLatency,
+        CreateDecoderParams::Option::FullH264Parsing,
+        CreateDecoderParams::Option::ErrorIfNoInitializationData,
+        CreateDecoderParams::Option::KeepOriginalPts);
+  }
+
+  nsresult CreateDecoder() {
+    RefPtr<layers::KnowsCompositor> knowsCompositor =
+        layers::ImageBridgeChild::GetSingleton();
+
+    RefPtr<TaskQueue> decodeTaskQueue =
+        TaskQueue::Create(GetMediaThreadPool(MediaThreadType::PLATFORM_DECODER),
+                          "mcquic moq decode TaskQueue");
+    RefPtr<MediaDataDecoder> decoder;
+    auto options = DecoderOptions();
+
+    media::Await(
+        do_AddRef(mThreadPool), InvokeAsync(decodeTaskQueue, __func__, [&] {
+          RefPtr<GenericPromise> promise =
+              mFactory
+                  ->CreateDecoder({mInfo, options, TrackInfo::kVideoTrack,
+                                   mImageContainer, knowsCompositor})
+                  ->Then(
+                      decodeTaskQueue, __func__,
+                      [&](RefPtr<MediaDataDecoder>&& aDecoder) {
+                        decoder = std::move(aDecoder);
+                        return GenericPromise::CreateAndResolve(true, __func__);
+                      },
+                      [](const MediaResult&) {
+                        return GenericPromise::CreateAndReject(
+                            NS_ERROR_DOM_MEDIA_FATAL_ERR, __func__);
+                      });
+          return promise;
+        }));
+
+    if (!decoder) {
+      return NS_ERROR_DOM_MEDIA_FATAL_ERR;
+    }
+
+    mDecoder =
+        new MediaDataDecoderProxy(decoder.forget(), decodeTaskQueue.forget());
+
+    media::Await(
+        do_AddRef(mThreadPool), mDecoder->Init(),
+        [&](TrackInfo::TrackType) { mError = NS_OK; },
+        [&](const MediaResult& aError) { mError = aError; });
+
+    if (NS_FAILED(mError)) {
+      mDecoder = nullptr;
+      return mError.Code();
+    }
+
+    LOG(("MCQUIC MoQ media decode created H.264 decoder [size=%dx%d]",
+         QVF1_DECODE_SIZE.width, QVF1_DECODE_SIZE.height));
+    return NS_OK;
+  }
+
+  void ReleaseDecoder() {
+    if (mDecoder) {
+      RefPtr<MediaDataDecoder> decoder = std::move(mDecoder);
+      decoder->Flush()->Then(mTaskQueue, __func__,
+                             [decoder]() { decoder->Shutdown(); });
+    }
+    mResults.Clear();
+    mNeedKeyframe = true;
+    mError = NS_OK;
+  }
+
+  const RefPtr<SharedThreadPool> mThreadPool;
+  const RefPtr<TaskQueue> mTaskQueue;
+  const RefPtr<layers::ImageContainer> mImageContainer;
+  const RefPtr<PDMFactory> mFactory;
+  RefPtr<MediaDataDecoder> mDecoder;
+  VideoInfo mInfo;
+  bool mNeedKeyframe = true;
+  MediaResult mError = NS_OK;
+  MediaDataDecoder::DecodedData mResults;
+  uint64_t mDecodedFrames = 0;
+};
+
 }  // namespace
 
 bool McquicMoqAccessUnitConsumer::Enabled() {
   return McquicMoqMediaSink::Enabled() &&
-         StaticPrefs::network_http_http3_mcquic_moq_media_handoff_enabled();
+         (StaticPrefs::network_http_http3_mcquic_moq_media_handoff_enabled() ||
+          StaticPrefs::network_http_http3_mcquic_moq_media_decode_enabled());
 }
 
 UniquePtr<McquicMoqAccessUnitConsumer> CreateMcquicMoqAccessUnitConsumer() {
   if (!McquicMoqAccessUnitConsumer::Enabled()) {
     return nullptr;
+  }
+  if (StaticPrefs::network_http_http3_mcquic_moq_media_decode_enabled()) {
+    return MakeUnique<McquicMoqPdmAccessUnitConsumer>();
   }
   return MakeUnique<McquicMoqLoggingAccessUnitConsumer>();
 }

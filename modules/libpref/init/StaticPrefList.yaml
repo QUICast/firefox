@@ -16072,6 +16072,25 @@
   value: false
   mirror: always
 
+# Restrict experimental MCQUIC MoQT subscription to this origin. Empty allows
+# any HTTP/3 origin when the experimental subscriber pref is enabled.
+- name: network.http.http3.mcquic.moq_subscribe.origin
+  type: String
+  value: ""
+  mirror: never
+
+# Experimental MCQUIC MoQT subscription namespace.
+- name: network.http.http3.mcquic.moq_subscribe.track_namespace
+  type: String
+  value: "ratatoskr/demo"
+  mirror: never
+
+# Experimental MCQUIC MoQT subscription track name.
+- name: network.http.http3.mcquic.moq_subscribe.track_name
+  type: String
+  value: "h264-qvf1"
+  mirror: never
+
 # Enable experimental, privileged MCQUIC MoQT/QVF1 media sink logging.
 - name: network.http.http3.mcquic.moq_media_sink.enabled
   type: RelaxedAtomicBool
@@ -16080,6 +16099,18 @@
 
 # Enable experimental, privileged MCQUIC MoQT/QVF1 media handoff.
 - name: network.http.http3.mcquic.moq_media_handoff.enabled
+  type: RelaxedAtomicBool
+  value: false
+  mirror: always
+
+# Enable experimental, privileged MCQUIC MoQT/QVF1 media decode logging.
+- name: network.http.http3.mcquic.moq_media_decode.enabled
+  type: RelaxedAtomicBool
+  value: false
+  mirror: always
+
+# Enable experimental, privileged MCQUIC MoQT/QVF1 decoded video overlay.
+- name: network.http.http3.mcquic.moq_media_overlay.enabled
   type: RelaxedAtomicBool
   value: false
   mirror: always

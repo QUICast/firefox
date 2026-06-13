@@ -11,6 +11,8 @@ use std::{
     rc::Rc,
     time::Instant,
 };
+#[cfg(feature = "mcquic")]
+use std::collections::VecDeque;
 
 use neqo_common::{
     Bytes, Decoder, Header, MessageType, Role, qdebug, qerror, qinfo, qtrace, qwarn,
@@ -47,6 +49,9 @@ use crate::{
     settings::{HSettingType, HSettings, HttpZeroRttChecker},
     stream_type_reader::NewStreamHeadReader,
 };
+
+#[cfg(feature = "mcquic")]
+const MAX_MCQUIC_RAW_DATAGRAMS: usize = 64;
 
 pub struct RequestDescription<'b, T: RequestTarget> {
     pub method: &'b str,
@@ -297,6 +302,8 @@ pub struct Http3Connection {
     recv_streams: HashMap<StreamId, Box<dyn RecvStream>>,
     webtransport: ExtendedConnectFeature,
     connect_udp: ExtendedConnectFeature,
+    #[cfg(feature = "mcquic")]
+    mcquic_raw_datagrams: VecDeque<Vec<u8>>,
 }
 
 impl Display for Http3Connection {
@@ -331,6 +338,8 @@ impl Http3Connection {
             streams_with_pending_data: HashSet::default(),
             send_streams: HashMap::default(),
             recv_streams: HashMap::default(),
+            #[cfg(feature = "mcquic")]
+            mcquic_raw_datagrams: VecDeque::default(),
             role,
         }
     }
@@ -665,6 +674,8 @@ impl Http3Connection {
         let mut decoder = Decoder::new(&datagram);
         let Some(id) = decoder.decode_varint() else {
             qdebug!("[{self}] handle_datagram: failed to decode session ID");
+            #[cfg(feature = "mcquic")]
+            self.store_mcquic_raw_datagram(datagram);
             return;
         };
         let varint_len = decoder.offset();
@@ -675,12 +686,27 @@ impl Http3Connection {
             .and_then(|s| s.extended_connect_session())
         else {
             qdebug!("[{self}] handle_datagram for unknown extended connect session");
+            #[cfg(feature = "mcquic")]
+            self.store_mcquic_raw_datagram(datagram);
             return;
         };
 
         stream
             .borrow_mut()
             .datagram(Bytes::new(datagram, varint_len));
+    }
+
+    #[cfg(feature = "mcquic")]
+    fn store_mcquic_raw_datagram(&mut self, datagram: Vec<u8>) {
+        if self.mcquic_raw_datagrams.len() == MAX_MCQUIC_RAW_DATAGRAMS {
+            let _ = self.mcquic_raw_datagrams.pop_front();
+        }
+        self.mcquic_raw_datagrams.push_back(datagram);
+    }
+
+    #[cfg(feature = "mcquic")]
+    pub fn pop_mcquic_raw_datagram(&mut self) -> Option<Vec<u8>> {
+        self.mcquic_raw_datagrams.pop_front()
     }
 
     fn check_stream_exists(&self, stream_type: Http3StreamType) -> Res<()> {
@@ -1877,12 +1903,28 @@ impl Http3Connection {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use http::Uri;
+    #[cfg(feature = "mcquic")]
+    use neqo_common::Role;
 
+    #[cfg(feature = "mcquic")]
+    use crate::Http3Parameters;
     use crate::{
         Error, Priority,
         connection::{Http3Connection, RequestDescription},
         features::ConnectType,
     };
+
+    #[test]
+    #[cfg(feature = "mcquic")]
+    fn mcquic_raw_datagram_queue_preserves_unmatched_datagrams() {
+        let mut conn = Http3Connection::new(Http3Parameters::default(), Role::Client);
+        let datagram = vec![0x0a, 0x09, 0x01, 0x01, b'Q', b'V', b'F', b'1'];
+
+        conn.handle_datagram(datagram.clone());
+
+        assert_eq!(conn.pop_mcquic_raw_datagram(), Some(datagram));
+        assert_eq!(conn.pop_mcquic_raw_datagram(), None);
+    }
 
     #[test]
     fn create_request_headers_connect_without_connect_type() {

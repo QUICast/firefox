@@ -327,9 +327,17 @@ class Http3Session final : public Http3SessionBase,
   nsresult SendMcquicLimits();
   nsresult EnsureMcquicMoqSubscribe();
   nsresult ProcessMcquicMoqControlStream();
+  nsresult ProcessMcquicMoqUnicastDatagrams();
   nsresult ProcessMcquicControlFrames();
   nsresult ProcessMcquicPackets();
   void ProcessMcquicValidatedDatagrams();
+  void ProcessMcquicMoqNativeObject(const McquicMoqDatagramExternal& aObject,
+                                    const nsTArray<uint8_t>& aChannelId,
+                                    uint64_t aPacketNumber,
+                                    const char* aSource);
+  void ProcessMcquicMoqRawQvf1Datagram(const McquicChannelDatagram& aDatagram,
+                                       const nsACString& aChannelHex);
+  void DrainMcquicMoqAccessUnits(const char* aSource);
   void ScheduleMcquicPoll();
 
   nsresult ProcessTransactionRead(uint64_t stream_id);
@@ -388,6 +396,19 @@ class Http3Session final : public Http3SessionBase,
     nsCString mTrackName;
   };
 
+  enum class McquicMoqDeliveryMode {
+    None,
+    Unicast,
+    MulticastJoining,
+    Multicast,
+    Fallback,
+  };
+
+  static const char* McquicMoqDeliveryModeName(McquicMoqDeliveryMode aMode);
+  void SetMcquicMoqDeliveryMode(McquicMoqDeliveryMode aMode,
+                                const char* aReason);
+  void MaybeFallbackMcquicMoqUnicast(const char* aReason);
+
   UniquePtr<McquicMulticastReceiver> mMcquicReceiver;
   UniquePtr<McquicMoqMediaSink> mMcquicMoqMediaSink;
   UniquePtr<McquicMoqAccessUnitConsumer> mMcquicMoqAccessUnitConsumer;
@@ -395,9 +416,18 @@ class Http3Session final : public Http3SessionBase,
   nsTHashMap<nsUint64HashKey, nsCString> mMcquicSubscriptionToChannel;
   nsTHashMap<nsUint64HashKey, McquicMoqTrackInfo> mMcquicMoqTrackAliases;
   nsTArray<uint8_t> mMcquicMoqControlBuffer;
+  nsCString mMcquicMoqTrackNamespace;
+  nsCString mMcquicMoqTrackName;
   uint64_t mMcquicLimitsSequence = 0;
   uint64_t mMcquicStateSequence = 0;
   uint64_t mMcquicMoqControlStreamId = 0;
+  uint64_t mMcquicMoqUnicastSequence = 0;
+  uint64_t mMcquicMoqUnicastDatagrams = 0;
+  uint64_t mMcquicMoqMulticastDatagrams = 0;
+  uint64_t mMcquicMoqDroppedUnicastDatagrams = 0;
+  TimeStamp mMcquicMoqMulticastJoinStarted;
+  TimeStamp mMcquicMoqLastMulticastDatagram;
+  McquicMoqDeliveryMode mMcquicMoqDeliveryMode = McquicMoqDeliveryMode::None;
   bool mMcquicLimitsSent = false;
   bool mMcquicMoqSubscribeQueued = false;
   bool mMcquicMoqControlFin = false;

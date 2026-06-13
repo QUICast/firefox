@@ -452,6 +452,24 @@ let JSWINDOWACTORS = {
     allFrames: true,
   },
 
+  McquicVideoOverlay: {
+    parent: {
+      esModuleURI: "resource:///actors/McquicVideoOverlayParent.sys.mjs",
+    },
+
+    child: {
+      esModuleURI: "resource:///actors/McquicVideoOverlayChild.sys.mjs",
+      events: {
+        DOMContentLoaded: {},
+        pageshow: {},
+      },
+    },
+
+    matches: ["http://*/*", "https://*/*"],
+    enablePreference: "network.http.http3.mcquic.moq_media_overlay.enabled",
+    allFrames: true,
+  },
+
   DOMFullscreen: {
     parent: {
       esModuleURI: "resource:///actors/DOMFullscreenParent.sys.mjs",

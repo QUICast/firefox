@@ -130,6 +130,10 @@ class NeqoHttp3Conn final {
                                                       &aPayload, aFin);
   }
 
+  bool McquicMoqPopUnicastDatagram(nsTArray<uint8_t>& aPayload) {
+    return neqo_http3conn_mcquic_moq_pop_unicast_datagram(this, &aPayload);
+  }
+
   nsresult Fetch(const nsACString& aMethod, const nsACString& aScheme,
                  const nsACString& aHost, const nsACString& aPath,
                  const nsACString& aHeaders, uint64_t* aStreamId,

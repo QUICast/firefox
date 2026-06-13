@@ -2248,6 +2248,29 @@ pub extern "C" fn neqo_http3conn_mcquic_moq_recv_stream_data(
 }
 
 #[no_mangle]
+pub extern "C" fn neqo_http3conn_mcquic_moq_pop_unicast_datagram(
+    conn: &mut NeqoHttp3Conn,
+    payload: &mut ThinVec<u8>,
+) -> bool {
+    *payload = ThinVec::new();
+
+    #[cfg(feature = "mcquic")]
+    {
+        if let Some(datagram) = conn.conn.mcquic_moq_pop_unicast_datagram() {
+            *payload = datagram.into();
+            return true;
+        }
+        false
+    }
+
+    #[cfg(not(feature = "mcquic"))]
+    {
+        let _ = conn;
+        false
+    }
+}
+
+#[no_mangle]
 pub extern "C" fn neqo_http3conn_mcquic_recv_control_frame(
     conn: &mut NeqoHttp3Conn,
     frame: &mut McquicControlFrameExternal,

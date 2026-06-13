@@ -232,6 +232,11 @@ FINAL_LIBRARY = "xul"
 
 LOCAL_INCLUDES += [
     "/dom/base",
+    "/dom/media",
+    "/dom/media/platforms",
+    "/dom/media/platforms/agnostic/bytestreams",
+    "/dom/media/platforms/wrappers",
+    "/gfx/layers",
     "/netwerk/base",
     "/netwerk/cookie",
     "/netwerk/dns",
