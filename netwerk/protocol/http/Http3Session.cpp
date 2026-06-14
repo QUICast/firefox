@@ -35,6 +35,7 @@
 #include "nsNetAddr.h"
 #include "nsQueryObject.h"
 #include "nsSocketTransportService2.h"
+#include "nsString.h"
 #include "nsThreadUtils.h"
 #include "sslerr.h"
 #include "WebTransportCertificateVerifier.h"
@@ -106,6 +107,61 @@ static nsCString McquicMoqStringPref(const char* aPref,
     value.Assign(aDefaultValue);
   }
   return value;
+}
+
+static nsCString McquicMoqHostFromOrigin(const nsACString& aValue) {
+  nsCString host(aValue);
+  int32_t scheme = host.Find("://");
+  if (scheme >= 0) {
+    host.Cut(0, scheme + 3);
+  }
+
+  int32_t slash = host.FindChar('/');
+  if (slash >= 0) {
+    host.Truncate(slash);
+  }
+
+  if (!host.IsEmpty() && host.First() == '[') {
+    int32_t close = host.FindChar(']');
+    if (close >= 0) {
+      host.Truncate(close + 1);
+    }
+    return host;
+  }
+
+  int32_t colon = host.FindChar(':');
+  if (colon >= 0) {
+    host.Truncate(colon);
+  }
+  return host;
+}
+
+static bool McquicMoqHostMatchesAllowed(const nsACString& aCandidate,
+                                        const nsACString& aAllowed) {
+  nsCString candidate = McquicMoqHostFromOrigin(aCandidate);
+  nsCString allowed = McquicMoqHostFromOrigin(aAllowed);
+  if (candidate.IsEmpty() || allowed.IsEmpty()) {
+    return false;
+  }
+  if (candidate.Equals(allowed)) {
+    return true;
+  }
+
+  nsCString suffix(".");
+  suffix.Append(allowed);
+  return StringEndsWith(candidate, suffix);
+}
+
+static bool McquicMoqOriginAllowed(const nsACString& aAllowed,
+                                   const nsACString& aOrigin,
+                                   const nsACString& aAuthority) {
+  if (aAllowed.IsEmpty() || aAllowed.Equals(aOrigin) ||
+      aAllowed.Equals(aAuthority)) {
+    return true;
+  }
+
+  return McquicMoqHostMatchesAllowed(aOrigin, aAllowed) ||
+         McquicMoqHostMatchesAllowed(aAuthority, aAllowed);
 }
 
 static const char* McquicMoqFormatName(McquicMoqDatagramFormat aFormat) {
@@ -1287,8 +1343,7 @@ nsresult Http3Session::EnsureMcquicMoqSubscribe() {
   authority.AppendPrintf(":%d", mConnInfo->OriginPort());
   nsCString allowedOrigin;
   Preferences::GetCString(MCQUIC_MOQ_SUBSCRIBE_ORIGIN_PREF, allowedOrigin);
-  if (!allowedOrigin.IsEmpty() && !allowedOrigin.Equals(origin) &&
-      !allowedOrigin.Equals(authority)) {
+  if (!McquicMoqOriginAllowed(allowedOrigin, origin, authority)) {
     LOG(
         ("MCQUIC MoQ subscription skipped for origin [this=%p origin=%s "
          "authority=%s allowed=%s]",

@@ -52,9 +52,38 @@ export class McquicVideoOverlayChild extends JSWindowActorChild {
       return false;
     }
 
-    return (
-      allowedOrigin === location.hostname || allowedOrigin === location.host
-    );
+    return this.#locationMatchesAllowedOrigin(location, allowedOrigin);
+  }
+
+  #locationMatchesAllowedOrigin(location, allowedOrigin) {
+    for (let allowedHost of this.#allowedOriginHosts(allowedOrigin)) {
+      if (
+        allowedHost === location.hostname ||
+        allowedHost === location.host ||
+        location.hostname.endsWith(`.${allowedHost}`)
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  #allowedOriginHosts(allowedOrigin) {
+    return allowedOrigin
+      .split(/[\s,]+/)
+      .map(value => this.#hostFromOrigin(value))
+      .filter(Boolean);
+  }
+
+  #hostFromOrigin(value) {
+    try {
+      let url = value.includes("://")
+        ? new URL(value)
+        : new URL(`https://${value}`);
+      return url.hostname;
+    } catch (ex) {
+      return value.split("/", 1)[0].split(":", 1)[0] || null;
+    }
   }
 
   #notifyReady() {
