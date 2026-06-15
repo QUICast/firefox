@@ -71,6 +71,7 @@
 #include "mozilla/ProfilerLabels.h"
 #include "mozilla/FlowMarkers.h"
 #include "mozilla/Components.h"
+#include "mozilla/Preferences.h"
 #include "mozilla/StaticPrefs_dom.h"
 #include "mozilla/StaticPrefs_network.h"
 #include "mozilla/StaticPrefs_privacy.h"
@@ -177,6 +178,83 @@ namespace {
 #define RECOVER_FROM_CACHE_FILE_ERROR(result) \
   ((result) == NS_ERROR_FILE_NOT_FOUND ||     \
    (result) == NS_ERROR_FILE_CORRUPTED || (result) == NS_ERROR_OUT_OF_MEMORY)
+
+constexpr const char* kMcquicMoqSubscribeOriginPref =
+    "network.http.http3.mcquic.moq_subscribe.origin";
+
+static nsCString McquicMoqHostFromOrigin(const nsACString& aValue) {
+  nsCString host(aValue);
+  int32_t scheme = host.Find("://");
+  if (scheme >= 0) {
+    host.Cut(0, scheme + 3);
+  }
+
+  int32_t slash = host.FindChar('/');
+  if (slash >= 0) {
+    host.Truncate(slash);
+  }
+
+  if (!host.IsEmpty() && host.First() == '[') {
+    int32_t close = host.FindChar(']');
+    if (close >= 0) {
+      host.Truncate(close + 1);
+    }
+    return host;
+  }
+
+  int32_t colon = host.FindChar(':');
+  if (colon >= 0) {
+    host.Truncate(colon);
+  }
+  return host;
+}
+
+static bool McquicMoqHostMatchesAllowed(const nsACString& aCandidate,
+                                        const nsACString& aAllowed) {
+  nsCString candidate = McquicMoqHostFromOrigin(aCandidate);
+  nsCString allowed = McquicMoqHostFromOrigin(aAllowed);
+  if (candidate.IsEmpty() || allowed.IsEmpty()) {
+    return false;
+  }
+  if (candidate.Equals(allowed)) {
+    return true;
+  }
+
+  nsCString suffix(".");
+  suffix.Append(allowed);
+  return StringEndsWith(candidate, suffix);
+}
+
+static bool McquicMoqNativeSurfaceRequiresHttp3(nsIURI* aURI,
+                                                const nsACString& aScheme,
+                                                const nsACString& aHost,
+                                                int32_t aPort) {
+  if (!StaticPrefs::network_http_http3_mcquic_enabled() ||
+      !StaticPrefs::network_http_http3_mcquic_moq_subscribe_enabled() ||
+      !aScheme.EqualsLiteral("https")) {
+    return false;
+  }
+
+  nsAutoCString path;
+  if (!aURI || NS_FAILED(aURI->GetFilePath(path)) ||
+      !path.EqualsLiteral("/moq")) {
+    return false;
+  }
+
+  nsAutoCString allowedOrigin;
+  Preferences::GetCString(kMcquicMoqSubscribeOriginPref, allowedOrigin);
+  if (allowedOrigin.IsEmpty()) {
+    return false;
+  }
+
+  nsAutoCString authority(aHost);
+  if (aPort >= 0) {
+    authority.AppendLiteral(":");
+    authority.AppendInt(aPort);
+  }
+  return McquicMoqHostMatchesAllowed(aHost, allowedOrigin) ||
+         McquicMoqHostMatchesAllowed(authority, allowedOrigin);
+}
 
 static NS_DEFINE_CID(kStreamListenerTeeCID, NS_STREAMLISTENERTEE_CID);
 
@@ -7961,6 +8039,18 @@ nsresult nsHttpChannel::BeginConnect() {
     mCaps |= NS_HTTP_DISALLOW_HTTP3;
   }
 
+  bool mcquicMoqRequiresHttp3 =
+      !mWebTransportSessionEventListener &&
+      McquicMoqNativeSurfaceRequiresHttp3(mURI, scheme, host, port);
+  if (mcquicMoqRequiresHttp3) {
+    http2Allowed = false;
+    mCaps |= NS_HTTP_DISALLOW_SPDY;
+    LOG(
+        ("MCQUIC MoQ native channel requiring H3 Alt-Svc only [this=%p "
+         "origin=%s://%s:%d http3Allowed=%d]",
+         this, scheme.get(), host.get(), port, http3Allowed));
+  }
+
   RefPtr<AltSvcMapping> mapping;
   if (!mConnectionInfo && LoadAllowAltSvc() &&  // per channel
       !mWebTransportSessionEventListener && (http2Allowed || http3Allowed) &&
@@ -8022,12 +8112,25 @@ nsresult nsHttpChannel::BeginConnect() {
             network_http_http3_force_use_alt_svc_mapping_for_testing()) {
       mCaps |= NS_HTTP_DISALLOW_SPDY;
     }
+    if (mcquicMoqRequiresHttp3 && !mConnectionInfo->IsHttp3()) {
+      LOG(
+          ("MCQUIC MoQ native channel selected non-H3 Alt-Svc unexpectedly "
+           "[this=%p origin=%s://%s:%d]",
+           this, scheme.get(), host.get(), port));
+    }
   } else if (mConnectionInfo) {
     LOG(("nsHttpChannel %p Using channel supplied connection info", this));
     glean::http::transaction_use_altsvc
         .EnumGet(glean::http::TransactionUseAltsvcLabel::eFalse)
         .Add();
   } else {
+    if (mcquicMoqRequiresHttp3) {
+      LOG(
+          ("MCQUIC MoQ native channel has no validated H3 Alt-Svc mapping; "
+           "native overlay will wait for Http3Session readiness [this=%p "
+           "origin=%s://%s:%d http3Allowed=%d]",
+           this, scheme.get(), host.get(), port, http3Allowed));
+    }
     LOG(("nsHttpChannel %p Using default connection info", this));
 
     mConnectionInfo = connInfo;

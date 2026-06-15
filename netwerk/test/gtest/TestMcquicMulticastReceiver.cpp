@@ -63,6 +63,23 @@ static nsTArray<uint8_t> Qvf1Payload(uint64_t aAccessUnitSequence,
   return out;
 }
 
+static nsTArray<uint8_t> LocMsfPayload(uint64_t aAccessUnitSequence,
+                                       uint64_t aPtsMillis, uint8_t aFlags,
+                                       const uint8_t* aPayload,
+                                       size_t aPayloadLen) {
+  nsTArray<uint8_t> out;
+  out.AppendElements("MSF1", 4);
+  out.AppendElement(1);
+  out.AppendElement(1);
+  out.AppendElement(aFlags);
+  out.AppendElement(0);
+  AppendUint(out, aAccessUnitSequence, 8);
+  AppendUint(out, aPtsMillis, 8);
+  AppendUint(out, aPayloadLen, 4);
+  out.AppendElements(aPayload, aPayloadLen);
+  return out;
+}
+
 static McquicMoqDatagramExternal NativeMoqObject(nsTArray<uint8_t>&& aPayload,
                                                  uint64_t aGroupId = 7,
                                                  uint64_t aObjectId = 0) {
@@ -418,6 +435,65 @@ TEST(TestMcquicMoqMediaSink, WaitsForAndOrdersQvf1Fragments)
   ASSERT_EQ(
       std::memcmp(accessUnit.mPayload.Elements(), kExpected, sizeof(kExpected)),
       0);
+}
+
+TEST(TestMcquicMoqMediaSink, LocMsfPayloadReachesAccessUnit)
+{
+  McquicMoqMediaSink sink;
+  nsTArray<uint8_t> channelId;
+  channelId.AppendElements("qcast-demo-v1", 13);
+  constexpr uint8_t kFrame[] = {0x00, 0x00, 0x01, 0x65, 0x88};
+  auto object = NativeMoqObject(
+      LocMsfPayload(21, 700, 0x01 | 0x08, kFrame, sizeof(kFrame)), 21, 0);
+
+  ASSERT_NS_SUCCEEDED(sink.ProcessObject("ratatoskr/demo"_ns,
+                                         "h264-loc-msf"_ns, channelId, 61,
+                                         object));
+
+  McquicMoqAccessUnit accessUnit;
+  ASSERT_TRUE(sink.PopAccessUnit(accessUnit));
+  ASSERT_TRUE(accessUnit.mNamespace.EqualsLiteral("ratatoskr/demo"));
+  ASSERT_TRUE(accessUnit.mTrackName.EqualsLiteral("h264-loc-msf"));
+  ASSERT_EQ(accessUnit.mAccessUnitSequence, 21U);
+  ASSERT_EQ(accessUnit.mPtsMillis, 700U);
+  ASSERT_EQ(accessUnit.mFirstPacketNumber, 61U);
+  ASSERT_EQ(accessUnit.mLastPacketNumber, 61U);
+  ASSERT_TRUE(accessUnit.mKeyframe);
+  ASSERT_TRUE(accessUnit.mIndependent);
+  ASSERT_EQ(accessUnit.mPayload.Length(), sizeof(kFrame));
+  ASSERT_EQ(std::memcmp(accessUnit.mPayload.Elements(), kFrame, sizeof(kFrame)),
+            0);
+  ASSERT_FALSE(sink.PopAccessUnit(accessUnit));
+}
+
+TEST(TestMcquicMoqMediaSink, DirectLocMsfObjectReachesAccessUnit)
+{
+  McquicMoqMediaSink sink;
+  nsTArray<uint8_t> channelId;
+  channelId.AppendElements("qcast-demo-v1", 13);
+  constexpr uint8_t kFrame[] = {0x00, 0x00, 0x01, 0x41, 0x9a};
+  nsTArray<uint8_t> payload;
+  payload.AppendElements(kFrame, sizeof(kFrame));
+  auto object = NativeMoqObject(std::move(payload), 34, 2);
+  object.publisher_sequence = 34;
+  object.pts_millis = 1122;
+  object.keyframe = false;
+  object.independent = true;
+
+  ASSERT_NS_SUCCEEDED(sink.ProcessObject("ratatoskr/demo"_ns, "h264-msf"_ns,
+                                         channelId, 62, object));
+
+  McquicMoqAccessUnit accessUnit;
+  ASSERT_TRUE(sink.PopAccessUnit(accessUnit));
+  ASSERT_TRUE(accessUnit.mTrackName.EqualsLiteral("h264-msf"));
+  ASSERT_EQ(accessUnit.mAccessUnitSequence, 34U);
+  ASSERT_EQ(accessUnit.mPtsMillis, 1122U);
+  ASSERT_FALSE(accessUnit.mKeyframe);
+  ASSERT_TRUE(accessUnit.mIndependent);
+  ASSERT_EQ(accessUnit.mPayload.Length(), sizeof(kFrame));
+  ASSERT_EQ(std::memcmp(accessUnit.mPayload.Elements(), kFrame, sizeof(kFrame)),
+            0);
+  ASSERT_FALSE(sink.PopAccessUnit(accessUnit));
 }
 
 TEST(TestMcquicMoqMediaSink, DrainsCompletedAccessUnitsToConsumer)

@@ -21,6 +21,7 @@
 #include "mozilla/Preferences.h"
 #include "mozilla/RefPtr.h"
 #include "mozilla/ScopeExit.h"
+#include "mozilla/Services.h"
 #include "mozilla/StaticPrefs_network.h"
 #include "mozilla/glean/NetwerkDnsMetrics.h"
 #include "mozilla/glean/NetwerkMetrics.h"
@@ -30,12 +31,15 @@
 #include "nsHttpHandler.h"
 #include "nsHttpTransaction.h"
 #include "nsIHttpActivityObserver.h"
+#include "nsIObserverService.h"
 #include "nsIOService.h"
+#include "nsISupportsPrimitives.h"
 #include "nsITLSSocketControl.h"
 #include "nsNetAddr.h"
 #include "nsQueryObject.h"
 #include "nsSocketTransportService2.h"
 #include "nsString.h"
+#include "nsSupportsPrimitives.h"
 #include "nsThreadUtils.h"
 #include "sslerr.h"
 #include "WebTransportCertificateVerifier.h"
@@ -76,7 +80,87 @@ const char MCQUIC_MOQ_SUBSCRIBE_NAMESPACE_PREF[] =
 const char MCQUIC_MOQ_SUBSCRIBE_TRACK_PREF[] =
     "network.http.http3.mcquic.moq_subscribe.track_name";
 const char MCQUIC_MOQ_DEFAULT_NAMESPACE[] = "ratatoskr/demo";
-const char MCQUIC_MOQ_DEFAULT_TRACK[] = "h264-qvf1";
+const char MCQUIC_MOQ_DEFAULT_TRACK[] = "h264-loc-msf";
+const char MCQUIC_MOQ_SESSION_READY_TOPIC[] = "mcquic-moq-session-ready";
+
+static void McquicAppendJsonString(nsACString& aOut,
+                                   const nsACString& aValue) {
+  aOut.Append('"');
+  for (auto iter = aValue.BeginReading(), end = aValue.EndReading();
+       iter != end; ++iter) {
+    unsigned char ch = static_cast<unsigned char>(*iter);
+    switch (ch) {
+      case '"':
+        aOut.AppendLiteral("\\\"");
+        break;
+      case '\\':
+        aOut.AppendLiteral("\\\\");
+        break;
+      case '\b':
+        aOut.AppendLiteral("\\b");
+        break;
+      case '\f':
+        aOut.AppendLiteral("\\f");
+        break;
+      case '\n':
+        aOut.AppendLiteral("\\n");
+        break;
+      case '\r':
+        aOut.AppendLiteral("\\r");
+        break;
+      case '\t':
+        aOut.AppendLiteral("\\t");
+        break;
+      default:
+        if (ch < 0x20) {
+          aOut.AppendPrintf("\\u%04x", ch);
+        } else {
+          aOut.Append(static_cast<char>(ch));
+        }
+    }
+  }
+  aOut.Append('"');
+}
+
+static nsCString McquicMoqSessionReadyPayload(const char* aEvent,
+                                              const nsACString& aOrigin,
+                                              const nsACString& aAuthority,
+                                              const nsACString& aNamespace,
+                                              const nsACString& aTrackName) {
+  nsCString payload;
+  payload.AppendLiteral("{\"event\":");
+  McquicAppendJsonString(payload, nsDependentCString(aEvent));
+  payload.AppendLiteral(",\"origin\":");
+  McquicAppendJsonString(payload, aOrigin);
+  payload.AppendLiteral(",\"authority\":");
+  McquicAppendJsonString(payload, aAuthority);
+  payload.AppendLiteral(",\"trackNamespace\":");
+  McquicAppendJsonString(payload, aNamespace);
+  payload.AppendLiteral(",\"trackName\":");
+  McquicAppendJsonString(payload, aTrackName);
+  payload.AppendLiteral("}");
+  return payload;
+}
+
+static void NotifyMcquicMoqSessionReady(nsCString aPayload) {
+  if (!NS_IsMainThread()) {
+    NS_DispatchToMainThread(NS_NewRunnableFunction(
+        "NotifyMcquicMoqSessionReady",
+        [payload = std::move(aPayload)]() mutable {
+          NotifyMcquicMoqSessionReady(std::move(payload));
+        }));
+    return;
+  }
+
+  nsCOMPtr<nsIObserverService> obs = services::GetObserverService();
+  if (!obs) {
+    return;
+  }
+
+  nsCOMPtr<nsISupportsCString> subject = new nsSupportsCString();
+  subject->SetData(aPayload);
+  obs->NotifyObservers(subject, MCQUIC_MOQ_SESSION_READY_TOPIC, nullptr);
+}
 
 static nsCString McquicChannelKey(const nsTArray<uint8_t>& aChannelId) {
   nsCString key;
@@ -854,6 +938,9 @@ nsresult Http3Session::ProcessEvents() {
       } break;
       case Http3Event::Tag::ConnectionConnected: {
         LOG(("Http3Session::ProcessEvents - ConnectionConnected"));
+        LOG(("MCQUIC H3 connected [this=%p origin=%s authority=%s:%d]", this,
+             mConnInfo->GetOrigin().get(), mConnInfo->GetOrigin().get(),
+             mConnInfo->OriginPort()));
         bool was0RTT = mState == ZERORTT;
         mState = CONNECTED;
         SetSecInfo();
@@ -1392,8 +1479,8 @@ nsresult Http3Session::EnsureMcquicMoqSubscribe() {
   mMcquicMoqTrackNamespace = trackNamespace;
   mMcquicMoqTrackName = trackName;
   mMcquicNeedsOutput = true;
-  LOG(("MCQUIC MoQ queued SETUP/SUBSCRIBE [this=%p stream=0x%" PRIx64
-       " authority=%s track=%s/%s bytes=%zu sent=%u]",
+  LOG(("MCQUIC MoQ setup requested, waiting for peer readiness [this=%p "
+       "stream=0x%" PRIx64 " authority=%s track=%s/%s bytes=%zu sent=%u]",
        this, mMcquicMoqControlStreamId, authority.get(), trackNamespace.get(),
        trackName.get(), payload.Length(), sent));
   return NS_OK;
@@ -1453,18 +1540,24 @@ nsresult Http3Session::ProcessMcquicMoqControlStream() {
 
     switch (message.tag) {
       case McquicMoqControlMessageTag::Setup:
-        LOG(("MCQUIC MoQ SETUP received [this=%p stream=0x%" PRIx64 "]", this,
-             mMcquicMoqControlStreamId));
+        LOG(("MCQUIC MoQ setup complete [this=%p stream=0x%" PRIx64 "]",
+             this, mMcquicMoqControlStreamId));
         break;
       case McquicMoqControlMessageTag::SubscribeOk: {
         McquicMoqTrackInfo track;
         track.mNamespace = mMcquicMoqTrackNamespace;
         track.mTrackName = mMcquicMoqTrackName;
         mMcquicMoqTrackAliases.InsertOrUpdate(message.track_alias, track);
-        LOG(("MCQUIC MoQ SUBSCRIBE_OK received [this=%p stream=0x%" PRIx64
+        LOG(("MCQUIC MoQ subscribed [this=%p stream=0x%" PRIx64
              " track_alias=%" PRIu64 " track=%s/%s]",
              this, mMcquicMoqControlStreamId, message.track_alias,
              track.mNamespace.get(), track.mTrackName.get()));
+        nsCString origin(mConnInfo->GetOrigin());
+        nsCString authority(origin);
+        authority.AppendPrintf(":%d", mConnInfo->OriginPort());
+        NotifyMcquicMoqSessionReady(McquicMoqSessionReadyPayload(
+            "subscribe-ok", origin, authority, track.mNamespace,
+            track.mTrackName));
         if (mMcquicMoqDeliveryMode == McquicMoqDeliveryMode::None) {
           SetMcquicMoqDeliveryMode(McquicMoqDeliveryMode::Unicast,
                                    "subscribe-ok");
@@ -1528,6 +1621,10 @@ void Http3Session::SetMcquicMoqDeliveryMode(McquicMoqDeliveryMode aMode,
        this, McquicMoqDeliveryModeName(mMcquicMoqDeliveryMode),
        McquicMoqDeliveryModeName(aMode), aReason, mMcquicMoqUnicastDatagrams,
        mMcquicMoqMulticastDatagrams, mMcquicMoqDroppedUnicastDatagrams));
+  if (aMode == McquicMoqDeliveryMode::Fallback) {
+    LOG(("MCQUIC multicast failed, continuing unicast [this=%p reason=%s]",
+         this, aReason));
+  }
   mMcquicMoqDeliveryMode = aMode;
 }
 
@@ -1571,17 +1668,6 @@ nsresult Http3Session::ProcessMcquicMoqUnicastDatagrams() {
     }
 
     ++mMcquicMoqUnicastDatagrams;
-    if (mMcquicMoqDeliveryMode == McquicMoqDeliveryMode::Multicast) {
-      ++mMcquicMoqDroppedUnicastDatagrams;
-      LOG(
-          ("MCQUIC MoQ unicast DATAGRAM suppressed while multicast is fresh "
-           "[this=%p payload_len=%zu total_unicast=%" PRIu64
-           " suppressed=%" PRIu64 "]",
-           this, payload.Length(), mMcquicMoqUnicastDatagrams,
-           mMcquicMoqDroppedUnicastDatagrams));
-      continue;
-    }
-
     McquicMoqDatagramExternal moq{};
     if (!neqo_mcquic_decode_moq_datagram(&payload, &moq)) {
       ++mMcquicMoqDroppedUnicastDatagrams;
@@ -1601,6 +1687,12 @@ nsresult Http3Session::ProcessMcquicMoqUnicastDatagrams() {
            moq.payload_len));
       continue;
     }
+
+    LOG(("MCQUIC MoQ unicast object received [this=%p mode=%s group=%" PRIu64
+         " object=%" PRIu64 " payload_len=%" PRIu64
+         " total_unicast=%" PRIu64 "]",
+         this, McquicMoqDeliveryModeName(mMcquicMoqDeliveryMode), moq.group_id,
+         moq.object_id, moq.payload_len, mMcquicMoqUnicastDatagrams));
 
     nsTArray<uint8_t> unicastChannel;
     ProcessMcquicMoqNativeObject(moq, unicastChannel,
@@ -1645,13 +1737,20 @@ nsresult Http3Session::ProcessMcquicControlFrames() {
              "port=%u]",
              this, channelHex.get(), frame.source_ip.get(),
              frame.group_ip.get(), frame.udp_port));
+        LOG(
+            ("MCQUIC multicast join attempted [this=%p channel=%s "
+             "source=%s group=%s port=%u]",
+             this, channelHex.get(), frame.source_ip.get(),
+             frame.group_ip.get(), frame.udp_port));
 
         rv = EnsureMcquicReceiver();
         if (NS_FAILED(rv)) {
           LOG(
-              ("MCQUIC receiver unavailable for announcement [this=%p "
-               "rv=0x%08" PRIx32 "]",
+              ("MCQUIC receiver unavailable for announcement, continuing "
+               "unicast [this=%p rv=0x%08" PRIx32 "]",
                this, static_cast<uint32_t>(rv)));
+          SetMcquicMoqDeliveryMode(McquicMoqDeliveryMode::Fallback,
+                                   "receiver unavailable");
           break;
         }
 
@@ -1676,7 +1775,7 @@ nsresult Http3Session::ProcessMcquicControlFrames() {
         if (NS_FAILED(rv)) {
           LOG(
               ("MCQUIC failed to add SSM subscription [this=%p channel=%s "
-               "rv=0x%08" PRIx32 "]",
+               "rv=0x%08" PRIx32 " continuing_unicast=1]",
                this, channelHex.get(), static_cast<uint32_t>(rv)));
           SetMcquicMoqDeliveryMode(McquicMoqDeliveryMode::Fallback,
                                    "subscription add failed");
@@ -1687,7 +1786,7 @@ nsresult Http3Session::ProcessMcquicControlFrames() {
         if (NS_FAILED(rv)) {
           LOG(
               ("MCQUIC failed to join SSM subscription [this=%p channel=%s "
-               "id=%" PRIu64 " rv=0x%08" PRIx32 "]",
+               "id=%" PRIu64 " rv=0x%08" PRIx32 " continuing_unicast=1]",
                this, channelHex.get(), info.mSubscriptionId,
                static_cast<uint32_t>(rv)));
           (void)mMcquicReceiver->Remove(info.mSubscriptionId);
@@ -1813,6 +1912,9 @@ nsresult Http3Session::ProcessMcquicPackets() {
       mMcquicNeedsOutput = true;
       LOG(("MCQUIC queued MC_ACK [this=%p id=%" PRIu64 "]", this,
            packet.subscription_id));
+      LOG(("MCQUIC multicast active [this=%p id=%" PRIu64
+           " ack=queued unicast_fallback=active]",
+           this, packet.subscription_id));
     }
   }
 

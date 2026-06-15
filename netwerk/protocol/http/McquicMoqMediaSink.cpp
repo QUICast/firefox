@@ -38,23 +38,43 @@ namespace mozilla::net {
 namespace {
 
 constexpr size_t QVF1_FIXED_HEADER_LEN = 32;
+constexpr size_t LOC_MSF_FIXED_HEADER_LEN = 28;
 constexpr uint8_t QVF1_VERSION = 1;
 constexpr uint8_t QVF1_CODEC_H264 = 1;
 constexpr uint8_t QVF1_FLAG_KEYFRAME = 0x01;
 constexpr uint8_t QVF1_FLAG_CONFIG = 0x02;
 constexpr uint8_t QVF1_FLAG_END_OF_ACCESS_UNIT = 0x04;
+constexpr uint8_t MCQUIC_MEDIA_FLAG_INDEPENDENT = 0x08;
 constexpr uint16_t QVF1_MAX_FRAGMENTS = 1024;
 constexpr gfx::IntSize QVF1_DECODE_SIZE{640, 480};
 constexpr const char* MCQUIC_MOQ_VIDEO_FRAME_TOPIC = "mcquic-moq-video-frame";
 
-struct Qvf1FragmentMetadata {
+enum class McquicMoqMediaPayloadFormat {
+  Qvf1,
+  LocMsf,
+};
+
+struct McquicMoqMediaFragmentMetadata {
+  McquicMoqMediaPayloadFormat mFormat = McquicMoqMediaPayloadFormat::Qvf1;
   uint8_t mFlags = 0;
   uint64_t mAccessUnitSequence = 0;
   uint16_t mFragmentIndex = 0;
-  uint16_t mFragmentCount = 0;
+  uint16_t mFragmentCount = 1;
   uint64_t mPtsMillis = 0;
+  size_t mPayloadOffset = 0;
   uint32_t mPayloadLen = 0;
 };
+
+static const char* McquicMoqMediaPayloadFormatName(
+    McquicMoqMediaPayloadFormat aFormat) {
+  switch (aFormat) {
+    case McquicMoqMediaPayloadFormat::Qvf1:
+      return "qvf1";
+    case McquicMoqMediaPayloadFormat::LocMsf:
+      return "loc-msf";
+  }
+  return "unknown";
+}
 
 static uint16_t ReadBigEndianUint16(const uint8_t* aData) {
   return (static_cast<uint16_t>(aData[0]) << 8) | aData[1];
@@ -229,8 +249,20 @@ static void MaybeNotifyOverlayFrame(const McquicMoqAccessUnit& aAccessUnit,
   NotifyMcquicMoqVideoFrame(std::move(payload));
 }
 
-static nsresult ParseQvf1Payload(const nsTArray<uint8_t>& aPayload,
-                                 Qvf1FragmentMetadata& aMetadata) {
+static bool PayloadStartsWith(const nsTArray<uint8_t>& aPayload,
+                              const char (&aMagic)[5]) {
+  return aPayload.Length() >= 4 &&
+         std::memcmp(aPayload.Elements(), aMagic, 4) == 0;
+}
+
+static bool IsLocMsfTrackName(const nsACString& aTrackName) {
+  nsCString trackName(aTrackName);
+  return trackName.Find("-loc") >= 0 || trackName.Find("-msf") >= 0;
+}
+
+static nsresult ParseQvf1Payload(
+    const nsTArray<uint8_t>& aPayload,
+    McquicMoqMediaFragmentMetadata& aMetadata) {
   if (aPayload.Length() < QVF1_FIXED_HEADER_LEN) {
     return NS_ERROR_INVALID_ARG;
   }
@@ -241,11 +273,13 @@ static nsresult ParseQvf1Payload(const nsTArray<uint8_t>& aPayload,
     return NS_ERROR_INVALID_ARG;
   }
 
+  aMetadata.mFormat = McquicMoqMediaPayloadFormat::Qvf1;
   aMetadata.mFlags = data[6];
   aMetadata.mAccessUnitSequence = ReadBigEndianUint64(&data[8]);
   aMetadata.mFragmentIndex = ReadBigEndianUint16(&data[16]);
   aMetadata.mFragmentCount = ReadBigEndianUint16(&data[18]);
   aMetadata.mPtsMillis = ReadBigEndianUint64(&data[20]);
+  aMetadata.mPayloadOffset = QVF1_FIXED_HEADER_LEN;
   aMetadata.mPayloadLen = ReadBigEndianUint32(&data[28]);
 
   if (aMetadata.mFragmentCount == 0 ||
@@ -258,6 +292,63 @@ static nsresult ParseQvf1Payload(const nsTArray<uint8_t>& aPayload,
     return NS_ERROR_INVALID_ARG;
   }
 
+  return NS_OK;
+}
+
+static nsresult ParseLocMsfPayload(
+    const nsTArray<uint8_t>& aPayload,
+    McquicMoqMediaFragmentMetadata& aMetadata) {
+  if (aPayload.Length() < LOC_MSF_FIXED_HEADER_LEN) {
+    return NS_ERROR_INVALID_ARG;
+  }
+
+  const uint8_t* data = aPayload.Elements();
+  if ((std::memcmp(data, "MSF1", 4) != 0 &&
+       std::memcmp(data, "LOC1", 4) != 0) ||
+      data[4] != QVF1_VERSION || data[5] != QVF1_CODEC_H264) {
+    return NS_ERROR_INVALID_ARG;
+  }
+
+  aMetadata.mFormat = McquicMoqMediaPayloadFormat::LocMsf;
+  aMetadata.mFlags = data[6];
+  aMetadata.mAccessUnitSequence = ReadBigEndianUint64(&data[8]);
+  aMetadata.mFragmentIndex = 0;
+  aMetadata.mFragmentCount = 1;
+  aMetadata.mPtsMillis = ReadBigEndianUint64(&data[16]);
+  aMetadata.mPayloadOffset = LOC_MSF_FIXED_HEADER_LEN;
+  aMetadata.mPayloadLen = ReadBigEndianUint32(&data[24]);
+
+  if (aPayload.Length() != LOC_MSF_FIXED_HEADER_LEN + aMetadata.mPayloadLen) {
+    return NS_ERROR_INVALID_ARG;
+  }
+
+  return NS_OK;
+}
+
+static nsresult PopulateDirectLocMsfMetadata(
+    const McquicMoqDatagramExternal& aObject,
+    McquicMoqMediaFragmentMetadata& aMetadata) {
+  if (aObject.payload.Length() > std::numeric_limits<uint32_t>::max()) {
+    return NS_ERROR_INVALID_ARG;
+  }
+
+  aMetadata.mFormat = McquicMoqMediaPayloadFormat::LocMsf;
+  aMetadata.mFlags = 0;
+  if (aObject.keyframe) {
+    aMetadata.mFlags |= QVF1_FLAG_KEYFRAME;
+  }
+  if (aObject.config) {
+    aMetadata.mFlags |= QVF1_FLAG_CONFIG;
+  }
+  if (aObject.independent) {
+    aMetadata.mFlags |= MCQUIC_MEDIA_FLAG_INDEPENDENT;
+  }
+  aMetadata.mAccessUnitSequence = aObject.publisher_sequence;
+  aMetadata.mFragmentIndex = 0;
+  aMetadata.mFragmentCount = 1;
+  aMetadata.mPtsMillis = aObject.pts_millis;
+  aMetadata.mPayloadOffset = 0;
+  aMetadata.mPayloadLen = static_cast<uint32_t>(aObject.payload.Length());
   return NS_OK;
 }
 
@@ -368,7 +459,7 @@ class McquicMoqPdmAccessUnitConsumer final
         continue;
       }
       ++mDecodedFrames;
-      LOG(("MCQUIC MoQ media decoded video frame [track=%s/%s sequence=%" PRIu64
+      LOG(("MCQUIC MoQ media frame decoded [track=%s/%s sequence=%" PRIu64
            " pts_ms=%" PRIu64 " decoded_frames=%" PRIu64
            " display=%dx%d image=%p]",
            aAccessUnit.mNamespace.get(), aAccessUnit.mTrackName.get(),
@@ -492,21 +583,40 @@ nsresult McquicMoqMediaSink::ProcessObject(
     const nsACString& aNamespace, const nsACString& aTrackName,
     const nsTArray<uint8_t>& aChannelId, uint64_t aPacketNumber,
     const McquicMoqDatagramExternal& aObject) {
-  if (!StringEndsWith(aTrackName, "h264-qvf1"_ns)) {
+  McquicMoqMediaFragmentMetadata metadata;
+  nsresult rv = NS_OK;
+  if (PayloadStartsWith(aObject.payload, "QVF1") ||
+      StringEndsWith(aTrackName, "h264-qvf1"_ns)) {
+    rv = ParseQvf1Payload(aObject.payload, metadata);
+  } else if (PayloadStartsWith(aObject.payload, "MSF1") ||
+             PayloadStartsWith(aObject.payload, "LOC1")) {
+    rv = ParseLocMsfPayload(aObject.payload, metadata);
+  } else if (IsLocMsfTrackName(aTrackName)) {
+    rv = PopulateDirectLocMsfMetadata(aObject, metadata);
+  } else {
     return NS_OK;
   }
 
-  Qvf1FragmentMetadata metadata;
-  nsresult rv = ParseQvf1Payload(aObject.payload, metadata);
   if (NS_FAILED(rv)) {
     LOG(
-        ("MCQUIC MoQ media sink rejected non-QVF1 payload [track=%s/%s "
-         "group=%" PRIu64 " object=%" PRIu64 " payload_len=%zu]",
+        ("MCQUIC MoQ media sink rejected malformed media payload "
+         "[track=%s/%s group=%" PRIu64 " object=%" PRIu64
+         " payload_len=%zu]",
          PromiseFlatCString(aNamespace).get(),
          PromiseFlatCString(aTrackName).get(), aObject.group_id,
          aObject.object_id, aObject.payload.Length()));
     return rv;
   }
+
+  LOG(
+      ("MCQUIC MoQ media payload accepted [format=%s track=%s/%s "
+       "sequence=%" PRIu64 " fragment=%u/%u pts_ms=%" PRIu64
+       " payload_len=%u]",
+       McquicMoqMediaPayloadFormatName(metadata.mFormat),
+       PromiseFlatCString(aNamespace).get(),
+       PromiseFlatCString(aTrackName).get(), metadata.mAccessUnitSequence,
+       metadata.mFragmentIndex + 1, metadata.mFragmentCount,
+       metadata.mPtsMillis, metadata.mPayloadLen));
 
   nsCString key =
       AccessUnitKey(aNamespace, aTrackName, metadata.mAccessUnitSequence);
@@ -533,7 +643,8 @@ nsresult McquicMoqMediaSink::ProcessObject(
   pending.mKeyframe |= metadata.mFlags & QVF1_FLAG_KEYFRAME;
   pending.mConfig |= metadata.mFlags & QVF1_FLAG_CONFIG;
   pending.mIndependent |=
-      metadata.mFlags & (QVF1_FLAG_KEYFRAME | QVF1_FLAG_CONFIG);
+      metadata.mFlags & (QVF1_FLAG_KEYFRAME | QVF1_FLAG_CONFIG |
+                         MCQUIC_MEDIA_FLAG_INDEPENDENT);
 
   FragmentSlot& slot = pending.mFragments[metadata.mFragmentIndex];
   if (!slot.mPresent) {
@@ -542,7 +653,8 @@ nsresult McquicMoqMediaSink::ProcessObject(
   }
   slot.mPayload.Clear();
   slot.mPayload.AppendElements(
-      aObject.payload.Elements() + QVF1_FIXED_HEADER_LEN, metadata.mPayloadLen);
+      aObject.payload.Elements() + metadata.mPayloadOffset,
+      metadata.mPayloadLen);
 
   if ((metadata.mFlags & QVF1_FLAG_END_OF_ACCESS_UNIT) &&
       pending.mReceivedFragments != pending.mFragmentCount) {

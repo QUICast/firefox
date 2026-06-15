@@ -460,6 +460,7 @@ let JSWINDOWACTORS = {
     child: {
       esModuleURI: "resource:///actors/McquicVideoOverlayChild.sys.mjs",
       events: {
+        DOMDocElementInserted: { capture: true },
         DOMContentLoaded: {},
         pageshow: {},
       },
