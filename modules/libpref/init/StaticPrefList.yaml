@@ -16088,28 +16088,28 @@
 # Experimental MCQUIC MoQT subscription track name.
 - name: network.http.http3.mcquic.moq_subscribe.track_name
   type: String
-  value: "h264-qvf1"
+  value: "h264-loc"
   mirror: never
 
-# Enable experimental, privileged MCQUIC MoQT/QVF1 media sink logging.
+# Enable experimental, privileged MCQUIC MoQT media sink logging.
 - name: network.http.http3.mcquic.moq_media_sink.enabled
   type: RelaxedAtomicBool
   value: false
   mirror: always
 
-# Enable experimental, privileged MCQUIC MoQT/QVF1 media handoff.
+# Enable experimental, privileged MCQUIC MoQT media handoff.
 - name: network.http.http3.mcquic.moq_media_handoff.enabled
   type: RelaxedAtomicBool
   value: false
   mirror: always
 
-# Enable experimental, privileged MCQUIC MoQT/QVF1 media decode logging.
+# Enable experimental, privileged MCQUIC MoQT media decode logging.
 - name: network.http.http3.mcquic.moq_media_decode.enabled
   type: RelaxedAtomicBool
   value: false
   mirror: always
 
-# Enable experimental, privileged MCQUIC MoQT/QVF1 decoded video overlay.
+# Enable experimental, privileged MCQUIC MoQT decoded video overlay.
 - name: network.http.http3.mcquic.moq_media_overlay.enabled
   type: RelaxedAtomicBool
   value: false

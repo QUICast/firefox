@@ -335,9 +335,12 @@ class Http3Session final : public Http3SessionBase,
                                     const nsTArray<uint8_t>& aChannelId,
                                     uint64_t aPacketNumber,
                                     const char* aSource);
-  void ProcessMcquicMoqRawQvf1Datagram(const McquicChannelDatagram& aDatagram,
-                                       const nsACString& aChannelHex);
+  void ProcessMcquicMoqRawMediaDatagram(const McquicChannelDatagram& aDatagram,
+                                        const nsACString& aChannelHex,
+                                        const char* aFormat);
   void DrainMcquicMoqAccessUnits(const char* aSource);
+  void NoteMcquicMoqMulticastMediaProgress(
+      const McquicMoqMediaSinkProcessResult& aResult, const char* aSource);
   void ScheduleMcquicPoll();
 
   nsresult ProcessTransactionRead(uint64_t stream_id);
@@ -425,12 +428,15 @@ class Http3Session final : public Http3SessionBase,
   uint64_t mMcquicMoqUnicastDatagrams = 0;
   uint64_t mMcquicMoqMulticastDatagrams = 0;
   uint64_t mMcquicMoqDroppedUnicastDatagrams = 0;
+  uint64_t mMcquicMoqMulticastObjectsWithoutMediaProgress = 0;
   TimeStamp mMcquicMoqMulticastJoinStarted;
   TimeStamp mMcquicMoqLastMulticastDatagram;
+  TimeStamp mMcquicMoqLastMulticastMediaProgress;
   McquicMoqDeliveryMode mMcquicMoqDeliveryMode = McquicMoqDeliveryMode::None;
   bool mMcquicLimitsSent = false;
   bool mMcquicMoqSubscribeQueued = false;
   bool mMcquicMoqControlFin = false;
+  bool mMcquicMoqMulticastMediaReady = false;
   bool mMcquicNeedsOutput = false;
 
   // We need an extra map to store the mapping of WebTransportSession and

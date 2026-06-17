@@ -16,6 +16,7 @@
 #include "MediaData.h"
 #include "MediaDataDecoderProxy.h"
 #include "MediaInfo.h"
+#include "mozilla/Maybe.h"
 #include "PDMFactory.h"
 #include "VideoUtils.h"
 #include "gfxUtils.h"
@@ -39,13 +40,20 @@ namespace {
 
 constexpr size_t QVF1_FIXED_HEADER_LEN = 32;
 constexpr size_t LOC_MSF_FIXED_HEADER_LEN = 28;
+constexpr size_t LOC_H264_ANNEXB_FRAGMENT_HEADER_LEN = 20;
 constexpr uint8_t QVF1_VERSION = 1;
 constexpr uint8_t QVF1_CODEC_H264 = 1;
 constexpr uint8_t QVF1_FLAG_KEYFRAME = 0x01;
 constexpr uint8_t QVF1_FLAG_CONFIG = 0x02;
 constexpr uint8_t QVF1_FLAG_END_OF_ACCESS_UNIT = 0x04;
 constexpr uint8_t MCQUIC_MEDIA_FLAG_INDEPENDENT = 0x08;
+constexpr uint8_t LOC_H264_ANNEXB_FRAGMENT_VERSION = 1;
+constexpr uint8_t LOC_H264_ANNEXB_FRAGMENT_HEADER_BYTE = 20;
+constexpr uint16_t LOC_H264_FLAG_KEYFRAME = 0x0001;
+constexpr uint16_t LOC_H264_FLAG_CONFIG = 0x0002;
+constexpr uint16_t LOC_H264_FLAG_END_OF_ACCESS_UNIT = 0x0008;
 constexpr uint16_t QVF1_MAX_FRAGMENTS = 1024;
+constexpr size_t MCQUIC_MOQ_DEDUP_WINDOW = 4096;
 constexpr gfx::IntSize QVF1_DECODE_SIZE{640, 480};
 constexpr const char* MCQUIC_MOQ_VIDEO_FRAME_TOPIC = "mcquic-moq-video-frame";
 
@@ -72,6 +80,21 @@ static const char* McquicMoqMediaPayloadFormatName(
       return "qvf1";
     case McquicMoqMediaPayloadFormat::LocMsf:
       return "loc-msf";
+  }
+  return "unknown";
+}
+
+static const char* McquicMoqMediaObjectStatusName(
+    McquicMoqObjectStatus aStatus) {
+  switch (aStatus) {
+    case McquicMoqObjectStatus::Normal:
+      return "Normal";
+    case McquicMoqObjectStatus::EndOfGroup:
+      return "EndOfGroup";
+    case McquicMoqObjectStatus::EndOfTrack:
+      return "EndOfTrack";
+    case McquicMoqObjectStatus::Unknown:
+      return "Unknown";
   }
   return "unknown";
 }
@@ -110,6 +133,80 @@ static nsCString AccessUnitKey(const nsACString& aNamespace,
   key.Append('\0');
   key.AppendPrintf("%" PRIu64, aAccessUnitSequence);
   return key;
+}
+
+static nsCString ObjectKey(const nsACString& aNamespace,
+                           const nsACString& aTrackName, uint64_t aGroupId,
+                           uint64_t aObjectId) {
+  nsCString key(aNamespace);
+  key.Append('\0');
+  key.Append(aTrackName);
+  key.Append('\0');
+  key.AppendPrintf("%" PRIu64, aGroupId);
+  key.Append('\0');
+  key.AppendPrintf("%" PRIu64, aObjectId);
+  return key;
+}
+
+struct AnnexBNalSummary {
+  bool mContainsIdr = false;
+  bool mContainsSps = false;
+  bool mContainsPps = false;
+};
+
+static Maybe<size_t> FindAnnexBStartCode(const nsTArray<uint8_t>& aPayload,
+                                         size_t aOffset) {
+  if (aPayload.Length() < 4 || aOffset >= aPayload.Length() - 3) {
+    return Nothing();
+  }
+
+  const uint8_t* data = aPayload.Elements();
+  for (size_t i = aOffset; i + 3 < aPayload.Length(); ++i) {
+    if (data[i] != 0 || data[i + 1] != 0) {
+      continue;
+    }
+    if (data[i + 2] == 1) {
+      return Some(i);
+    }
+    if (i + 4 <= aPayload.Length() && data[i + 2] == 0 &&
+        data[i + 3] == 1) {
+      return Some(i);
+    }
+  }
+  return Nothing();
+}
+
+static size_t AnnexBStartCodeLength(const nsTArray<uint8_t>& aPayload,
+                                    size_t aOffset) {
+  const uint8_t* data = aPayload.Elements();
+  if (aOffset + 3 < aPayload.Length() && data[aOffset] == 0 &&
+      data[aOffset + 1] == 0 && data[aOffset + 2] == 0 &&
+      data[aOffset + 3] == 1) {
+    return 4;
+  }
+  return 3;
+}
+
+static AnnexBNalSummary SummarizeAnnexBNals(const nsTArray<uint8_t>& aPayload) {
+  AnnexBNalSummary summary;
+  size_t offset = 0;
+  while (auto start = FindAnnexBStartCode(aPayload, offset)) {
+    size_t nalOffset = *start + AnnexBStartCodeLength(aPayload, *start);
+    if (nalOffset >= aPayload.Length()) {
+      break;
+    }
+
+    uint8_t nalType = aPayload[nalOffset] & 0x1f;
+    summary.mContainsIdr |= nalType == 5;
+    summary.mContainsSps |= nalType == 7;
+    summary.mContainsPps |= nalType == 8;
+    if (summary.mContainsIdr && summary.mContainsSps &&
+        summary.mContainsPps) {
+      break;
+    }
+    offset = nalOffset + 1;
+  }
+  return summary;
 }
 
 static nsresult EncodeVideoFrameAsPngDataUrl(layers::Image* aImage,
@@ -255,6 +352,13 @@ static bool PayloadStartsWith(const nsTArray<uint8_t>& aPayload,
          std::memcmp(aPayload.Elements(), aMagic, 4) == 0;
 }
 
+static bool PayloadLooksLikeLocH264AnnexBFragment(
+    const nsTArray<uint8_t>& aPayload) {
+  return aPayload.Length() >= LOC_H264_ANNEXB_FRAGMENT_HEADER_LEN &&
+         aPayload[0] == LOC_H264_ANNEXB_FRAGMENT_VERSION &&
+         aPayload[1] == LOC_H264_ANNEXB_FRAGMENT_HEADER_BYTE;
+}
+
 static bool IsLocMsfTrackName(const nsACString& aTrackName) {
   nsCString trackName(aTrackName);
   return trackName.Find("-loc") >= 0 || trackName.Find("-msf") >= 0;
@@ -322,6 +426,52 @@ static nsresult ParseLocMsfPayload(
     return NS_ERROR_INVALID_ARG;
   }
 
+  return NS_OK;
+}
+
+static nsresult ParseLocH264AnnexBFragmentPayload(
+    const nsTArray<uint8_t>& aPayload,
+    McquicMoqMediaFragmentMetadata& aMetadata) {
+  if (!PayloadLooksLikeLocH264AnnexBFragment(aPayload)) {
+    return NS_ERROR_INVALID_ARG;
+  }
+
+  const uint8_t* data = aPayload.Elements();
+  uint16_t locFlags = ReadBigEndianUint16(&data[2]);
+  uint64_t ptsMillis = ReadBigEndianUint64(&data[4]);
+  uint16_t fragmentIndex = ReadBigEndianUint16(&data[12]);
+  uint16_t fragmentCount = ReadBigEndianUint16(&data[14]);
+  uint32_t payloadLen = ReadBigEndianUint32(&data[16]);
+
+  if (fragmentCount == 0 || fragmentCount > QVF1_MAX_FRAGMENTS ||
+      fragmentIndex >= fragmentCount) {
+    return NS_ERROR_INVALID_ARG;
+  }
+  if (aPayload.Length() != LOC_H264_ANNEXB_FRAGMENT_HEADER_LEN + payloadLen) {
+    return NS_ERROR_INVALID_ARG;
+  }
+
+  aMetadata.mFormat = McquicMoqMediaPayloadFormat::LocMsf;
+  aMetadata.mFlags = 0;
+  if (locFlags & LOC_H264_FLAG_KEYFRAME) {
+    aMetadata.mFlags |= QVF1_FLAG_KEYFRAME;
+  }
+  if (locFlags & LOC_H264_FLAG_CONFIG) {
+    aMetadata.mFlags |= QVF1_FLAG_CONFIG;
+  }
+  if ((locFlags & LOC_H264_FLAG_END_OF_ACCESS_UNIT) ||
+      fragmentIndex + 1 == fragmentCount) {
+    aMetadata.mFlags |= QVF1_FLAG_END_OF_ACCESS_UNIT;
+  }
+  if (locFlags & (LOC_H264_FLAG_KEYFRAME | LOC_H264_FLAG_CONFIG)) {
+    aMetadata.mFlags |= MCQUIC_MEDIA_FLAG_INDEPENDENT;
+  }
+  aMetadata.mAccessUnitSequence = ptsMillis;
+  aMetadata.mFragmentIndex = fragmentIndex;
+  aMetadata.mFragmentCount = fragmentCount;
+  aMetadata.mPtsMillis = ptsMillis;
+  aMetadata.mPayloadOffset = LOC_H264_ANNEXB_FRAGMENT_HEADER_LEN;
+  aMetadata.mPayloadLen = payloadLen;
   return NS_OK;
 }
 
@@ -582,7 +732,32 @@ bool McquicMoqMediaSink::Enabled() {
 nsresult McquicMoqMediaSink::ProcessObject(
     const nsACString& aNamespace, const nsACString& aTrackName,
     const nsTArray<uint8_t>& aChannelId, uint64_t aPacketNumber,
-    const McquicMoqDatagramExternal& aObject) {
+    const McquicMoqDatagramExternal& aObject,
+    McquicMoqMediaSinkProcessResult* aResult) {
+  if (aResult) {
+    *aResult = {};
+  }
+
+  if (aObject.status != McquicMoqObjectStatus::Normal) {
+    LOG(
+        ("MCQUIC MoQ media sink ignored non-media status object "
+         "[track=%s/%s group=%" PRIu64 " object=%" PRIu64 " status=%s]",
+         PromiseFlatCString(aNamespace).get(),
+         PromiseFlatCString(aTrackName).get(), aObject.group_id,
+         aObject.object_id, McquicMoqMediaObjectStatusName(aObject.status)));
+    return NS_OK;
+  }
+
+  if (aObject.payload.IsEmpty()) {
+    LOG(
+        ("MCQUIC MoQ media sink ignored empty media object "
+         "[track=%s/%s group=%" PRIu64 " object=%" PRIu64 "]",
+         PromiseFlatCString(aNamespace).get(),
+         PromiseFlatCString(aTrackName).get(), aObject.group_id,
+         aObject.object_id));
+    return NS_OK;
+  }
+
   McquicMoqMediaFragmentMetadata metadata;
   nsresult rv = NS_OK;
   if (PayloadStartsWith(aObject.payload, "QVF1") ||
@@ -591,6 +766,9 @@ nsresult McquicMoqMediaSink::ProcessObject(
   } else if (PayloadStartsWith(aObject.payload, "MSF1") ||
              PayloadStartsWith(aObject.payload, "LOC1")) {
     rv = ParseLocMsfPayload(aObject.payload, metadata);
+  } else if (IsLocMsfTrackName(aTrackName) &&
+             PayloadLooksLikeLocH264AnnexBFragment(aObject.payload)) {
+    rv = ParseLocH264AnnexBFragmentPayload(aObject.payload, metadata);
   } else if (IsLocMsfTrackName(aTrackName)) {
     rv = PopulateDirectLocMsfMetadata(aObject, metadata);
   } else {
@@ -606,6 +784,32 @@ nsresult McquicMoqMediaSink::ProcessObject(
          PromiseFlatCString(aTrackName).get(), aObject.group_id,
          aObject.object_id, aObject.payload.Length()));
     return rv;
+  }
+
+  if (metadata.mFormat == McquicMoqMediaPayloadFormat::LocMsf &&
+      metadata.mAccessUnitSequence == 0) {
+    metadata.mAccessUnitSequence =
+        aObject.publisher_sequence != 0 ? aObject.publisher_sequence
+                                        : aObject.group_id;
+  }
+  if (metadata.mFormat == McquicMoqMediaPayloadFormat::LocMsf &&
+      metadata.mPtsMillis == 0 && aObject.pts_millis != 0) {
+    metadata.mPtsMillis = aObject.pts_millis;
+  }
+
+  nsCString objectKey =
+      ObjectKey(aNamespace, aTrackName, aObject.group_id, aObject.object_id);
+  if (mAcceptedObjects.Contains(objectKey)) {
+    if (aResult) {
+      aResult->mDuplicateObject = true;
+    }
+    LOG(
+        ("MCQUIC MoQ media sink deduplicated object [track=%s/%s "
+         "group=%" PRIu64 " object=%" PRIu64 " payload_len=%zu]",
+         PromiseFlatCString(aNamespace).get(),
+         PromiseFlatCString(aTrackName).get(), aObject.group_id,
+         aObject.object_id, aObject.payload.Length()));
+    return NS_OK;
   }
 
   LOG(
@@ -634,6 +838,16 @@ nsresult McquicMoqMediaSink::ProcessObject(
   } else if (pending.mFragmentCount != metadata.mFragmentCount ||
              pending.mPtsMillis != metadata.mPtsMillis) {
     return NS_ERROR_INVALID_ARG;
+  }
+
+  mAcceptedObjects.Insert(objectKey);
+  mAcceptedObjectOrder.AppendElement(objectKey);
+  if (mAcceptedObjectOrder.Length() > MCQUIC_MOQ_DEDUP_WINDOW) {
+    mAcceptedObjects.Remove(mAcceptedObjectOrder[0]);
+    mAcceptedObjectOrder.RemoveElementAt(0);
+  }
+  if (aResult) {
+    aResult->mAcceptedObject = true;
   }
 
   pending.mFirstPacketNumber =
@@ -666,7 +880,7 @@ nsresult McquicMoqMediaSink::ProcessObject(
          pending.mFragmentCount));
   }
 
-  return EmitIfComplete(key, pending);
+  return EmitIfComplete(key, pending, aResult);
 }
 
 bool McquicMoqMediaSink::PopAccessUnit(McquicMoqAccessUnit& aAccessUnit) {
@@ -692,7 +906,9 @@ nsresult McquicMoqMediaSink::DrainAccessUnits(
 }
 
 nsresult McquicMoqMediaSink::EmitIfComplete(const nsCString& aKey,
-                                            PendingAccessUnit& aPending) {
+                                            PendingAccessUnit& aPending,
+                                            McquicMoqMediaSinkProcessResult*
+                                                aResult) {
   if (aPending.mReceivedFragments != aPending.mFragmentCount) {
     return NS_OK;
   }
@@ -716,15 +932,28 @@ nsresult McquicMoqMediaSink::EmitIfComplete(const nsCString& aKey,
     accessUnit.mPayload.AppendElements(fragment.mPayload);
   }
 
+  AnnexBNalSummary nalSummary = SummarizeAnnexBNals(accessUnit.mPayload);
+  accessUnit.mKeyframe |= nalSummary.mContainsIdr;
+  accessUnit.mConfig |= nalSummary.mContainsSps || nalSummary.mContainsPps;
+  accessUnit.mIndependent |= accessUnit.mKeyframe || accessUnit.mConfig;
+
   LOG(("MCQUIC MoQ media access unit [track=%s/%s sequence=%" PRIu64
        " pts_ms=%" PRIu64 " fragments=%u payload_len=%zu keyframe=%d "
-       "config=%d independent=%d first_packet=%" PRIu64 " last_packet=%" PRIu64
-       "]",
+       "config=%d independent=%d annexb_idr=%d annexb_sps=%d annexb_pps=%d "
+       "first_packet=%" PRIu64 " last_packet=%" PRIu64 "]",
        accessUnit.mNamespace.get(), accessUnit.mTrackName.get(),
        accessUnit.mAccessUnitSequence, accessUnit.mPtsMillis,
        aPending.mFragmentCount, accessUnit.mPayload.Length(),
        accessUnit.mKeyframe, accessUnit.mConfig, accessUnit.mIndependent,
-       accessUnit.mFirstPacketNumber, accessUnit.mLastPacketNumber));
+       nalSummary.mContainsIdr, nalSummary.mContainsSps,
+       nalSummary.mContainsPps, accessUnit.mFirstPacketNumber,
+       accessUnit.mLastPacketNumber));
+
+  if (aResult) {
+    aResult->mCompletedAccessUnit = true;
+    aResult->mKeyframeCapableAccessUnit =
+        accessUnit.mKeyframe || accessUnit.mConfig || accessUnit.mIndependent;
+  }
 
   mCompletedAccessUnits.AppendElement(std::move(accessUnit));
   mPendingAccessUnits.Remove(aKey);

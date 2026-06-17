@@ -80,6 +80,24 @@ static nsTArray<uint8_t> LocMsfPayload(uint64_t aAccessUnitSequence,
   return out;
 }
 
+static nsTArray<uint8_t> LocH264FragmentPayload(uint64_t aPtsMillis,
+                                                uint16_t aFlags,
+                                                uint16_t aFragmentIndex,
+                                                uint16_t aFragmentCount,
+                                                const uint8_t* aPayload,
+                                                size_t aPayloadLen) {
+  nsTArray<uint8_t> out;
+  out.AppendElement(1);
+  out.AppendElement(20);
+  AppendUint(out, aFlags, 2);
+  AppendUint(out, aPtsMillis, 8);
+  AppendUint(out, aFragmentIndex, 2);
+  AppendUint(out, aFragmentCount, 2);
+  AppendUint(out, aPayloadLen, 4);
+  out.AppendElements(aPayload, aPayloadLen);
+  return out;
+}
+
 static McquicMoqDatagramExternal NativeMoqObject(nsTArray<uint8_t>&& aPayload,
                                                  uint64_t aGroupId = 7,
                                                  uint64_t aObjectId = 0) {
@@ -445,10 +463,15 @@ TEST(TestMcquicMoqMediaSink, LocMsfPayloadReachesAccessUnit)
   constexpr uint8_t kFrame[] = {0x00, 0x00, 0x01, 0x65, 0x88};
   auto object = NativeMoqObject(
       LocMsfPayload(21, 700, 0x01 | 0x08, kFrame, sizeof(kFrame)), 21, 0);
+  McquicMoqMediaSinkProcessResult result;
 
   ASSERT_NS_SUCCEEDED(sink.ProcessObject("ratatoskr/demo"_ns,
                                          "h264-loc-msf"_ns, channelId, 61,
-                                         object));
+                                         object, &result));
+  ASSERT_TRUE(result.mAcceptedObject);
+  ASSERT_FALSE(result.mDuplicateObject);
+  ASSERT_TRUE(result.mCompletedAccessUnit);
+  ASSERT_TRUE(result.mKeyframeCapableAccessUnit);
 
   McquicMoqAccessUnit accessUnit;
   ASSERT_TRUE(sink.PopAccessUnit(accessUnit));
@@ -463,6 +486,110 @@ TEST(TestMcquicMoqMediaSink, LocMsfPayloadReachesAccessUnit)
   ASSERT_EQ(accessUnit.mPayload.Length(), sizeof(kFrame));
   ASSERT_EQ(std::memcmp(accessUnit.mPayload.Elements(), kFrame, sizeof(kFrame)),
             0);
+  ASSERT_FALSE(sink.PopAccessUnit(accessUnit));
+}
+
+TEST(TestMcquicMoqMediaSink, DeduplicatesObjectByTrackGroupAndObject)
+{
+  McquicMoqMediaSink sink;
+  nsTArray<uint8_t> channelId;
+  channelId.AppendElements("qcast-demo-v1", 13);
+  constexpr uint8_t kFrame[] = {0x00, 0x00, 0x01, 0x65, 0x99};
+  auto object = NativeMoqObject(
+      LocMsfPayload(55, 900, 0x01 | 0x08, kFrame, sizeof(kFrame)), 55, 0);
+
+  McquicMoqMediaSinkProcessResult first;
+  ASSERT_NS_SUCCEEDED(sink.ProcessObject("ratatoskr/demo"_ns,
+                                         "h264-loc-msf"_ns, channelId, 70,
+                                         object, &first));
+  ASSERT_TRUE(first.mAcceptedObject);
+  ASSERT_TRUE(first.mCompletedAccessUnit);
+
+  McquicMoqAccessUnit accessUnit;
+  ASSERT_TRUE(sink.PopAccessUnit(accessUnit));
+
+  McquicMoqMediaSinkProcessResult duplicate;
+  ASSERT_NS_SUCCEEDED(sink.ProcessObject("ratatoskr/demo"_ns,
+                                         "h264-loc-msf"_ns, channelId, 71,
+                                         object, &duplicate));
+  ASSERT_FALSE(duplicate.mAcceptedObject);
+  ASSERT_TRUE(duplicate.mDuplicateObject);
+  ASSERT_FALSE(duplicate.mCompletedAccessUnit);
+  ASSERT_FALSE(sink.PopAccessUnit(accessUnit));
+}
+
+TEST(TestMcquicMoqMediaSink, IgnoresNonMediaStatusObjects)
+{
+  McquicMoqMediaSink sink;
+  nsTArray<uint8_t> channelId;
+  channelId.AppendElements("qcast-demo-v1", 13);
+  nsTArray<uint8_t> payload;
+  auto object = NativeMoqObject(std::move(payload), 56, 0);
+  object.status = McquicMoqObjectStatus::EndOfGroup;
+  object.end_of_group = true;
+  object.payload_len = 0;
+
+  McquicMoqMediaSinkProcessResult result;
+  ASSERT_NS_SUCCEEDED(sink.ProcessObject("ratatoskr/demo"_ns, "h264-loc"_ns,
+                                         channelId, 72, object, &result));
+  ASSERT_FALSE(result.mAcceptedObject);
+  ASSERT_FALSE(result.mDuplicateObject);
+  ASSERT_FALSE(result.mCompletedAccessUnit);
+
+  McquicMoqAccessUnit accessUnit;
+  ASSERT_FALSE(sink.PopAccessUnit(accessUnit));
+}
+
+TEST(TestMcquicMoqMediaSink, IgnoresEmptyLocMediaObjects)
+{
+  McquicMoqMediaSink sink;
+  nsTArray<uint8_t> channelId;
+  channelId.AppendElements("qcast-demo-v1", 13);
+  nsTArray<uint8_t> payload;
+  auto object = NativeMoqObject(std::move(payload), 57, 0);
+
+  McquicMoqMediaSinkProcessResult result;
+  ASSERT_NS_SUCCEEDED(sink.ProcessObject("ratatoskr/demo"_ns, "h264-loc"_ns,
+                                         channelId, 73, object, &result));
+  ASSERT_FALSE(result.mAcceptedObject);
+  ASSERT_FALSE(result.mDuplicateObject);
+  ASSERT_FALSE(result.mCompletedAccessUnit);
+
+  McquicMoqAccessUnit accessUnit;
+  ASSERT_FALSE(sink.PopAccessUnit(accessUnit));
+}
+
+TEST(TestMcquicMoqMediaSink, LocMsfUsesObjectSequenceWhenHeaderSequenceIsZero)
+{
+  McquicMoqMediaSink sink;
+  nsTArray<uint8_t> channelId;
+  channelId.AppendElements("qcast-demo-v1", 13);
+  constexpr uint8_t kFirstFrame[] = {0x00, 0x00, 0x01, 0x65, 0x99};
+  constexpr uint8_t kSecondFrame[] = {0x00, 0x00, 0x01, 0x41, 0x9a};
+  auto first = NativeMoqObject(
+      LocMsfPayload(0, 0, 0x01 | 0x08, kFirstFrame, sizeof(kFirstFrame)), 77,
+      0);
+  first.publisher_sequence = 77;
+  first.pts_millis = 77;
+  auto second = NativeMoqObject(
+      LocMsfPayload(0, 0, 0x08, kSecondFrame, sizeof(kSecondFrame)), 78, 0);
+  second.publisher_sequence = 78;
+  second.pts_millis = 78;
+
+  ASSERT_NS_SUCCEEDED(sink.ProcessObject("ratatoskr/demo"_ns,
+                                         "h264-loc-msf"_ns, channelId, 77,
+                                         first));
+  ASSERT_NS_SUCCEEDED(sink.ProcessObject("ratatoskr/demo"_ns,
+                                         "h264-loc-msf"_ns, channelId, 78,
+                                         second));
+
+  McquicMoqAccessUnit accessUnit;
+  ASSERT_TRUE(sink.PopAccessUnit(accessUnit));
+  ASSERT_EQ(accessUnit.mAccessUnitSequence, 77U);
+  ASSERT_EQ(accessUnit.mPtsMillis, 77U);
+  ASSERT_TRUE(sink.PopAccessUnit(accessUnit));
+  ASSERT_EQ(accessUnit.mAccessUnitSequence, 78U);
+  ASSERT_EQ(accessUnit.mPtsMillis, 78U);
   ASSERT_FALSE(sink.PopAccessUnit(accessUnit));
 }
 
@@ -493,6 +620,112 @@ TEST(TestMcquicMoqMediaSink, DirectLocMsfObjectReachesAccessUnit)
   ASSERT_EQ(accessUnit.mPayload.Length(), sizeof(kFrame));
   ASSERT_EQ(std::memcmp(accessUnit.mPayload.Elements(), kFrame, sizeof(kFrame)),
             0);
+  ASSERT_FALSE(sink.PopAccessUnit(accessUnit));
+}
+
+TEST(TestMcquicMoqMediaSink, LocH264FragmentsAssembleAccessUnit)
+{
+  McquicMoqMediaSink sink;
+  nsTArray<uint8_t> channelId;
+  channelId.AppendElements("qcast-demo-v1", 13);
+  constexpr uint8_t kFirst[] = {0x00, 0x00, 0x00, 0x01, 0x67};
+  constexpr uint8_t kSecond[] = {0x68, 0xce};
+  constexpr uint8_t kThird[] = {0x00, 0x00, 0x01, 0x65, 0x88};
+  auto first =
+      NativeMoqObject(LocH264FragmentPayload(1343925, 0x0005, 0, 3, kFirst,
+                                             sizeof(kFirst)),
+                      98638, 0);
+  auto second =
+      NativeMoqObject(LocH264FragmentPayload(1343925, 0x0000, 1, 3, kSecond,
+                                             sizeof(kSecond)),
+                      98639, 1);
+  auto third =
+      NativeMoqObject(LocH264FragmentPayload(1343925, 0x0008, 2, 3, kThird,
+                                             sizeof(kThird)),
+                      98640, 2);
+
+  McquicMoqMediaSinkProcessResult firstResult;
+  ASSERT_NS_SUCCEEDED(sink.ProcessObject("ratatoskr/demo"_ns, "h264-loc"_ns,
+                                         channelId, 98638, first,
+                                         &firstResult));
+  ASSERT_TRUE(firstResult.mAcceptedObject);
+  ASSERT_FALSE(firstResult.mCompletedAccessUnit);
+
+  McquicMoqMediaSinkProcessResult secondResult;
+  ASSERT_NS_SUCCEEDED(sink.ProcessObject("ratatoskr/demo"_ns, "h264-loc"_ns,
+                                         channelId, 98639, second,
+                                         &secondResult));
+  ASSERT_TRUE(secondResult.mAcceptedObject);
+  ASSERT_FALSE(secondResult.mCompletedAccessUnit);
+
+  McquicMoqMediaSinkProcessResult thirdResult;
+  ASSERT_NS_SUCCEEDED(sink.ProcessObject("ratatoskr/demo"_ns, "h264-loc"_ns,
+                                         channelId, 98640, third,
+                                         &thirdResult));
+  ASSERT_TRUE(thirdResult.mAcceptedObject);
+  ASSERT_TRUE(thirdResult.mCompletedAccessUnit);
+  ASSERT_TRUE(thirdResult.mKeyframeCapableAccessUnit);
+
+  McquicMoqAccessUnit accessUnit;
+  ASSERT_TRUE(sink.PopAccessUnit(accessUnit));
+  ASSERT_EQ(accessUnit.mAccessUnitSequence, 1343925U);
+  ASSERT_EQ(accessUnit.mPtsMillis, 1343925U);
+  ASSERT_TRUE(accessUnit.mKeyframe);
+  ASSERT_TRUE(accessUnit.mIndependent);
+  ASSERT_EQ(accessUnit.mPayload.Length(),
+            sizeof(kFirst) + sizeof(kSecond) + sizeof(kThird));
+  ASSERT_EQ(std::memcmp(accessUnit.mPayload.Elements(), kFirst, sizeof(kFirst)),
+            0);
+  ASSERT_EQ(std::memcmp(accessUnit.mPayload.Elements() + sizeof(kFirst),
+                        kSecond, sizeof(kSecond)),
+            0);
+  ASSERT_EQ(std::memcmp(accessUnit.mPayload.Elements() + sizeof(kFirst) +
+                            sizeof(kSecond),
+                        kThird, sizeof(kThird)),
+            0);
+  ASSERT_FALSE(sink.PopAccessUnit(accessUnit));
+}
+
+TEST(TestMcquicMoqMediaSink, LocH264AnnexBIdrMarksKeyframeWithoutFlags)
+{
+  McquicMoqMediaSink sink;
+  nsTArray<uint8_t> channelId;
+  channelId.AppendElements("qcast-demo-v1", 13);
+  constexpr uint8_t kFirst[] = {
+      0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x00, 0x1f,
+      0x00, 0x00, 0x01, 0x68, 0xce,
+  };
+  constexpr uint8_t kSecond[] = {0x00, 0x00, 0x01, 0x65, 0x88};
+  auto first =
+      NativeMoqObject(LocH264FragmentPayload(1344000, 0x0000, 0, 2, kFirst,
+                                             sizeof(kFirst)),
+                      98700, 0);
+  auto second =
+      NativeMoqObject(LocH264FragmentPayload(1344000, 0x0008, 1, 2, kSecond,
+                                             sizeof(kSecond)),
+                      98701, 1);
+
+  McquicMoqMediaSinkProcessResult firstResult;
+  ASSERT_NS_SUCCEEDED(sink.ProcessObject("ratatoskr/demo"_ns, "h264-loc"_ns,
+                                         channelId, 98700, first,
+                                         &firstResult));
+  ASSERT_TRUE(firstResult.mAcceptedObject);
+  ASSERT_FALSE(firstResult.mCompletedAccessUnit);
+
+  McquicMoqMediaSinkProcessResult secondResult;
+  ASSERT_NS_SUCCEEDED(sink.ProcessObject("ratatoskr/demo"_ns, "h264-loc"_ns,
+                                         channelId, 98701, second,
+                                         &secondResult));
+  ASSERT_TRUE(secondResult.mAcceptedObject);
+  ASSERT_TRUE(secondResult.mCompletedAccessUnit);
+  ASSERT_TRUE(secondResult.mKeyframeCapableAccessUnit);
+
+  McquicMoqAccessUnit accessUnit;
+  ASSERT_TRUE(sink.PopAccessUnit(accessUnit));
+  ASSERT_TRUE(accessUnit.mKeyframe);
+  ASSERT_TRUE(accessUnit.mConfig);
+  ASSERT_TRUE(accessUnit.mIndependent);
+  ASSERT_EQ(accessUnit.mPayload.Length(), sizeof(kFirst) + sizeof(kSecond));
   ASSERT_FALSE(sink.PopAccessUnit(accessUnit));
 }
 

@@ -4,9 +4,12 @@
 
 const MCQUIC_FRAME_TOPIC = "mcquic-moq-video-frame";
 const MCQUIC_SESSION_READY_TOPIC = "mcquic-moq-session-ready";
+const SESSION_READY_EVENT = "subscribe-ok";
 
 let gActors = new Set();
 let gObserverRegistered = false;
+let gLastFrame = null;
+let gLastSessionReady = null;
 
 const gMcquicObserver = {
   observe(subject, topic) {
@@ -14,12 +17,16 @@ const gMcquicObserver = {
       let payload = subject.QueryInterface(Ci.nsISupportsCString).data;
       let parsed = JSON.parse(payload);
       if (topic === MCQUIC_FRAME_TOPIC) {
+        gLastFrame = parsed;
         for (let actor of gActors) {
           actor.sendFrame(parsed);
         }
         return;
       }
       if (topic === MCQUIC_SESSION_READY_TOPIC) {
+        if (parsed?.event === SESSION_READY_EVENT) {
+          gLastSessionReady = parsed;
+        }
         for (let actor of gActors) {
           actor.sendSessionReady(parsed);
         }
@@ -52,6 +59,7 @@ export class McquicVideoOverlayParent extends JSWindowActorParent {
   actorCreated() {
     gActors.add(this);
     ensureObserver();
+    this.sendStickyState();
   }
 
   didDestroy() {
@@ -64,6 +72,16 @@ export class McquicVideoOverlayParent extends JSWindowActorParent {
       return;
     }
     ensureObserver();
+    this.sendStickyState();
+  }
+
+  sendStickyState() {
+    if (gLastSessionReady) {
+      this.sendSessionReady(gLastSessionReady);
+    }
+    if (gLastFrame) {
+      this.sendFrame(gLastFrame, true);
+    }
   }
 
   sendSessionReady(session) {
@@ -72,9 +90,9 @@ export class McquicVideoOverlayParent extends JSWindowActorParent {
     } catch (ex) {}
   }
 
-  sendFrame(frame) {
+  sendFrame(frame, sticky = false) {
     try {
-      this.sendAsyncMessage("McquicVideoOverlay:Frame", frame);
+      this.sendAsyncMessage("McquicVideoOverlay:Frame", { ...frame, sticky });
     } catch (ex) {}
   }
 }

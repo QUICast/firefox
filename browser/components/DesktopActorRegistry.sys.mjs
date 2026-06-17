@@ -463,6 +463,8 @@ let JSWINDOWACTORS = {
         DOMDocElementInserted: { capture: true },
         DOMContentLoaded: {},
         pageshow: {},
+        resize: {},
+        scroll: { capture: true },
       },
     },
 

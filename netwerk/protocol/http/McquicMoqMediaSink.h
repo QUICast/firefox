@@ -12,6 +12,7 @@
 #include "nsHashKeys.h"
 #include "nsString.h"
 #include "nsTHashMap.h"
+#include "nsTHashSet.h"
 #include "nsTArray.h"
 #include "mozilla/UniquePtr.h"
 
@@ -29,6 +30,13 @@ struct McquicMoqAccessUnit {
   bool mConfig = false;
   bool mIndependent = false;
   nsTArray<uint8_t> mPayload;
+};
+
+struct McquicMoqMediaSinkProcessResult {
+  bool mAcceptedObject = false;
+  bool mDuplicateObject = false;
+  bool mCompletedAccessUnit = false;
+  bool mKeyframeCapableAccessUnit = false;
 };
 
 class McquicMoqAccessUnitConsumer {
@@ -53,7 +61,8 @@ class McquicMoqMediaSink final {
                          const nsACString& aTrackName,
                          const nsTArray<uint8_t>& aChannelId,
                          uint64_t aPacketNumber,
-                         const McquicMoqDatagramExternal& aObject);
+                         const McquicMoqDatagramExternal& aObject,
+                         McquicMoqMediaSinkProcessResult* aResult = nullptr);
 
   bool PopAccessUnit(McquicMoqAccessUnit& aAccessUnit);
   nsresult DrainAccessUnits(McquicMoqAccessUnitConsumer& aConsumer);
@@ -80,9 +89,12 @@ class McquicMoqMediaSink final {
     nsTArray<FragmentSlot> mFragments;
   };
 
-  nsresult EmitIfComplete(const nsCString& aKey, PendingAccessUnit& aPending);
+  nsresult EmitIfComplete(const nsCString& aKey, PendingAccessUnit& aPending,
+                          McquicMoqMediaSinkProcessResult* aResult);
 
   nsTHashMap<nsCStringHashKey, PendingAccessUnit> mPendingAccessUnits;
+  nsTHashSet<nsCString> mAcceptedObjects;
+  nsTArray<nsCString> mAcceptedObjectOrder;
   nsTArray<McquicMoqAccessUnit> mCompletedAccessUnits;
 };
 
