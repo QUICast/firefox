@@ -7,6 +7,11 @@ const { HttpServer } = ChromeUtils.importESModule(
   "resource://testing-common/httpd.sys.mjs"
 );
 
+const NATIVE_MOQ_DEMO_PREF =
+  "network.http.http3.mcquic.native_moq_demo.enabled";
+const NATIVE_MOQ_DEMO_ORIGIN_PREF =
+  "network.http.http3.mcquic.native_moq_demo.origin";
+
 const IS_HEADLESS = Services.env.get("MOZ_HEADLESS");
 
 function writeHtml(response, body, csp = null) {
@@ -197,8 +202,8 @@ add_task(async function test_mcquic_overlay_ignores_page_csp_style_blocking() {
   let origin = startServer();
   await SpecialPowers.pushPrefEnv({
     set: [
-      ["network.http.http3.mcquic.moq_media_overlay.enabled", true],
-      ["network.http.http3.mcquic.moq_subscribe.origin", origin],
+      [NATIVE_MOQ_DEMO_PREF, true],
+      [NATIVE_MOQ_DEMO_ORIGIN_PREF, origin],
     ],
   });
 
@@ -265,8 +270,8 @@ add_task(async function test_mcquic_overlay_accepts_decoded_frame_as_readiness()
   let origin = startServer();
   await SpecialPowers.pushPrefEnv({
     set: [
-      ["network.http.http3.mcquic.moq_media_overlay.enabled", true],
-      ["network.http.http3.mcquic.moq_subscribe.origin", origin],
+      [NATIVE_MOQ_DEMO_PREF, true],
+      [NATIVE_MOQ_DEMO_ORIGIN_PREF, origin],
     ],
   });
 
@@ -313,8 +318,8 @@ add_task(async function test_mcquic_overlay_accepts_transport_child_origin() {
   let transportOrigin = origin.replace("://localhost:", "://moq.localhost:");
   await SpecialPowers.pushPrefEnv({
     set: [
-      ["network.http.http3.mcquic.moq_media_overlay.enabled", true],
-      ["network.http.http3.mcquic.moq_subscribe.origin", transportOrigin],
+      [NATIVE_MOQ_DEMO_PREF, true],
+      [NATIVE_MOQ_DEMO_ORIGIN_PREF, transportOrigin],
     ],
   });
 
@@ -349,8 +354,8 @@ add_task(async function test_mcquic_overlay_coalesces_frame_bursts() {
   let origin = startServer();
   await SpecialPowers.pushPrefEnv({
     set: [
-      ["network.http.http3.mcquic.moq_media_overlay.enabled", true],
-      ["network.http.http3.mcquic.moq_subscribe.origin", origin],
+      [NATIVE_MOQ_DEMO_PREF, true],
+      [NATIVE_MOQ_DEMO_ORIGIN_PREF, origin],
     ],
   });
 
@@ -386,8 +391,8 @@ add_task(async function test_mcquic_overlay_replays_ready_state_after_reload() {
   let origin = startServer();
   await SpecialPowers.pushPrefEnv({
     set: [
-      ["network.http.http3.mcquic.moq_media_overlay.enabled", true],
-      ["network.http.http3.mcquic.moq_subscribe.origin", origin],
+      [NATIVE_MOQ_DEMO_PREF, true],
+      [NATIVE_MOQ_DEMO_ORIGIN_PREF, origin],
     ],
   });
 
@@ -430,8 +435,8 @@ add_task(async function test_mcquic_overlay_tracks_scroll_position() {
   let origin = startServer();
   await SpecialPowers.pushPrefEnv({
     set: [
-      ["network.http.http3.mcquic.moq_media_overlay.enabled", true],
-      ["network.http.http3.mcquic.moq_subscribe.origin", origin],
+      [NATIVE_MOQ_DEMO_PREF, true],
+      [NATIVE_MOQ_DEMO_ORIGIN_PREF, origin],
     ],
   });
 

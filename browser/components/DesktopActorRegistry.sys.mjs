@@ -469,7 +469,7 @@ let JSWINDOWACTORS = {
     },
 
     matches: ["http://*/*", "https://*/*"],
-    enablePreference: "network.http.http3.mcquic.moq_media_overlay.enabled",
+    enablePreference: "network.http.http3.mcquic.native_moq_demo.enabled",
     allFrames: true,
   },
 

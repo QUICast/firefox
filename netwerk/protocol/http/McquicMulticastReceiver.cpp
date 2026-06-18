@@ -21,7 +21,7 @@ McquicMulticastReceiver::~McquicMulticastReceiver() {
 }
 
 bool McquicMulticastReceiver::Enabled() {
-  return StaticPrefs::network_http_http3_mcquic_enabled();
+  return StaticPrefs::network_http_http3_mcquic_native_moq_demo_enabled();
 }
 
 nsresult McquicMulticastReceiver::EnsureReady() const {

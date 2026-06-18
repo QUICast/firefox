@@ -3,8 +3,9 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 const OVERLAY_ENABLED_PREF =
-  "network.http.http3.mcquic.moq_media_overlay.enabled";
-const SUBSCRIBE_ORIGIN_PREF = "network.http.http3.mcquic.moq_subscribe.origin";
+  "network.http.http3.mcquic.native_moq_demo.enabled";
+const SUBSCRIBE_ORIGIN_PREF =
+  "network.http.http3.mcquic.native_moq_demo.origin";
 const SESSION_READY_EVENT = "subscribe-ok";
 const FRAME_STALE_MS = 1500;
 const OVERLAY_SHEET_URI =

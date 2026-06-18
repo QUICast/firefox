@@ -305,7 +305,7 @@ static void NotifyMcquicMoqVideoFrame(nsCString aPayload) {
 static void MaybeNotifyOverlayFrame(const McquicMoqAccessUnit& aAccessUnit,
                                     uint64_t aDecodedFrames,
                                     VideoData* aVideo) {
-  if (!StaticPrefs::network_http_http3_mcquic_moq_media_overlay_enabled()) {
+  if (!StaticPrefs::network_http_http3_mcquic_native_moq_demo_enabled()) {
     return;
   }
 
@@ -709,24 +709,18 @@ class McquicMoqPdmAccessUnitConsumer final
 }  // namespace
 
 bool McquicMoqAccessUnitConsumer::Enabled() {
-  return McquicMoqMediaSink::Enabled() &&
-         (StaticPrefs::network_http_http3_mcquic_moq_media_handoff_enabled() ||
-          StaticPrefs::network_http_http3_mcquic_moq_media_decode_enabled());
+  return McquicMoqMediaSink::Enabled();
 }
 
 UniquePtr<McquicMoqAccessUnitConsumer> CreateMcquicMoqAccessUnitConsumer() {
   if (!McquicMoqAccessUnitConsumer::Enabled()) {
     return nullptr;
   }
-  if (StaticPrefs::network_http_http3_mcquic_moq_media_decode_enabled()) {
-    return MakeUnique<McquicMoqPdmAccessUnitConsumer>();
-  }
-  return MakeUnique<McquicMoqLoggingAccessUnitConsumer>();
+  return MakeUnique<McquicMoqPdmAccessUnitConsumer>();
 }
 
 bool McquicMoqMediaSink::Enabled() {
-  return StaticPrefs::network_http_http3_mcquic_enabled() &&
-         StaticPrefs::network_http_http3_mcquic_moq_media_sink_enabled();
+  return StaticPrefs::network_http_http3_mcquic_native_moq_demo_enabled();
 }
 
 nsresult McquicMoqMediaSink::ProcessObject(

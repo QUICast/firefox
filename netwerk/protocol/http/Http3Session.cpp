@@ -75,15 +75,20 @@ const uint32_t TRANSPORT_ERROR_STATELESS_RESET = 20;
 const uint64_t MCQUIC_POLL_INTERVAL_MS = 20;
 const uint32_t MCQUIC_MAX_PACKETS_PER_POLL = 32;
 const uint64_t MCQUIC_MOQ_MULTICAST_STALL_MS = 1000;
-const char MCQUIC_MOQ_SUBSCRIBE_ORIGIN_PREF[] =
-    "network.http.http3.mcquic.moq_subscribe.origin";
-const char MCQUIC_MOQ_SUBSCRIBE_NAMESPACE_PREF[] =
-    "network.http.http3.mcquic.moq_subscribe.track_namespace";
-const char MCQUIC_MOQ_SUBSCRIBE_TRACK_PREF[] =
-    "network.http.http3.mcquic.moq_subscribe.track_name";
-const char MCQUIC_MOQ_DEFAULT_NAMESPACE[] = "ratatoskr/demo";
-const char MCQUIC_MOQ_DEFAULT_TRACK[] = "h264-loc-msf";
+const char MCQUIC_NATIVE_MOQ_DEMO_ORIGIN_PREF[] =
+    "network.http.http3.mcquic.native_moq_demo.origin";
+const char MCQUIC_NATIVE_MOQ_DEMO_TRACK_PREF[] =
+    "network.http.http3.mcquic.native_moq_demo.track";
 const char MCQUIC_MOQ_SESSION_READY_TOPIC[] = "mcquic-moq-session-ready";
+
+static bool McquicTransportEnabled() {
+  return StaticPrefs::network_http_http3_mcquic_enabled() ||
+         StaticPrefs::network_http_http3_mcquic_native_moq_demo_enabled();
+}
+
+static bool McquicNativeMoqDemoEnabled() {
+  return StaticPrefs::network_http_http3_mcquic_native_moq_demo_enabled();
+}
 
 static void McquicAppendJsonString(nsACString& aOut,
                                    const nsACString& aValue) {
@@ -255,13 +260,34 @@ static uint64_t McquicRawMediaObjectId(const nsTArray<uint8_t>& aPayload,
   return aFallback;
 }
 
-static nsCString McquicMoqStringPref(const char* aPref,
-                                     const char* aDefaultValue) {
+static nsCString McquicMoqStringPref(const char* aPref) {
   nsCString value;
-  if (NS_FAILED(Preferences::GetCString(aPref, value)) || value.IsEmpty()) {
-    value.Assign(aDefaultValue);
+  if (NS_FAILED(Preferences::GetCString(aPref, value))) {
+    value.Truncate();
   }
+  value.Trim(" \t\r\n");
   return value;
+}
+
+static bool McquicNativeMoqDemoTrack(nsACString& aNamespace,
+                                     nsACString& aTrackName) {
+  nsCString value = McquicMoqStringPref(MCQUIC_NATIVE_MOQ_DEMO_TRACK_PREF);
+  if (value.IsEmpty()) {
+    return false;
+  }
+
+  int32_t separator = value.FindChar('|');
+  if (separator < 0) {
+    separator = value.RFindChar('/');
+  }
+  if (separator <= 0 ||
+      separator >= static_cast<int32_t>(value.Length()) - 1) {
+    return false;
+  }
+
+  aNamespace.Assign(Substring(value, 0, separator));
+  aTrackName.Assign(Substring(value, separator + 1));
+  return !aNamespace.IsEmpty() && !aTrackName.IsEmpty();
 }
 
 static nsCString McquicMoqHostFromOrigin(const nsACString& aValue) {
@@ -310,8 +336,10 @@ static bool McquicMoqHostMatchesAllowed(const nsACString& aCandidate,
 static bool McquicMoqOriginAllowed(const nsACString& aAllowed,
                                    const nsACString& aOrigin,
                                    const nsACString& aAuthority) {
-  if (aAllowed.IsEmpty() || aAllowed.Equals(aOrigin) ||
-      aAllowed.Equals(aAuthority)) {
+  if (aAllowed.IsEmpty()) {
+    return false;
+  }
+  if (aAllowed.Equals(aOrigin) || aAllowed.Equals(aAuthority)) {
     return true;
   }
 
@@ -428,7 +456,7 @@ nsresult Http3Session::Init(const nsHttpConnectionInfo* aConnInfo,
   NetAddr peerAddr;
   MOZ_ALWAYS_SUCCEEDS(aPeerAddr->GetNetAddr(&peerAddr));
 
-  bool mcquicEnabled = StaticPrefs::network_http_http3_mcquic_enabled();
+  bool mcquicEnabled = McquicTransportEnabled();
   LOG3(
       ("Http3Session::Init origin=%s, alpn=%s, selfAddr=%s, peerAddr=%s,"
        " qpack table size=%u, max blocked streams=%u webtransport=%d "
@@ -1451,7 +1479,7 @@ nsresult Http3Session::ProcessEvents() {
 nsresult Http3Session::EnsureMcquicReceiver() {
   MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
-  if (!StaticPrefs::network_http_http3_mcquic_enabled()) {
+  if (!McquicNativeMoqDemoEnabled()) {
     return NS_ERROR_NOT_AVAILABLE;
   }
 
@@ -1465,7 +1493,7 @@ nsresult Http3Session::EnsureMcquicReceiver() {
 nsresult Http3Session::SendMcquicLimits() {
   MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
-  if (!StaticPrefs::network_http_http3_mcquic_enabled() || mMcquicLimitsSent) {
+  if (!McquicTransportEnabled() || mMcquicLimitsSent) {
     return NS_OK;
   }
 
@@ -1490,9 +1518,7 @@ nsresult Http3Session::SendMcquicLimits() {
 nsresult Http3Session::EnsureMcquicMoqSubscribe() {
   MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
-  if (!StaticPrefs::network_http_http3_mcquic_enabled() ||
-      !StaticPrefs::network_http_http3_mcquic_moq_subscribe_enabled() ||
-      mMcquicMoqSubscribeQueued) {
+  if (!McquicNativeMoqDemoEnabled() || mMcquicMoqSubscribeQueued) {
     return NS_OK;
   }
 
@@ -1500,19 +1526,27 @@ nsresult Http3Session::EnsureMcquicMoqSubscribe() {
   nsCString authority(origin);
   authority.AppendPrintf(":%d", mConnInfo->OriginPort());
   nsCString allowedOrigin;
-  Preferences::GetCString(MCQUIC_MOQ_SUBSCRIBE_ORIGIN_PREF, allowedOrigin);
+  Preferences::GetCString(MCQUIC_NATIVE_MOQ_DEMO_ORIGIN_PREF, allowedOrigin);
   if (!McquicMoqOriginAllowed(allowedOrigin, origin, authority)) {
     LOG(
-        ("MCQUIC MoQ subscription skipped for origin [this=%p origin=%s "
+        ("MCQUIC native MoQ demo skipped for origin [this=%p origin=%s "
          "authority=%s allowed=%s]",
          this, origin.get(), authority.get(), allowedOrigin.get()));
     return NS_OK;
   }
 
-  nsCString trackNamespace = McquicMoqStringPref(
-      MCQUIC_MOQ_SUBSCRIBE_NAMESPACE_PREF, MCQUIC_MOQ_DEFAULT_NAMESPACE);
-  nsCString trackName = McquicMoqStringPref(MCQUIC_MOQ_SUBSCRIBE_TRACK_PREF,
-                                            MCQUIC_MOQ_DEFAULT_TRACK);
+  nsCString trackNamespace;
+  nsCString trackName;
+  if (!McquicNativeMoqDemoTrack(trackNamespace, trackName)) {
+    nsCString configuredTrack =
+        McquicMoqStringPref(MCQUIC_NATIVE_MOQ_DEMO_TRACK_PREF);
+    LOG(
+        ("MCQUIC native MoQ demo skipped; no valid track override configured "
+         "[this=%p origin=%s track_pref=%s]",
+         this, origin.get(), configuredTrack.get()));
+    return NS_OK;
+  }
+
   nsTArray<uint8_t> payload;
   nsresult rv = neqo_mcquic_moq_encode_setup_subscribe(
       &authority, &trackNamespace, &trackName, &payload);
@@ -1560,9 +1594,8 @@ nsresult Http3Session::EnsureMcquicMoqSubscribe() {
 nsresult Http3Session::ProcessMcquicMoqControlStream() {
   MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
-  if (!StaticPrefs::network_http_http3_mcquic_enabled() ||
-      !StaticPrefs::network_http_http3_mcquic_moq_subscribe_enabled() ||
-      !mMcquicMoqSubscribeQueued || mMcquicMoqControlFin) {
+  if (!McquicNativeMoqDemoEnabled() || !mMcquicMoqSubscribeQueued ||
+      mMcquicMoqControlFin) {
     return NS_OK;
   }
 
@@ -1729,9 +1762,8 @@ void Http3Session::MaybeFallbackMcquicMoqUnicast(const char* aReason) {
 nsresult Http3Session::ProcessMcquicMoqUnicastDatagrams() {
   MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
-  if (!StaticPrefs::network_http_http3_mcquic_enabled() ||
-      !StaticPrefs::network_http_http3_mcquic_moq_subscribe_enabled() ||
-      !mMcquicMoqSubscribeQueued || mMcquicMoqTrackAliases.IsEmpty()) {
+  if (!McquicNativeMoqDemoEnabled() || !mMcquicMoqSubscribeQueued ||
+      mMcquicMoqTrackAliases.IsEmpty()) {
     return NS_OK;
   }
 
@@ -1781,7 +1813,7 @@ nsresult Http3Session::ProcessMcquicMoqUnicastDatagrams() {
 nsresult Http3Session::ProcessMcquicControlFrames() {
   MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
-  if (!StaticPrefs::network_http_http3_mcquic_enabled()) {
+  if (!McquicTransportEnabled()) {
     return NS_OK;
   }
 
@@ -1945,7 +1977,7 @@ nsresult Http3Session::ProcessMcquicControlFrames() {
 nsresult Http3Session::ProcessMcquicPackets() {
   MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
-  if (!StaticPrefs::network_http_http3_mcquic_enabled() || !mMcquicReceiver ||
+  if (!McquicNativeMoqDemoEnabled() || !mMcquicReceiver ||
       mMcquicChannels.IsEmpty()) {
     return NS_OK;
   }
@@ -2203,7 +2235,7 @@ void Http3Session::ProcessMcquicMoqRawMediaDatagram(
 void Http3Session::ProcessMcquicValidatedDatagrams() {
   MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
-  if (!StaticPrefs::network_http_http3_mcquic_enabled()) {
+  if (!McquicNativeMoqDemoEnabled()) {
     return;
   }
 
@@ -2289,7 +2321,7 @@ void Http3Session::ProcessMcquicValidatedDatagrams() {
 void Http3Session::ScheduleMcquicPoll() {
   MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
-  if (!StaticPrefs::network_http_http3_mcquic_enabled() ||
+  if (!McquicNativeMoqDemoEnabled() ||
       mMcquicChannels.IsEmpty() || IsClosing()) {
     return;
   }

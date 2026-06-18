@@ -18,7 +18,8 @@
 
 namespace mozilla::net {
 
-constexpr auto kMcquicMcrxPref = "network.http.http3.mcquic.enabled";
+constexpr auto kMcquicNativeMoqDemoPref =
+    "network.http.http3.mcquic.native_moq_demo.enabled";
 constexpr auto kSource = "127.0.0.1"_ns;
 constexpr auto kGroup = "232.0.0.1"_ns;
 constexpr auto kInterface = "127.0.0.1"_ns;
@@ -212,9 +213,10 @@ class RecordingMcquicMoqAccessUnitConsumer final
 
 TEST(TestMcquicMulticastReceiver, PrefOffIsInert)
 {
-  ASSERT_NS_SUCCEEDED(Preferences::SetBool(kMcquicMcrxPref, false));
+  ASSERT_NS_SUCCEEDED(Preferences::SetBool(kMcquicNativeMoqDemoPref, false));
   auto clearPref =
-      MakeScopeExit([] { Preferences::ClearUser(kMcquicMcrxPref); });
+      MakeScopeExit(
+          [] { Preferences::ClearUser(kMcquicNativeMoqDemoPref); });
 
   auto* sts = gSocketTransportService;
   ASSERT_TRUE(sts);
@@ -233,9 +235,10 @@ TEST(TestMcquicMulticastReceiver, PrefOffIsInert)
 
 TEST(TestMcquicMulticastReceiver, LoopbackSsmLogsPacketWhenPrefOn)
 {
-  ASSERT_NS_SUCCEEDED(Preferences::SetBool(kMcquicMcrxPref, true));
+  ASSERT_NS_SUCCEEDED(Preferences::SetBool(kMcquicNativeMoqDemoPref, true));
   auto clearPref =
-      MakeScopeExit([] { Preferences::ClearUser(kMcquicMcrxPref); });
+      MakeScopeExit(
+          [] { Preferences::ClearUser(kMcquicNativeMoqDemoPref); });
 
   uint16_t port = 0;
   ASSERT_NS_SUCCEEDED(PickUnusedUdpPort(&port));

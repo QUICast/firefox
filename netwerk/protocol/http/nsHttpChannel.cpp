@@ -179,8 +179,12 @@ namespace {
   ((result) == NS_ERROR_FILE_NOT_FOUND ||     \
    (result) == NS_ERROR_FILE_CORRUPTED || (result) == NS_ERROR_OUT_OF_MEMORY)
 
-constexpr const char* kMcquicMoqSubscribeOriginPref =
-    "network.http.http3.mcquic.moq_subscribe.origin";
+constexpr const char* kMcquicNativeMoqDemoOriginPref =
+    "network.http.http3.mcquic.native_moq_demo.origin";
+
+static bool McquicNativeMoqDemoEnabled() {
+  return StaticPrefs::network_http_http3_mcquic_native_moq_demo_enabled();
+}
 
 static nsCString McquicMoqHostFromOrigin(const nsACString& aValue) {
   nsCString host(aValue);
@@ -229,9 +233,7 @@ static bool McquicMoqNativeSurfaceRequiresHttp3(nsIURI* aURI,
                                                 const nsACString& aScheme,
                                                 const nsACString& aHost,
                                                 int32_t aPort) {
-  if (!StaticPrefs::network_http_http3_mcquic_enabled() ||
-      !StaticPrefs::network_http_http3_mcquic_moq_subscribe_enabled() ||
-      !aScheme.EqualsLiteral("https")) {
+  if (!McquicNativeMoqDemoEnabled() || !aScheme.EqualsLiteral("https")) {
     return false;
   }
 
@@ -242,7 +244,7 @@ static bool McquicMoqNativeSurfaceRequiresHttp3(nsIURI* aURI,
   }
 
   nsAutoCString allowedOrigin;
-  Preferences::GetCString(kMcquicMoqSubscribeOriginPref, allowedOrigin);
+  Preferences::GetCString(kMcquicNativeMoqDemoOriginPref, allowedOrigin);
   if (allowedOrigin.IsEmpty()) {
     return false;
   }

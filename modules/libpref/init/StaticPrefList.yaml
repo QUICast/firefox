@@ -16066,54 +16066,28 @@
   value: false
   mirror: always
 
-# Enable experimental, privileged MCQUIC native MoQT subscriber control stream.
-- name: network.http.http3.mcquic.moq_subscribe.enabled
+# Enable the experimental native MoQ demo path. This implies MCQUIC transport
+# support and internally enables the native subscriber, media sink, decoder, and
+# debug overlay.
+- name: network.http.http3.mcquic.native_moq_demo.enabled
   type: RelaxedAtomicBool
   value: false
   mirror: always
 
-# Restrict experimental MCQUIC MoQT subscription to this origin. Empty allows
-# any HTTP/3 origin when the experimental subscriber pref is enabled.
-- name: network.http.http3.mcquic.moq_subscribe.origin
+# Restrict the experimental native MoQ demo path to this origin. Empty disables
+# the native demo subscriber/overlay until an origin is explicitly configured.
+- name: network.http.http3.mcquic.native_moq_demo.origin
   type: String
   value: ""
   mirror: never
 
-# Experimental MCQUIC MoQT subscription namespace.
-- name: network.http.http3.mcquic.moq_subscribe.track_namespace
+# Optional native MoQ demo track override, formatted as
+# "<track-namespace>|<track-name>". Empty keeps the native debug subscriber
+# disabled until the track can be learned from server/page metadata.
+- name: network.http.http3.mcquic.native_moq_demo.track
   type: String
-  value: "ratatoskr/demo"
+  value: ""
   mirror: never
-
-# Experimental MCQUIC MoQT subscription track name.
-- name: network.http.http3.mcquic.moq_subscribe.track_name
-  type: String
-  value: "h264-loc"
-  mirror: never
-
-# Enable experimental, privileged MCQUIC MoQT media sink logging.
-- name: network.http.http3.mcquic.moq_media_sink.enabled
-  type: RelaxedAtomicBool
-  value: false
-  mirror: always
-
-# Enable experimental, privileged MCQUIC MoQT media handoff.
-- name: network.http.http3.mcquic.moq_media_handoff.enabled
-  type: RelaxedAtomicBool
-  value: false
-  mirror: always
-
-# Enable experimental, privileged MCQUIC MoQT media decode logging.
-- name: network.http.http3.mcquic.moq_media_decode.enabled
-  type: RelaxedAtomicBool
-  value: false
-  mirror: always
-
-# Enable experimental, privileged MCQUIC MoQT decoded video overlay.
-- name: network.http.http3.mcquic.moq_media_overlay.enabled
-  type: RelaxedAtomicBool
-  value: false
-  mirror: always
 
 # Receive buffer size of QUIC socket
 - name: network.http.http3.recvBufferSize
