@@ -20,8 +20,24 @@ The native multicast demo path is controlled by one demo switch plus an origin
 allowlist and an explicit temporary track override. `--setpref` is not supported
 when running with an explicit profile, so write the prefs to `user.js`.
 
+On macOS:
+
 ```bash
 PROFILE=/private/tmp/mcquic-firefox-profile-live
+mkdir -p "$PROFILE"
+
+cat > "$PROFILE/user.js" <<'EOF'
+user_pref("network.http.http3.enable", true);
+user_pref("network.http.http3.mcquic.native_moq_demo.enabled", true);
+user_pref("network.http.http3.mcquic.native_moq_demo.origin", "live.quicast.de");
+user_pref("network.http.http3.mcquic.native_moq_demo.track", "ratatoskr/demo|h264-loc-msf");
+EOF
+```
+
+On Linux/Ubuntu, use `/tmp` instead of `/private/tmp`:
+
+```bash
+PROFILE=/tmp/mcquic-firefox-profile-live
 mkdir -p "$PROFILE"
 
 cat > "$PROFILE/user.js" <<'EOF'
@@ -50,11 +66,25 @@ network.http.http3.mcquic.moq_media_*
 
 Open the bare site. Do not add `?nativeFirefoxTrigger=1`.
 
+On macOS:
+
 ```bash
 MOZ_LOG="timestamp,nsHttp:5,WebTransport:5" \
 MOZ_LOG_FILE="$HOME/Desktop/firefox-mcquic.log" \
 ./mach run \
   --profile /private/tmp/mcquic-firefox-profile-live \
+  -- \
+  --no-remote \
+  https://live.quicast.de/
+```
+
+On Linux/Ubuntu:
+
+```bash
+MOZ_LOG="timestamp,sync,nsHttp:5,WebTransport:5" \
+MOZ_LOG_FILE="$HOME/firefox-mcquic.log" \
+./mach run \
+  --profile /tmp/mcquic-firefox-profile-live \
   -- \
   --no-remote \
   https://live.quicast.de/
@@ -96,11 +126,42 @@ corresponding multicast IP packets from the AMT relay to the local interface.
 
 ## Quick Diagnostics
 
+If Firefox exits immediately on Linux/Ubuntu with a popup like "Firefox is
+already running but not responding", that usually means the profile is locked or
+stale rather than a graphics failure. The line `ATTENTION: default value of
+option mesa_glthread overridden` is usually harmless Mesa noise.
+
+Check for leftover Firefox processes:
+
+```bash
+pgrep -af 'firefox|plugin-container|Web Content'
+```
+
+If nothing relevant is still running, remove stale profile locks:
+
+```bash
+PROFILE=/tmp/mcquic-firefox-profile-live
+rm -f "$PROFILE/.parentlock" "$PROFILE/lock"
+```
+
+For a one-off clean run, create a fresh profile:
+
+```bash
+PROFILE=/tmp/mcquic-firefox-profile-live-$(date +%s)
+mkdir -p "$PROFILE"
+```
+
+Then write the `user.js` prefs above into that fresh profile and run with
+`--profile "$PROFILE"`.
+
 Useful log filter:
 
 ```bash
+LOG_FILE="$HOME/firefox-mcquic.log" # Linux/Ubuntu
+# LOG_FILE="$HOME/Desktop/firefox-mcquic.log" # macOS
+
 grep -E "MoQ setup complete|MoQ subscribed|MC_ANNOUNCE|multicast join attempted|mcrx packet|MC_ACK|unicast object received|media frame decoded|delivery mode" \
-  "$HOME/Desktop/firefox-mcquic.log"
+  "$LOG_FILE"
 ```
 
 Useful landmarks:
