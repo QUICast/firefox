@@ -940,6 +940,12 @@ TEST(H264, AnnexBExtractExtraDataForAVCC)
   EXPECT_EQ(avcc.mAVCProfileIndication, 100u);
   EXPECT_EQ(avcc.mProfileCompatibility, 0u);
   EXPECT_EQ(avcc.mAVCLevelIndication, 31u);
+  ASSERT_EQ(avcc.mSPSs[0].mNALU.Length(), 4u);
+  EXPECT_EQ(avcc.mSPSs[0].mNALU[0], 0x67u);
+  EXPECT_EQ(avcc.mSPSs[0].mNALU[1], 0x64u);
+  ASSERT_EQ(avcc.mPPSs[0].mNALU.Length(), 2u);
+  EXPECT_EQ(avcc.mPPSs[0].mNALU[0], 0x68u);
+  EXPECT_EQ(avcc.mPPSs[0].mNALU[1], 0xCEu);
 }
 
 TEST(H265, HVCCParsingSuccess)

@@ -83,16 +83,24 @@ class McquicMoqMediaSink final {
     uint64_t mLastPacketNumber = 0;
     uint16_t mFragmentCount = 0;
     uint16_t mReceivedFragments = 0;
+    bool mOpenEnded = false;
     bool mKeyframe = false;
     bool mConfig = false;
     bool mIndependent = false;
     nsTArray<FragmentSlot> mFragments;
   };
 
+  struct OpenEndedAccessUnit {
+    uint64_t mAccessUnitSequence = 0;
+    uint16_t mNextFragmentIndex = 1;
+  };
+
   nsresult EmitIfComplete(const nsCString& aKey, PendingAccessUnit& aPending,
                           McquicMoqMediaSinkProcessResult* aResult);
 
   nsTHashMap<nsCStringHashKey, PendingAccessUnit> mPendingAccessUnits;
+  nsTHashMap<nsCStringHashKey, OpenEndedAccessUnit>
+      mOpenEndedAccessUnitsByTrack;
   nsTHashSet<nsCString> mAcceptedObjects;
   nsTArray<nsCString> mAcceptedObjectOrder;
   nsTArray<McquicMoqAccessUnit> mCompletedAccessUnits;

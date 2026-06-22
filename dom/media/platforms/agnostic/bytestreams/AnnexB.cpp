@@ -481,7 +481,11 @@ RefPtr<MediaByteBuffer> AnnexB::ExtractExtraDataForAVCC(
   const auto& ppsEntry = paramSets.ElementAt(ppsIndex);
   const auto sps = aSpan.Subspan(spsEntry.mOffset, spsEntry.mSize);
   const auto pps = aSpan.Subspan(ppsEntry.mOffset, ppsEntry.mSize);
-  H264::WriteExtraData(avcc, sps[1], sps[2], sps[3], sps, pps);
+  if (sps.Length() < 4 || pps.Length() < 2) {
+    return nullptr;
+  }
+  H264::WriteExtraData(avcc, sps[1], sps[2], sps[3], sps.Subspan(1),
+                       pps.Subspan(1));
   return avcc;
 }
 

@@ -326,6 +326,7 @@ class Http3Session final : public Http3SessionBase,
   nsresult EnsureMcquicReceiver();
   nsresult SendMcquicLimits();
   nsresult EnsureMcquicMoqSubscribe();
+  void EnsureMcquicMoqImplicitFallbackTrackAlias();
   nsresult ProcessMcquicMoqControlStream();
   nsresult ProcessMcquicMoqUnicastDatagrams();
   nsresult ProcessMcquicControlFrames();
@@ -335,9 +336,14 @@ class Http3Session final : public Http3SessionBase,
                                     const nsTArray<uint8_t>& aChannelId,
                                     uint64_t aPacketNumber,
                                     const char* aSource);
+  bool ProcessMcquicMoqRawMediaPayload(const nsTArray<uint8_t>& aPayload,
+                                       const nsTArray<uint8_t>& aChannelId,
+                                       uint64_t aPacketNumber,
+                                       const char* aSource, bool aIsMulticast,
+                                       bool aAllowSubscribedAnnexB);
   void ProcessMcquicMoqRawMediaDatagram(const McquicChannelDatagram& aDatagram,
-                                        const nsACString& aChannelHex,
-                                        const char* aFormat);
+                                        const char* aFormat,
+                                        const char* aSource, bool aIsMulticast);
   void DrainMcquicMoqAccessUnits(const char* aSource);
   void NoteMcquicMoqMulticastMediaProgress(
       const McquicMoqMediaSinkProcessResult& aResult, const char* aSource);
@@ -419,6 +425,7 @@ class Http3Session final : public Http3SessionBase,
   nsTHashMap<nsUint64HashKey, nsCString> mMcquicSubscriptionToChannel;
   nsTHashMap<nsUint64HashKey, McquicMoqTrackInfo> mMcquicMoqTrackAliases;
   nsTArray<uint8_t> mMcquicMoqControlBuffer;
+  nsTArray<nsTArray<uint8_t>> mMcquicMoqDeferredUnicastDatagrams;
   nsCString mMcquicMoqTrackNamespace;
   nsCString mMcquicMoqTrackName;
   uint64_t mMcquicLimitsSequence = 0;

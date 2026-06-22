@@ -75,6 +75,8 @@ const uint32_t TRANSPORT_ERROR_STATELESS_RESET = 20;
 const uint64_t MCQUIC_POLL_INTERVAL_MS = 20;
 const uint32_t MCQUIC_MAX_PACKETS_PER_POLL = 32;
 const uint64_t MCQUIC_MOQ_MULTICAST_STALL_MS = 1000;
+const uint32_t MCQUIC_MOQ_MAX_DEFERRED_UNICAST_DATAGRAMS = 64;
+const uint64_t MCQUIC_MOQ_NATIVE_DEMO_FALLBACK_TRACK_ALIAS = 1;
 const char MCQUIC_NATIVE_MOQ_DEMO_ORIGIN_PREF[] =
     "network.http.http3.mcquic.native_moq_demo.origin";
 const char MCQUIC_NATIVE_MOQ_DEMO_TRACK_PREF[] =
@@ -90,8 +92,7 @@ static bool McquicNativeMoqDemoEnabled() {
   return StaticPrefs::network_http_http3_mcquic_native_moq_demo_enabled();
 }
 
-static void McquicAppendJsonString(nsACString& aOut,
-                                   const nsACString& aValue) {
+static void McquicAppendJsonString(nsACString& aOut, const nsACString& aValue) {
   aOut.Append('"');
   for (auto iter = aValue.BeginReading(), end = aValue.EndReading();
        iter != end; ++iter) {
@@ -187,18 +188,18 @@ static nsCString McquicHexPrefix(const nsTArray<uint8_t>& aBytes,
 }
 
 static bool McquicLooksLikeQvf1(const nsTArray<uint8_t>& aPayload) {
-  return aPayload.Length() >= 4 && aPayload[0] == 'Q' &&
-         aPayload[1] == 'V' && aPayload[2] == 'F' && aPayload[3] == '1';
+  return aPayload.Length() >= 4 && aPayload[0] == 'Q' && aPayload[1] == 'V' &&
+         aPayload[2] == 'F' && aPayload[3] == '1';
 }
 
 static bool McquicLooksLikeLocMsf(const nsTArray<uint8_t>& aPayload) {
   if (aPayload.Length() < 4) {
     return false;
   }
-  bool msf = aPayload[0] == 'M' && aPayload[1] == 'S' &&
-             aPayload[2] == 'F' && aPayload[3] == '1';
-  bool loc = aPayload[0] == 'L' && aPayload[1] == 'O' &&
-             aPayload[2] == 'C' && aPayload[3] == '1';
+  bool msf = aPayload[0] == 'M' && aPayload[1] == 'S' && aPayload[2] == 'F' &&
+             aPayload[3] == '1';
+  bool loc = aPayload[0] == 'L' && aPayload[1] == 'O' && aPayload[2] == 'C' &&
+             aPayload[3] == '1';
   return msf || loc;
 }
 
@@ -219,6 +220,18 @@ static bool McquicMoqTrackLooksLikeLocMsf(const nsACString& aTrackName) {
   return trackName.Find("-loc") >= 0 || trackName.Find("-msf") >= 0;
 }
 
+static nsTArray<uint8_t> McquicSyntheticUnicastChannelId() {
+  nsTArray<uint8_t> channel;
+  channel.AppendElement('u');
+  channel.AppendElement('n');
+  channel.AppendElement('i');
+  channel.AppendElement('c');
+  channel.AppendElement('a');
+  channel.AppendElement('s');
+  channel.AppendElement('t');
+  return channel;
+}
+
 static uint16_t McquicReadBigEndianUint16(const uint8_t* aData) {
   return (static_cast<uint16_t>(aData[0]) << 8) | aData[1];
 }
@@ -233,7 +246,8 @@ static uint64_t McquicReadBigEndianUint64(const uint8_t* aData) {
 
 static uint64_t McquicRawMediaGroupId(const nsTArray<uint8_t>& aPayload,
                                       uint64_t aFallback) {
-  if (McquicLooksLikeLocH264AnnexBFragment(aPayload) && aPayload.Length() >= 12) {
+  if (McquicLooksLikeLocH264AnnexBFragment(aPayload) &&
+      aPayload.Length() >= 12) {
     uint64_t ptsMillis = McquicReadBigEndianUint64(&aPayload[4]);
     return ptsMillis == 0 ? aFallback : ptsMillis;
   }
@@ -280,8 +294,7 @@ static bool McquicNativeMoqDemoTrack(nsACString& aNamespace,
   if (separator < 0) {
     separator = value.RFindChar('/');
   }
-  if (separator <= 0 ||
-      separator >= static_cast<int32_t>(value.Length()) - 1) {
+  if (separator <= 0 || separator >= static_cast<int32_t>(value.Length()) - 1) {
     return false;
   }
 
@@ -1515,6 +1528,32 @@ nsresult Http3Session::SendMcquicLimits() {
   return NS_OK;
 }
 
+void Http3Session::EnsureMcquicMoqImplicitFallbackTrackAlias() {
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
+
+  if (mMcquicMoqTrackNamespace.IsEmpty() || mMcquicMoqTrackName.IsEmpty()) {
+    return;
+  }
+
+  auto existing = mMcquicMoqTrackAliases.Lookup(
+      MCQUIC_MOQ_NATIVE_DEMO_FALLBACK_TRACK_ALIAS);
+  if (existing && existing.Data().mNamespace == mMcquicMoqTrackNamespace &&
+      existing.Data().mTrackName == mMcquicMoqTrackName) {
+    return;
+  }
+
+  McquicMoqTrackInfo track;
+  track.mNamespace = mMcquicMoqTrackNamespace;
+  track.mTrackName = mMcquicMoqTrackName;
+  mMcquicMoqTrackAliases.InsertOrUpdate(
+      MCQUIC_MOQ_NATIVE_DEMO_FALLBACK_TRACK_ALIAS, track);
+  LOG(
+      ("MCQUIC MoQ implicit fallback track alias configured [this=%p "
+       "track_alias=%" PRIu64 " track=%s/%s]",
+       this, MCQUIC_MOQ_NATIVE_DEMO_FALLBACK_TRACK_ALIAS,
+       mMcquicMoqTrackNamespace.get(), mMcquicMoqTrackName.get()));
+}
+
 nsresult Http3Session::EnsureMcquicMoqSubscribe() {
   MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
@@ -1546,6 +1585,10 @@ nsresult Http3Session::EnsureMcquicMoqSubscribe() {
          this, origin.get(), configuredTrack.get()));
     return NS_OK;
   }
+
+  mMcquicMoqTrackNamespace = trackNamespace;
+  mMcquicMoqTrackName = trackName;
+  EnsureMcquicMoqImplicitFallbackTrackAlias();
 
   nsTArray<uint8_t> payload;
   nsresult rv = neqo_mcquic_moq_encode_setup_subscribe(
@@ -1581,10 +1624,9 @@ nsresult Http3Session::EnsureMcquicMoqSubscribe() {
 
   mMcquicMoqControlStreamId = streamId;
   mMcquicMoqSubscribeQueued = true;
-  mMcquicMoqTrackNamespace = trackNamespace;
-  mMcquicMoqTrackName = trackName;
   mMcquicNeedsOutput = true;
-  LOG(("MCQUIC MoQ setup requested, waiting for peer readiness [this=%p "
+  LOG(
+      ("MCQUIC MoQ setup requested, waiting for peer readiness [this=%p "
        "stream=0x%" PRIx64 " authority=%s track=%s/%s bytes=%zu sent=%u]",
        this, mMcquicMoqControlStreamId, authority.get(), trackNamespace.get(),
        trackName.get(), payload.Length(), sent));
@@ -1644,8 +1686,8 @@ nsresult Http3Session::ProcessMcquicMoqControlStream() {
 
     switch (message.tag) {
       case McquicMoqControlMessageTag::Setup:
-        LOG(("MCQUIC MoQ setup complete [this=%p stream=0x%" PRIx64 "]",
-             this, mMcquicMoqControlStreamId));
+        LOG(("MCQUIC MoQ setup complete [this=%p stream=0x%" PRIx64 "]", this,
+             mMcquicMoqControlStreamId));
         break;
       case McquicMoqControlMessageTag::SubscribeOk: {
         McquicMoqTrackInfo track;
@@ -1659,9 +1701,9 @@ nsresult Http3Session::ProcessMcquicMoqControlStream() {
         nsCString origin(mConnInfo->GetOrigin());
         nsCString authority(origin);
         authority.AppendPrintf(":%d", mConnInfo->OriginPort());
-        NotifyMcquicMoqSessionReady(McquicMoqSessionReadyPayload(
-            "subscribe-ok", origin, authority, track.mNamespace,
-            track.mTrackName));
+        NotifyMcquicMoqSessionReady(
+            McquicMoqSessionReadyPayload("subscribe-ok", origin, authority,
+                                         track.mNamespace, track.mTrackName));
         if (mMcquicMoqDeliveryMode == McquicMoqDeliveryMode::None) {
           SetMcquicMoqDeliveryMode(McquicMoqDeliveryMode::Unicast,
                                    "subscribe-ok");
@@ -1762,29 +1804,63 @@ void Http3Session::MaybeFallbackMcquicMoqUnicast(const char* aReason) {
 nsresult Http3Session::ProcessMcquicMoqUnicastDatagrams() {
   MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
-  if (!McquicNativeMoqDemoEnabled() || !mMcquicMoqSubscribeQueued ||
-      mMcquicMoqTrackAliases.IsEmpty()) {
+  if (!McquicNativeMoqDemoEnabled() || mMcquicMoqTrackNamespace.IsEmpty() ||
+      mMcquicMoqTrackName.IsEmpty()) {
     return NS_OK;
   }
 
+  EnsureMcquicMoqImplicitFallbackTrackAlias();
   MaybeFallbackMcquicMoqUnicast("multicast stale while unicast available");
 
-  for (;;) {
-    nsTArray<uint8_t> payload;
-    if (!mHttp3Connection->McquicMoqPopUnicastDatagram(payload)) {
-      break;
+  nsTArray<uint8_t> unicastChannel = McquicSyntheticUnicastChannelId();
+
+  auto deferUnicastPayload = [&](const nsTArray<uint8_t>& aPayload,
+                                 const McquicMoqDatagramExternal& aObject) {
+    if (mMcquicMoqDeferredUnicastDatagrams.Length() >=
+        MCQUIC_MOQ_MAX_DEFERRED_UNICAST_DATAGRAMS) {
+      mMcquicMoqDeferredUnicastDatagrams.RemoveElementAt(0);
+      ++mMcquicMoqDroppedUnicastDatagrams;
+    }
+    mMcquicMoqDeferredUnicastDatagrams.AppendElement(aPayload.Clone());
+    LOG(
+        ("MCQUIC MoQ unicast object deferred until SubscribeOk [this=%p "
+         "group=%" PRIu64 " object=%" PRIu64 " payload_len=%" PRIu64
+         " deferred=%zu dropped=%" PRIu64 "]",
+         this, aObject.group_id, aObject.object_id, aObject.payload_len,
+         mMcquicMoqDeferredUnicastDatagrams.Length(),
+         mMcquicMoqDroppedUnicastDatagrams));
+  };
+
+  auto processPayload = [&](const nsTArray<uint8_t>& aPayload,
+                            bool aCanDefer) -> bool {
+    uint64_t packetNumber = 0;
+    auto packetNumberForPayload = [&]() {
+      if (packetNumber == 0) {
+        packetNumber = ++mMcquicMoqUnicastSequence;
+      }
+      return packetNumber;
+    };
+
+    if (ProcessMcquicMoqRawMediaPayload(aPayload, unicastChannel,
+                                        packetNumberForPayload(), "unicast",
+                                        false, false)) {
+      return true;
     }
 
-    ++mMcquicMoqUnicastDatagrams;
     McquicMoqDatagramExternal moq{};
-    if (!neqo_mcquic_decode_moq_datagram(&payload, &moq)) {
+    if (!neqo_mcquic_decode_moq_datagram(&aPayload, &moq)) {
+      if (ProcessMcquicMoqRawMediaPayload(aPayload, unicastChannel,
+                                          packetNumberForPayload(), "unicast",
+                                          false, true)) {
+        return true;
+      }
       ++mMcquicMoqDroppedUnicastDatagrams;
       LOG(
           ("MCQUIC MoQ unicast DATAGRAM rejected [this=%p payload_len=%zu "
            "total_unicast=%" PRIu64 " dropped=%" PRIu64 "]",
-           this, payload.Length(), mMcquicMoqUnicastDatagrams,
+           this, aPayload.Length(), mMcquicMoqUnicastDatagrams,
            mMcquicMoqDroppedUnicastDatagrams));
-      continue;
+      return true;
     }
 
     if (moq.format != McquicMoqDatagramFormat::NativeMoqtObject) {
@@ -1793,18 +1869,46 @@ nsresult Http3Session::ProcessMcquicMoqUnicastDatagrams() {
            " object=%" PRIu64 " payload_len=%" PRIu64 "]",
            this, McquicMoqFormatName(moq.format), moq.group_id, moq.object_id,
            moq.payload_len));
-      continue;
+      return true;
+    }
+
+    if (mMcquicMoqTrackAliases.IsEmpty()) {
+      if (aCanDefer) {
+        deferUnicastPayload(aPayload, moq);
+        return true;
+      }
+      return false;
     }
 
     LOG(("MCQUIC MoQ unicast object received [this=%p mode=%s group=%" PRIu64
-         " object=%" PRIu64 " payload_len=%" PRIu64
-         " total_unicast=%" PRIu64 "]",
+         " object=%" PRIu64 " payload_len=%" PRIu64 " total_unicast=%" PRIu64
+         "]",
          this, McquicMoqDeliveryModeName(mMcquicMoqDeliveryMode), moq.group_id,
          moq.object_id, moq.payload_len, mMcquicMoqUnicastDatagrams));
 
-    nsTArray<uint8_t> unicastChannel;
-    ProcessMcquicMoqNativeObject(moq, unicastChannel,
-                                 ++mMcquicMoqUnicastSequence, "unicast");
+    ProcessMcquicMoqNativeObject(moq, unicastChannel, packetNumberForPayload(),
+                                 "unicast");
+    return true;
+  };
+
+  if (!mMcquicMoqDeferredUnicastDatagrams.IsEmpty()) {
+    nsTArray<nsTArray<uint8_t>> stillDeferred;
+    for (const auto& payload : mMcquicMoqDeferredUnicastDatagrams) {
+      if (!processPayload(payload, false)) {
+        stillDeferred.AppendElement(payload.Clone());
+      }
+    }
+    mMcquicMoqDeferredUnicastDatagrams.SwapElements(stillDeferred);
+  }
+
+  for (;;) {
+    nsTArray<uint8_t> payload;
+    if (!mHttp3Connection->McquicMoqPopUnicastDatagram(payload)) {
+      break;
+    }
+
+    ++mMcquicMoqUnicastDatagrams;
+    processPayload(payload, true);
   }
 
   return NS_OK;
@@ -2089,7 +2193,8 @@ void Http3Session::NoteMcquicMoqMulticastMediaProgress(
   }
 
   if (aResult.mCompletedAccessUnit && aResult.mKeyframeCapableAccessUnit) {
-    LOG(("MCQUIC multicast media ready [this=%p source=%s "
+    LOG(
+        ("MCQUIC multicast media ready [this=%p source=%s "
          "validated_multicast=%" PRIu64 " no_progress=%" PRIu64 "]",
          this, aSource, mMcquicMoqMulticastDatagrams,
          mMcquicMoqMulticastObjectsWithoutMediaProgress));
@@ -2146,8 +2251,8 @@ void Http3Session::ProcessMcquicMoqNativeObject(
     if (std::strcmp(aSource, "multicast") == 0) {
       LOG(
           ("MCQUIC multicast validated but media sink is disabled; continuing "
-           "transport-driven unicast fallback [this=%p track=%s/%s group=%" PRIu64
-           " object=%" PRIu64 "]",
+           "transport-driven unicast fallback [this=%p track=%s/%s "
+           "group=%" PRIu64 " object=%" PRIu64 "]",
            this, trackInfo.mNamespace.get(), trackInfo.mTrackName.get(),
            aObject.group_id, aObject.object_id));
     }
@@ -2174,26 +2279,60 @@ void Http3Session::ProcessMcquicMoqNativeObject(
   DrainMcquicMoqAccessUnits(aSource);
 }
 
+bool Http3Session::ProcessMcquicMoqRawMediaPayload(
+    const nsTArray<uint8_t>& aPayload, const nsTArray<uint8_t>& aChannelId,
+    uint64_t aPacketNumber, const char* aSource, bool aIsMulticast,
+    bool aAllowSubscribedAnnexB) {
+  const char* format = nullptr;
+  if (McquicLooksLikeQvf1(aPayload)) {
+    format = "raw-qvf1";
+  } else if (McquicLooksLikeLocMsf(aPayload)) {
+    format = "raw-loc-msf";
+  } else if (McquicLooksLikeLocH264AnnexBFragment(aPayload)) {
+    format = "raw-loc-h264-fragment";
+  } else if (aAllowSubscribedAnnexB &&
+             McquicMoqTrackLooksLikeLocMsf(mMcquicMoqTrackName) &&
+             McquicLooksLikeAnnexB(aPayload)) {
+    format = "raw-subscribed-annexb";
+  }
+
+  if (!format) {
+    return false;
+  }
+
+  McquicChannelDatagram datagram{};
+  datagram.channel_id.AppendElements(aChannelId);
+  datagram.packet_number = aPacketNumber;
+  datagram.payload.AppendElements(aPayload);
+  ProcessMcquicMoqRawMediaDatagram(datagram, format, aSource, aIsMulticast);
+  return true;
+}
+
 void Http3Session::ProcessMcquicMoqRawMediaDatagram(
-    const McquicChannelDatagram& aDatagram, const nsACString& aChannelHex,
-    const char* aFormat) {
+    const McquicChannelDatagram& aDatagram, const char* aFormat,
+    const char* aSource, bool aIsMulticast) {
   MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
+  nsCString channelHex = McquicHexPrefix(aDatagram.channel_id);
   if (mMcquicMoqTrackNamespace.IsEmpty() || mMcquicMoqTrackName.IsEmpty()) {
-    LOG(("MCQUIC MoQ raw multicast skipped [this=%p format=%s channel=%s "
-         "packet_number=%" PRIu64 " reason=no-subscribed-track]",
-         this, aFormat, PromiseFlatCString(aChannelHex).get(),
-         aDatagram.packet_number));
+    LOG(
+        ("MCQUIC MoQ raw media skipped [this=%p source=%s format=%s "
+         "channel=%s packet_number=%" PRIu64 " reason=no-subscribed-track]",
+         this, aSource, aFormat, channelHex.get(), aDatagram.packet_number));
     return;
   }
 
-  ++mMcquicMoqMulticastDatagrams;
-  mMcquicMoqLastMulticastDatagram = TimeStamp::Now();
+  if (aIsMulticast) {
+    ++mMcquicMoqMulticastDatagrams;
+    mMcquicMoqLastMulticastDatagram = TimeStamp::Now();
+  } else if (mMcquicMoqDeliveryMode == McquicMoqDeliveryMode::None) {
+    SetMcquicMoqDeliveryMode(McquicMoqDeliveryMode::Unicast, "raw-unicast");
+  }
 
-  LOG(("MCQUIC MoQ object [this=%p source=multicast format=%s "
+  LOG(
+      ("MCQUIC MoQ object [this=%p source=%s format=%s "
        "channel=%s transport_number=%" PRIu64 " track=%s/%s payload_len=%zu]",
-       this, aFormat, PromiseFlatCString(aChannelHex).get(),
-       aDatagram.packet_number,
+       this, aSource, aFormat, channelHex.get(), aDatagram.packet_number,
        mMcquicMoqTrackNamespace.get(), mMcquicMoqTrackName.get(),
        aDatagram.payload.Length()));
 
@@ -2221,15 +2360,18 @@ void Http3Session::ProcessMcquicMoqRawMediaDatagram(
       mMcquicMoqTrackNamespace, mMcquicMoqTrackName, aDatagram.channel_id,
       aDatagram.packet_number, rawMedia, &processResult);
   if (NS_FAILED(rv)) {
-    LOG(("MCQUIC MoQ media sink rejected raw multicast [this=%p "
-         "source=multicast format=%s rv=0x%08" PRIx32
+    LOG(
+        ("MCQUIC MoQ media sink rejected raw media [this=%p "
+         "source=%s format=%s rv=0x%08" PRIx32
          " track=%s/%s packet_number=%" PRIu64 "]",
-         this, aFormat, static_cast<uint32_t>(rv),
+         this, aSource, aFormat, static_cast<uint32_t>(rv),
          mMcquicMoqTrackNamespace.get(), mMcquicMoqTrackName.get(),
          aDatagram.packet_number));
   }
-  NoteMcquicMoqMulticastMediaProgress(processResult, aFormat);
-  DrainMcquicMoqAccessUnits("multicast");
+  if (aIsMulticast) {
+    NoteMcquicMoqMulticastMediaProgress(processResult, aFormat);
+  }
+  DrainMcquicMoqAccessUnits(aSource);
 }
 
 void Http3Session::ProcessMcquicValidatedDatagrams() {
@@ -2252,19 +2394,9 @@ void Http3Session::ProcessMcquicValidatedDatagrams() {
          this, channelHex.get(), datagram.packet_number,
          datagram.payload.Length(), payloadHex.get()));
 
-    if (McquicLooksLikeQvf1(datagram.payload)) {
-      ProcessMcquicMoqRawMediaDatagram(datagram, channelHex, "raw-qvf1");
-      continue;
-    }
-
-    if (McquicLooksLikeLocMsf(datagram.payload)) {
-      ProcessMcquicMoqRawMediaDatagram(datagram, channelHex, "raw-loc-msf");
-      continue;
-    }
-
-    if (McquicLooksLikeLocH264AnnexBFragment(datagram.payload)) {
-      ProcessMcquicMoqRawMediaDatagram(datagram, channelHex,
-                                       "raw-loc-h264-fragment");
+    if (ProcessMcquicMoqRawMediaPayload(datagram.payload, datagram.channel_id,
+                                        datagram.packet_number, "multicast",
+                                        true, false)) {
       continue;
     }
 
@@ -2279,8 +2411,9 @@ void Http3Session::ProcessMcquicValidatedDatagrams() {
              this, channelHex.get(), datagram.packet_number,
              mMcquicMoqTrackNamespace.get(), mMcquicMoqTrackName.get(),
              datagram.payload.Length(), payloadHex.get()));
-        ProcessMcquicMoqRawMediaDatagram(datagram, channelHex,
-                                         "raw-subscribed-annexb");
+        ProcessMcquicMoqRawMediaPayload(datagram.payload, datagram.channel_id,
+                                        datagram.packet_number, "multicast",
+                                        true, true);
       } else {
         LOG(
             ("MCQUIC validated DATAGRAM ignored; payload is not raw media or a "
@@ -2321,8 +2454,8 @@ void Http3Session::ProcessMcquicValidatedDatagrams() {
 void Http3Session::ScheduleMcquicPoll() {
   MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
-  if (!McquicNativeMoqDemoEnabled() ||
-      mMcquicChannels.IsEmpty() || IsClosing()) {
+  if (!McquicNativeMoqDemoEnabled() || mMcquicChannels.IsEmpty() ||
+      IsClosing()) {
     return;
   }
 

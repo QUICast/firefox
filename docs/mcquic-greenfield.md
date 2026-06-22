@@ -64,7 +64,11 @@ network.http.http3.mcquic.moq_media_*
 
 ## Run Firefox
 
-Open the bare site. Do not add `?nativeFirefoxTrigger=1`.
+Open the live clock page with Bifrost's explicit native Firefox opt-in. The
+production page does not let the discovery manifest auto-start native playback.
+Use `?nativeFirefoxTrigger=1`; the shorter `?nativeTrigger=1` alias also works.
+Accepted enabled values are `1`, `true`, `on`, `yes`, and `force`. Accepted
+disabled values are `0`, `false`, `off`, and `no`.
 
 On macOS:
 
@@ -75,7 +79,7 @@ MOZ_LOG_FILE="$HOME/Desktop/firefox-mcquic.log" \
   --profile /private/tmp/mcquic-firefox-profile-live \
   -- \
   --no-remote \
-  https://live.quicast.de/
+  'https://live.quicast.de/clock/?nativeFirefoxTrigger=1'
 ```
 
 On Linux/Ubuntu:
@@ -87,7 +91,7 @@ MOZ_LOG_FILE="$HOME/firefox-mcquic.log" \
   --profile /tmp/mcquic-firefox-profile-live \
   -- \
   --no-remote \
-  https://live.quicast.de/
+  'https://live.quicast.de/clock/?nativeFirefoxTrigger=1'
 ```
 
 Expected behavior:
@@ -97,6 +101,15 @@ Expected behavior:
   on the page playback surface.
 - Without native multicast, playback should continue via unicast fallback. The
   JS WebTransport path remains the ordinary website baseline.
+
+For local Bifrost development only, the trigger can be persisted from the
+browser console with:
+
+```js
+localStorage.setItem("quicast.nativeFirefox.enabled", "on");
+```
+
+That localStorage switch is intentionally ignored on production hosts.
 
 ## Optional AMT Gateway
 
