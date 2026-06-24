@@ -8160,6 +8160,10 @@ nsresult nsHttpChannel::BeginConnect() {
   }
 
   auto canUseHappyEyeballs = [&]() {
+    if (mcquicMoqRequiresHttp3) {
+      return false;
+    }
+
     if (!StaticPrefs::network_http_happy_eyeballs_enabled()) {
       return false;
     }
@@ -8188,6 +8192,12 @@ nsresult nsHttpChannel::BeginConnect() {
     mCaps |= NS_HTTP_USE_HAPPY_EYEBALLS;
     mCaps &= ~NS_HTTP_FORCE_WAIT_HTTP_RR;
     mConnectionInfo->SetHappyEyeballsEnabled(true);
+  } else if (mcquicMoqRequiresHttp3 && mConnectionInfo->IsHttp3()) {
+    mConnectionInfo->SetHappyEyeballsEnabled(false);
+    LOG(
+        ("MCQUIC MoQ native channel disabling Happy Eyeballs fallback "
+         "[this=%p ci=%s]",
+         this, mConnectionInfo->HashKey().get()));
   }
 
   // No need to lookup HTTPSSVC record if mHTTPSSVCRecord already contains a

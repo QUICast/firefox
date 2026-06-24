@@ -226,7 +226,7 @@ class nsHttpConnectionInfo final : public ARefBase {
 
   void SetHappyEyeballsEnabled(bool aEnabled) {
     SetHashCharAt(aEnabled ? 'H' : '.', HashKeyIndex::HappyEyeballs);
-    if (aEnabled && !mHappyEyeballsEnabled) {
+    if (aEnabled != mHappyEyeballsEnabled) {
       mHappyEyeballsEnabled = aEnabled;
       RebuildHashKey();
     }
