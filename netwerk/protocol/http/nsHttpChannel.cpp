@@ -8127,18 +8127,32 @@ nsresult nsHttpChannel::BeginConnect() {
         .Add();
   } else {
     if (mcquicMoqRequiresHttp3) {
-      LOG(
-          ("MCQUIC MoQ native channel has no validated H3 Alt-Svc mapping; "
-           "native overlay will wait for Http3Session readiness [this=%p "
-           "origin=%s://%s:%d http3Allowed=%d]",
-           this, scheme.get(), host.get(), port, http3Allowed));
-    }
-    LOG(("nsHttpChannel %p Using default connection info", this));
+      if (!http3Allowed) {
+        LOG(
+            ("MCQUIC MoQ native channel cannot use explicit H3 route because "
+             "HTTP/3 is disabled [this=%p origin=%s://%s:%d]",
+             this, scheme.get(), host.get(), port));
+        return NS_ERROR_NOT_AVAILABLE;
+      }
 
-    mConnectionInfo = connInfo;
-    glean::http::transaction_use_altsvc
-        .EnumGet(glean::http::TransactionUseAltsvcLabel::eFalse)
-        .Add();
+      LOG(
+          ("MCQUIC MoQ native channel using explicit H3 route without waiting "
+           "for Alt-Svc validation [this=%p origin=%s://%s:%d]",
+           this, scheme.get(), host.get(), port));
+      mConnectionInfo =
+          new nsHttpConnectionInfo(host, port, "h3"_ns, mUsername, proxyInfo,
+                                   originAttributes, host, port, true);
+      glean::http::transaction_use_altsvc
+          .EnumGet(glean::http::TransactionUseAltsvcLabel::eFalse)
+          .Add();
+    } else {
+      LOG(("nsHttpChannel %p Using default connection info", this));
+
+      mConnectionInfo = connInfo;
+      glean::http::transaction_use_altsvc
+          .EnumGet(glean::http::TransactionUseAltsvcLabel::eFalse)
+          .Add();
+    }
   }
 
   bool trrEnabled = false;

@@ -43,6 +43,7 @@ constexpr size_t QVF1_FIXED_HEADER_LEN = 32;
 constexpr size_t LOC_MSF_FIXED_HEADER_LEN = 28;
 constexpr size_t LOC_H264_ANNEXB_FRAGMENT_HEADER_LEN = 20;
 constexpr size_t COMPACT_LOC_MSF_H264_FRAGMENT_HEADER_LEN = 15;
+constexpr size_t DIRECT_LOC_MSF_H264_FRAGMENT_HEADER_LEN = 16;
 constexpr uint8_t QVF1_VERSION = 1;
 constexpr uint8_t QVF1_CODEC_H264 = 1;
 constexpr uint8_t QVF1_FLAG_KEYFRAME = 0x01;
@@ -56,6 +57,9 @@ constexpr uint16_t LOC_H264_FLAG_CONFIG = 0x0002;
 constexpr uint16_t LOC_H264_FLAG_END_OF_ACCESS_UNIT = 0x0008;
 constexpr uint16_t QVF1_MAX_FRAGMENTS = 1024;
 constexpr size_t MCQUIC_MOQ_DEDUP_WINDOW = 4096;
+constexpr size_t LOC_MSF_DIRECT_PREFIX_SCAN_LEN = 32;
+constexpr uint64_t LOC_MSF_SYNTHETIC_FRAME_ID_SCALE = 1ULL << 32;
+constexpr uint64_t LOC_MSF_SYNTHETIC_FRAME_DURATION_MS = 33;
 constexpr gfx::IntSize QVF1_DECODE_SIZE{640, 480};
 constexpr const char* MCQUIC_MOQ_VIDEO_FRAME_TOPIC = "mcquic-moq-video-frame";
 
@@ -118,19 +122,6 @@ static uint64_t ReadBigEndianUint64(const uint8_t* aData) {
     value = (value << 8) | aData[i];
   }
   return value;
-}
-
-static Maybe<uint32_t> ReadAvccNalLength(const uint8_t* aData, size_t aLength,
-                                         size_t aNalLengthSize) {
-  if (aLength < aNalLengthSize) {
-    return Nothing();
-  }
-
-  uint32_t nalLength = 0;
-  for (size_t i = 0; i < aNalLengthSize; ++i) {
-    nalLength = (nalLength << 8) | aData[i];
-  }
-  return Some(nalLength);
 }
 
 static media::TimeUnit TimeUnitFromMillis(uint64_t aMillis) {
@@ -211,6 +202,35 @@ static Maybe<size_t> FindAnnexBStartCode(const nsTArray<uint8_t>& aPayload,
   return Nothing();
 }
 
+static size_t DirectLocMsfPayloadOffset(const nsTArray<uint8_t>& aPayload) {
+  Maybe<size_t> start = FindAnnexBStartCode(aPayload, 0);
+  if (start && *start <= LOC_MSF_DIRECT_PREFIX_SCAN_LEN) {
+    return *start;
+  }
+  return 0;
+}
+
+static Maybe<uint64_t> SyntheticLocMsfPtsMillis(
+    uint64_t aAccessUnitSequence, Maybe<uint64_t>& aBaseFrameIndex) {
+  if (aAccessUnitSequence < LOC_MSF_SYNTHETIC_FRAME_ID_SCALE) {
+    return Nothing();
+  }
+
+  uint64_t frameIndex = aAccessUnitSequence >> 32;
+  if (!aBaseFrameIndex) {
+    aBaseFrameIndex = Some(frameIndex);
+  }
+
+  if (frameIndex < *aBaseFrameIndex) {
+    return Some(0);
+  }
+
+  uint64_t delta = frameIndex - *aBaseFrameIndex;
+  uint64_t maxDelta = std::numeric_limits<uint64_t>::max() /
+                      LOC_MSF_SYNTHETIC_FRAME_DURATION_MS;
+  return Some(std::min(delta, maxDelta) * LOC_MSF_SYNTHETIC_FRAME_DURATION_MS);
+}
+
 static size_t AnnexBStartCodeLength(const nsTArray<uint8_t>& aPayload,
                                     size_t aOffset) {
   const uint8_t* data = aPayload.Elements();
@@ -241,125 +261,6 @@ static AnnexBNalSummary SummarizeAnnexBNals(const nsTArray<uint8_t>& aPayload) {
     offset = nalOffset + 1;
   }
   return summary;
-}
-
-static const char* H264FrameTypeName(H264::FrameType aFrameType) {
-  switch (aFrameType) {
-    case H264::FrameType::I_FRAME_IDR:
-      return "idr";
-    case H264::FrameType::I_FRAME_OTHER:
-      return "i";
-    case H264::FrameType::OTHER:
-      return "other";
-    case H264::FrameType::INVALID:
-      return "invalid";
-  }
-  return "unknown";
-}
-
-static nsCString SummarizeAvccNals(const MediaRawData* aSample) {
-  nsCString summary;
-  if (!aSample || !aSample->Data()) {
-    return "empty"_ns;
-  }
-
-  auto avcc = AVCCConfig::Parse(aSample);
-  if (avcc.isErr()) {
-    return "invalid-avcc"_ns;
-  }
-
-  const uint8_t nalLengthSize = avcc.unwrap().NALUSize();
-  const uint8_t* data = aSample->Data();
-  size_t offset = 0;
-  uint32_t nalCount = 0;
-  while (offset + nalLengthSize <= aSample->Size() && nalCount < 8) {
-    Maybe<uint32_t> nalLength = ReadAvccNalLength(
-        data + offset, aSample->Size() - offset, nalLengthSize);
-    if (!nalLength || *nalLength == 0) {
-      break;
-    }
-    offset += nalLengthSize;
-    if (offset + *nalLength > aSample->Size()) {
-      summary.AppendPrintf("%sbad:%u", summary.IsEmpty() ? "" : ",",
-                           *nalLength);
-      break;
-    }
-
-    uint8_t nalType = data[offset] & 0x1f;
-    summary.AppendPrintf("%s%u:%u", summary.IsEmpty() ? "" : ",", nalType,
-                         *nalLength);
-    offset += *nalLength;
-    ++nalCount;
-  }
-
-  if (summary.IsEmpty()) {
-    summary = "none"_ns;
-  }
-  return summary;
-}
-
-static bool WriteAvccNalLength(nsTArray<uint8_t>& aOutput, uint32_t aNalLength,
-                               size_t aNalLengthSize) {
-  if (aNalLengthSize == 0 || aNalLengthSize > 4) {
-    return false;
-  }
-
-  uint8_t lengthBytes[4];
-  for (size_t i = 0; i < aNalLengthSize; ++i) {
-    lengthBytes[aNalLengthSize - 1 - i] = aNalLength & 0xff;
-    aNalLength >>= 8;
-  }
-  aOutput.AppendElements(lengthBytes, aNalLengthSize);
-  return true;
-}
-
-static bool StripAvccParameterSetNals(MediaRawData* aSample,
-                                      nsCString& aRemovedNals) {
-  if (!aSample || !aSample->Data()) {
-    return false;
-  }
-
-  auto avcc = AVCCConfig::Parse(aSample);
-  if (avcc.isErr()) {
-    return false;
-  }
-
-  const uint8_t nalLengthSize = avcc.unwrap().NALUSize();
-  const uint8_t* data = aSample->Data();
-  size_t offset = 0;
-  nsTArray<uint8_t> filtered;
-  while (offset + nalLengthSize <= aSample->Size()) {
-    Maybe<uint32_t> nalLength = ReadAvccNalLength(
-        data + offset, aSample->Size() - offset, nalLengthSize);
-    if (!nalLength || *nalLength == 0) {
-      break;
-    }
-    offset += nalLengthSize;
-    if (offset + *nalLength > aSample->Size()) {
-      return false;
-    }
-
-    uint8_t nalType = data[offset] & 0x1f;
-    bool stripNal = nalType == H264_NAL_AUD || nalType == H264_NAL_SPS ||
-                    nalType == H264_NAL_PPS;
-    if (stripNal) {
-      aRemovedNals.AppendPrintf("%s%u:%u", aRemovedNals.IsEmpty() ? "" : ",",
-                                nalType, *nalLength);
-    } else {
-      if (!WriteAvccNalLength(filtered, *nalLength, nalLengthSize)) {
-        return false;
-      }
-      filtered.AppendElements(data + offset, *nalLength);
-    }
-    offset += *nalLength;
-  }
-
-  if (filtered.IsEmpty() || aRemovedNals.IsEmpty()) {
-    return true;
-  }
-
-  UniquePtr<MediaRawDataWriter> writer(aSample->CreateWriter());
-  return writer->Replace(filtered.Elements(), filtered.Length());
 }
 
 static nsresult EncodeVideoFrameAsPngDataUrl(layers::Image* aImage,
@@ -524,6 +425,22 @@ static bool PayloadLooksLikeCompactLocMsfH264Fragment(
          COMPACT_LOC_MSF_H264_FRAGMENT_HEADER_LEN + payloadLen;
 }
 
+static bool PayloadLooksLikeDirectLocMsfH264Fragment(
+    const nsTArray<uint8_t>& aPayload) {
+  if (aPayload.Length() < DIRECT_LOC_MSF_H264_FRAGMENT_HEADER_LEN) {
+    return false;
+  }
+
+  const uint8_t* data = aPayload.Elements();
+  uint16_t fragmentIndex = ReadBigEndianUint16(&data[8]);
+  uint16_t fragmentCount = ReadBigEndianUint16(&data[10]);
+  uint32_t payloadLen = ReadBigEndianUint32(&data[12]);
+  return fragmentCount > 0 && fragmentCount <= QVF1_MAX_FRAGMENTS &&
+         fragmentIndex < fragmentCount &&
+         aPayload.Length() ==
+             DIRECT_LOC_MSF_H264_FRAGMENT_HEADER_LEN + payloadLen;
+}
+
 static bool IsLocMsfTrackName(const nsACString& aTrackName) {
   nsCString trackName(aTrackName);
   return trackName.Find("-loc") >= 0 || trackName.Find("-msf") >= 0;
@@ -674,6 +591,33 @@ static nsresult ParseCompactLocMsfH264FragmentPayload(
   return NS_OK;
 }
 
+static nsresult ParseDirectLocMsfH264FragmentPayload(
+    const nsTArray<uint8_t>& aPayload,
+    McquicMoqMediaFragmentMetadata& aMetadata) {
+  if (!PayloadLooksLikeDirectLocMsfH264Fragment(aPayload)) {
+    return NS_ERROR_INVALID_ARG;
+  }
+
+  const uint8_t* data = aPayload.Elements();
+  uint64_t accessUnitSequence = ReadBigEndianUint64(&data[0]);
+  uint16_t fragmentIndex = ReadBigEndianUint16(&data[8]);
+  uint16_t fragmentCount = ReadBigEndianUint16(&data[10]);
+  uint32_t payloadLen = ReadBigEndianUint32(&data[12]);
+
+  aMetadata.mFormat = McquicMoqMediaPayloadFormat::LocMsf;
+  aMetadata.mFlags = 0;
+  if (fragmentIndex + 1 == fragmentCount) {
+    aMetadata.mFlags |= QVF1_FLAG_END_OF_ACCESS_UNIT;
+  }
+  aMetadata.mAccessUnitSequence = accessUnitSequence;
+  aMetadata.mFragmentIndex = fragmentIndex;
+  aMetadata.mFragmentCount = fragmentCount;
+  aMetadata.mPtsMillis = accessUnitSequence;
+  aMetadata.mPayloadOffset = DIRECT_LOC_MSF_H264_FRAGMENT_HEADER_LEN;
+  aMetadata.mPayloadLen = payloadLen;
+  return NS_OK;
+}
+
 static nsresult PopulateDirectLocMsfMetadata(
     const McquicMoqDatagramExternal& aObject,
     McquicMoqMediaFragmentMetadata& aMetadata) {
@@ -696,8 +640,9 @@ static nsresult PopulateDirectLocMsfMetadata(
   aMetadata.mFragmentIndex = 0;
   aMetadata.mFragmentCount = 1;
   aMetadata.mPtsMillis = aObject.pts_millis;
-  aMetadata.mPayloadOffset = 0;
-  aMetadata.mPayloadLen = static_cast<uint32_t>(aObject.payload.Length());
+  aMetadata.mPayloadOffset = DirectLocMsfPayloadOffset(aObject.payload);
+  aMetadata.mPayloadLen = static_cast<uint32_t>(aObject.payload.Length() -
+                                                aMetadata.mPayloadOffset);
   return NS_OK;
 }
 
@@ -801,43 +746,14 @@ class McquicMoqPdmAccessUnitConsumer final
         return NS_OK;
       }
 
-      if (!AnnexB::ConvertSampleToAVCC(compressedFrame, mInfo.mExtraData)) {
-        LOG(
-            ("MCQUIC MoQ media decode failed to convert Annex B to AVCC "
-             "[track=%s/%s sequence=%" PRIu64 " payload_len=%zu]",
-             aAccessUnit.mNamespace.get(), aAccessUnit.mTrackName.get(),
-             aAccessUnit.mAccessUnitSequence, aAccessUnit.mPayload.Length()));
-        ReleaseDecoder();
-        return NS_OK;
-      }
-      nsCString strippedNals;
-      if (!StripAvccParameterSetNals(compressedFrame, strippedNals)) {
-        LOG(
-            ("MCQUIC MoQ media decode failed to strip AVCC parameter sets "
-             "[track=%s/%s sequence=%" PRIu64 " payload_len=%zu nals=%s]",
-             aAccessUnit.mNamespace.get(), aAccessUnit.mTrackName.get(),
-             aAccessUnit.mAccessUnitSequence, compressedFrame->Size(),
-             SummarizeAvccNals(compressedFrame).get()));
-        ReleaseDecoder();
-        return NS_OK;
-      }
-      if (!strippedNals.IsEmpty()) {
-        LOG((
-            "MCQUIC MoQ media decode stripped AVCC parameter sets [track=%s/%s "
-            "sequence=%" PRIu64 " removed=%s payload_len=%zu]",
-            aAccessUnit.mNamespace.get(), aAccessUnit.mTrackName.get(),
-            aAccessUnit.mAccessUnitSequence, strippedNals.get(),
-            compressedFrame->Size()));
-      }
       LOG(
-          ("MCQUIC MoQ media decode converted Annex B to AVCC [track=%s/%s "
-           "sequence=%" PRIu64 " payload_len=%zu avcc_len=%zu frame_type=%s "
-           "nals=%s]",
+          ("MCQUIC MoQ media decode prepared Annex B access unit [track=%s/%s "
+           "sequence=%" PRIu64 " payload_len=%zu avcc_len=%zu keyframe=%d "
+           "config=%d independent=%d]",
            aAccessUnit.mNamespace.get(), aAccessUnit.mTrackName.get(),
            aAccessUnit.mAccessUnitSequence, compressedFrame->Size(),
-           mInfo.mExtraData->Length(),
-           H264FrameTypeName(H264::GetFrameType(compressedFrame)),
-           SummarizeAvccNals(compressedFrame).get()));
+           mInfo.mExtraData->Length(), aAccessUnit.mKeyframe,
+           aAccessUnit.mConfig, aAccessUnit.mIndependent));
     }
 
     if (!mDecoder) {
@@ -1099,8 +1015,8 @@ nsresult McquicMoqMediaSink::ProcessObject(
     rv = ParseLocH264AnnexBFragmentPayload(aObject.payload, metadata);
   } else if (locMsfTrack &&
              PayloadLooksLikeCompactLocMsfH264Fragment(aObject.payload)) {
-    rv = ParseCompactLocMsfH264FragmentPayload(
-        aObject.payload, aObject.end_of_group, metadata);
+    rv = ParseCompactLocMsfH264FragmentPayload(aObject.payload,
+                                               aObject.end_of_group, metadata);
     if (NS_SUCCEEDED(rv)) {
       auto open = mOpenEndedAccessUnitsByTrack.Lookup(trackKey);
       if (open &&
@@ -1115,6 +1031,9 @@ nsresult McquicMoqMediaSink::ProcessObject(
         }
       }
     }
+  } else if (locMsfTrack &&
+             PayloadLooksLikeDirectLocMsfH264Fragment(aObject.payload)) {
+    rv = ParseDirectLocMsfH264FragmentPayload(aObject.payload, metadata);
   } else if (locMsfTrack) {
     auto open = mOpenEndedAccessUnitsByTrack.Lookup(trackKey);
     if (!open) {
@@ -1137,8 +1056,9 @@ nsresult McquicMoqMediaSink::ProcessObject(
         metadata.mAccessUnitSequence = openAccessUnit.mAccessUnitSequence;
         metadata.mFragmentIndex = openAccessUnit.mNextFragmentIndex;
         metadata.mFragmentCount = openAccessUnit.mNextFragmentIndex + 1;
-        metadata.mPayloadOffset = 0;
-        metadata.mPayloadLen = static_cast<uint32_t>(aObject.payload.Length());
+        metadata.mPayloadOffset = DirectLocMsfPayloadOffset(aObject.payload);
+        metadata.mPayloadLen = static_cast<uint32_t>(aObject.payload.Length() -
+                                                     metadata.mPayloadOffset);
         metadata.mOpenEnded = !aObject.end_of_group;
         continuationOfOpenEndedAccessUnit = true;
         if (aObject.end_of_group) {
@@ -1169,6 +1089,15 @@ nsresult McquicMoqMediaSink::ProcessObject(
          PromiseFlatCString(aTrackName).get(), aObject.group_id,
          aObject.object_id, aObject.payload.Length()));
     return rv;
+  }
+
+  if (metadata.mPayloadOffset > 0) {
+    LOG(
+        ("MCQUIC MoQ media sink stripped direct media prefix [track=%s/%s "
+         "group=%" PRIu64 " object=%" PRIu64 " offset=%zu payload_len=%u]",
+         PromiseFlatCString(aNamespace).get(),
+         PromiseFlatCString(aTrackName).get(), aObject.group_id,
+         aObject.object_id, metadata.mPayloadOffset, metadata.mPayloadLen));
   }
 
   if (metadata.mFormat == McquicMoqMediaPayloadFormat::LocMsf &&
@@ -1279,8 +1208,7 @@ nsresult McquicMoqMediaSink::ProcessObject(
       open.Data().mNextFragmentIndex = metadata.mFragmentIndex + 1;
     }
   }
-  if ((metadata.mFlags & QVF1_FLAG_END_OF_ACCESS_UNIT) &&
-      pending.mOpenEnded) {
+  if ((metadata.mFlags & QVF1_FLAG_END_OF_ACCESS_UNIT) && pending.mOpenEnded) {
     pending.mOpenEnded = false;
     pending.mFragmentCount = metadata.mFragmentIndex + 1;
     mOpenEndedAccessUnitsByTrack.Remove(trackKey);
@@ -1342,6 +1270,14 @@ nsresult McquicMoqMediaSink::EmitIfComplete(
   accessUnit.mKeyframe = aPending.mKeyframe;
   accessUnit.mConfig = aPending.mConfig;
   accessUnit.mIndependent = aPending.mIndependent;
+
+  if (accessUnit.mPtsMillis == 0 && IsLocMsfTrackName(accessUnit.mTrackName)) {
+    Maybe<uint64_t> syntheticPts = SyntheticLocMsfPtsMillis(
+        accessUnit.mAccessUnitSequence, mLocMsfSyntheticPtsBaseFrameIndex);
+    if (syntheticPts) {
+      accessUnit.mPtsMillis = *syntheticPts;
+    }
+  }
 
   for (const FragmentSlot& fragment : aPending.mFragments) {
     if (!fragment.mPresent) {

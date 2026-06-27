@@ -8,6 +8,7 @@
 #include <cstdint>
 
 #include "mozilla/net/neqo_glue_ffi_generated.h"
+#include "mozilla/Maybe.h"
 #include "nsError.h"
 #include "nsHashKeys.h"
 #include "nsString.h"
@@ -104,6 +105,7 @@ class McquicMoqMediaSink final {
   nsTHashSet<nsCString> mAcceptedObjects;
   nsTArray<nsCString> mAcceptedObjectOrder;
   nsTArray<McquicMoqAccessUnit> mCompletedAccessUnits;
+  Maybe<uint64_t> mLocMsfSyntheticPtsBaseFrameIndex;
 };
 
 }  // namespace mozilla::net
