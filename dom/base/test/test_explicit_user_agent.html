@@ -16,6 +16,9 @@
   "use strict";
 
   add_task(async function() {
+    ok(navigator.userAgent.includes("QUICastMCQUIC/1"),
+       "The modified QUICast Firefox build exposes its User-Agent marker");
+
     await new Promise((r) => {
       let xhr = new XMLHttpRequest();
       xhr.open('GET', 'file_explicit_user_agent.sjs', true);
