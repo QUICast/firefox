@@ -360,6 +360,20 @@ static bool McquicMoqOriginAllowed(const nsACString& aAllowed,
          McquicMoqHostMatchesAllowed(aAuthority, aAllowed);
 }
 
+static bool McquicMoqNativeDemoOriginAllowed(
+    const nsHttpConnectionInfo& aConnInfo) {
+  if (!McquicNativeMoqDemoEnabled()) {
+    return false;
+  }
+
+  nsCString allowedOrigin;
+  Preferences::GetCString(MCQUIC_NATIVE_MOQ_DEMO_ORIGIN_PREF, allowedOrigin);
+  nsCString authority(aConnInfo.GetOrigin());
+  authority.AppendPrintf(":%d", aConnInfo.OriginPort());
+  return McquicMoqOriginAllowed(allowedOrigin, aConnInfo.GetOrigin(),
+                                authority);
+}
+
 static const char* McquicMoqFormatName(McquicMoqDatagramFormat aFormat) {
   switch (aFormat) {
     case McquicMoqDatagramFormat::NativeMoqtObject:
@@ -574,7 +588,18 @@ nsresult Http3Session::Init(const nsHttpConnectionInfo* aConnInfo,
   // connection to the WebTransport server should authenticate using the
   // expected certificate hash. Therefore, 0RTT should be disabled in this
   // context to ensure the certificate hash is checked.
-  if (StaticPrefs::network_http_http3_enable_0rtt() && !hasServCertHashes()) {
+  // MCQUIC resumption is not negotiated end to end yet. A rejected ticket
+  // otherwise closes the native demo's H3-only connection before setup.
+  const bool nativeMoqOrigin = McquicMoqNativeDemoOriginAllowed(*mConnInfo);
+  const bool resumptionEnabled =
+      StaticPrefs::network_http_http3_enable_0rtt() && !nativeMoqOrigin;
+  if (StaticPrefs::network_http_http3_enable_0rtt() && nativeMoqOrigin) {
+    LOG(
+        ("MCQUIC native MoQ demo skipping HTTP/3 resumption [this=%p "
+         "origin=%s:%d]",
+         this, mConnInfo->GetOrigin().get(), mConnInfo->OriginPort()));
+  }
+  if (resumptionEnabled && !hasServCertHashes()) {
     uint32_t maxAttempts =
         StaticPrefs::network_ssl_tokens_cache_records_per_entry();
     for (uint32_t attempt = 0; attempt < maxAttempts; ++attempt) {
@@ -1037,7 +1062,8 @@ nsresult Http3Session::ProcessEvents() {
         break;
       case Http3Event::Tag::ResumptionToken: {
         LOG(("Http3Session::ProcessEvents - ResumptionToken"));
-        if (StaticPrefs::network_http_http3_enable_0rtt() && !data.IsEmpty()) {
+        if (StaticPrefs::network_http_http3_enable_0rtt() &&
+            !McquicMoqNativeDemoOriginAllowed(*mConnInfo) && !data.IsEmpty()) {
           LOG(("Got a resumption token"));
           nsAutoCString peerId;
           mSocketControl->GetPeerId(peerId);

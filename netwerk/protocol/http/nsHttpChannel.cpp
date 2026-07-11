@@ -8048,7 +8048,7 @@ nsresult nsHttpChannel::BeginConnect() {
     http2Allowed = false;
     mCaps |= NS_HTTP_DISALLOW_SPDY;
     LOG(
-        ("MCQUIC MoQ native channel requiring H3 Alt-Svc only [this=%p "
+        ("MCQUIC MoQ native channel requiring H3-only transport [this=%p "
          "origin=%s://%s:%d http3Allowed=%d]",
          this, scheme.get(), host.get(), port, http3Allowed));
   }
@@ -8129,19 +8129,19 @@ nsresult nsHttpChannel::BeginConnect() {
     if (mcquicMoqRequiresHttp3) {
       if (!http3Allowed) {
         LOG(
-            ("MCQUIC MoQ native channel cannot use explicit H3 route because "
+            ("MCQUIC MoQ native channel cannot use direct H3 because "
              "HTTP/3 is disabled [this=%p origin=%s://%s:%d]",
              this, scheme.get(), host.get(), port));
         return NS_ERROR_NOT_AVAILABLE;
       }
 
       LOG(
-          ("MCQUIC MoQ native channel using explicit H3 route without waiting "
+          ("MCQUIC MoQ native channel using direct H3 without waiting "
            "for Alt-Svc validation [this=%p origin=%s://%s:%d]",
            this, scheme.get(), host.get(), port));
       mConnectionInfo =
           new nsHttpConnectionInfo(host, port, "h3"_ns, mUsername, proxyInfo,
-                                   originAttributes, host, port, true);
+                                   originAttributes, isHttps, true);
       glean::http::transaction_use_altsvc
           .EnumGet(glean::http::TransactionUseAltsvcLabel::eFalse)
           .Add();
