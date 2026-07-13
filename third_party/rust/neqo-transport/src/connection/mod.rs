@@ -318,6 +318,12 @@ pub struct Connection {
     /// Integrity hash lengths learned from peer `MC_ANNOUNCE` frames.
     #[cfg(feature = "mcquic")]
     mcquic_integrity_hash_lens: BTreeMap<Vec<u8>, usize>,
+    /// Authenticated receive state for each announced multicast channel.
+    #[cfg(feature = "mcquic")]
+    mcquic_channels: BTreeMap<Vec<u8>, crate::mcquic::ChannelReceiveState>,
+    /// Channel controls that arrived before their matching `MC_ANNOUNCE`.
+    #[cfg(feature = "mcquic")]
+    mcquic_pending_channel_controls: BTreeMap<Vec<u8>, VecDeque<crate::mcquic::Frame>>,
 
     crypto: Crypto,
     acks: AckTracker,
@@ -489,6 +495,10 @@ impl Connection {
             mcquic_send: VecDeque::new(),
             #[cfg(feature = "mcquic")]
             mcquic_integrity_hash_lens: BTreeMap::new(),
+            #[cfg(feature = "mcquic")]
+            mcquic_channels: BTreeMap::new(),
+            #[cfg(feature = "mcquic")]
+            mcquic_pending_channel_controls: BTreeMap::new(),
             #[cfg(any(test, feature = "build-fuzzing-corpus"))]
             test_frame_writer: None,
         };
@@ -3580,7 +3590,7 @@ impl Connection {
             }
             #[cfg(feature = "mcquic")]
             Frame::Mcquic(frame) => {
-                self.input_mcquic_frame(frame)?;
+                self.input_mcquic_frame(frame, now)?;
             }
             _ => unreachable!("All other frames are for streams"),
         }
@@ -3589,7 +3599,7 @@ impl Connection {
     }
 
     #[cfg(feature = "mcquic")]
-    fn input_mcquic_frame(&mut self, frame: crate::mcquic::Frame) -> Res<()> {
+    fn input_mcquic_frame(&mut self, frame: crate::mcquic::Frame, now: Instant) -> Res<()> {
         if !self.mcquic_negotiated() {
             return Err(Error::ProtocolViolation);
         }
@@ -3602,14 +3612,171 @@ impl Connection {
             return Err(Error::ProtocolViolation);
         }
 
-        if let crate::mcquic::Frame::Announce(announce) = &frame {
-            let hash_len =
-                crate::mcquic::integrity_hash_len_from_id(announce.integrity_hash_algorithm)?;
-            self.mcquic_integrity_hash_lens
-                .insert(announce.channel_id.clone(), hash_len);
-        }
-
+        let released = self.apply_mcquic_channel_control(&frame)?;
         self.mcquic_recv.push_back(frame);
+        self.process_mcquic_released_packets(released, now)
+            .map_err(|(_, error)| error)
+    }
+
+    #[cfg(feature = "mcquic")]
+    fn apply_mcquic_channel_control(
+        &mut self,
+        frame: &crate::mcquic::Frame,
+    ) -> Res<Vec<crate::mcquic::ChannelPacket>> {
+        match frame {
+            crate::mcquic::Frame::Announce(announce) => {
+                let hash_len =
+                    crate::mcquic::integrity_hash_len_from_id(announce.integrity_hash_algorithm)?;
+                if let Some(existing) = self.mcquic_channels.get(&announce.channel_id) {
+                    if existing.announce() != announce {
+                        return Err(Error::ProtocolViolation);
+                    }
+                } else {
+                    let state = crate::mcquic::ChannelReceiveState::new(announce.clone())?;
+                    self.mcquic_channels
+                        .insert(announce.channel_id.clone(), state);
+                }
+                self.mcquic_integrity_hash_lens
+                    .insert(announce.channel_id.clone(), hash_len);
+
+                let pending = self
+                    .mcquic_pending_channel_controls
+                    .remove(&announce.channel_id)
+                    .unwrap_or_default();
+                let state = self
+                    .mcquic_channels
+                    .get_mut(&announce.channel_id)
+                    .ok_or(Error::Internal)?;
+                let mut released = Vec::new();
+                for pending_frame in pending {
+                    released.extend(Self::apply_known_mcquic_channel_control(
+                        state,
+                        &pending_frame,
+                    )?);
+                }
+                Ok(released)
+            }
+            crate::mcquic::Frame::Key(key) => {
+                let Some(state) = self.mcquic_channels.get_mut(&key.channel_id) else {
+                    self.mcquic_pending_channel_controls
+                        .entry(key.channel_id.clone())
+                        .or_default()
+                        .push_back(frame.clone());
+                    return Ok(Vec::new());
+                };
+                Self::apply_known_mcquic_channel_control(state, frame)
+            }
+            crate::mcquic::Frame::Integrity(integrity) => {
+                let Some(state) = self.mcquic_channels.get_mut(&integrity.channel_id) else {
+                    self.mcquic_pending_channel_controls
+                        .entry(integrity.channel_id.clone())
+                        .or_default()
+                        .push_back(frame.clone());
+                    return Ok(Vec::new());
+                };
+                Self::apply_known_mcquic_channel_control(state, frame)
+            }
+            _ => Ok(Vec::new()),
+        }
+    }
+
+    #[cfg(feature = "mcquic")]
+    fn apply_known_mcquic_channel_control(
+        state: &mut crate::mcquic::ChannelReceiveState,
+        frame: &crate::mcquic::Frame,
+    ) -> Res<Vec<crate::mcquic::ChannelPacket>> {
+        match frame {
+            crate::mcquic::Frame::Key(key) => state.insert_key_for_connection(key.clone()),
+            crate::mcquic::Frame::Integrity(integrity) => {
+                state.insert_integrity_for_connection(integrity)
+            }
+            _ => Err(Error::Internal),
+        }
+    }
+
+    #[cfg(feature = "mcquic")]
+    fn process_mcquic_released_packets(
+        &mut self,
+        packets: Vec<crate::mcquic::ChannelPacket>,
+        now: Instant,
+    ) -> Result<(), (FrameType, Error)> {
+        for packet in packets {
+            for frame in packet.frames {
+                let frame_type = Self::mcquic_channel_frame_type(&frame)
+                    .map_err(|error| (FrameType::Padding, error))?;
+                if let Err(error) = self.input_mcquic_channel_frame(frame, now) {
+                    return Err((frame_type, error));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "mcquic")]
+    fn mcquic_channel_frame_type(frame: &crate::mcquic::ChannelFrame) -> Res<FrameType> {
+        Ok(match frame {
+            crate::mcquic::ChannelFrame::Padding { .. } => FrameType::Padding,
+            crate::mcquic::ChannelFrame::Ping => FrameType::Ping,
+            crate::mcquic::ChannelFrame::ResetStream { .. } => FrameType::ResetStream,
+            crate::mcquic::ChannelFrame::Stream { .. } => FrameType::Stream,
+            crate::mcquic::ChannelFrame::Datagram { .. } => FrameType::Datagram,
+            crate::mcquic::ChannelFrame::Multicast(frame) => {
+                FrameType::try_from(frame.frame_type()?)?
+            }
+        })
+    }
+
+    #[cfg(feature = "mcquic")]
+    fn input_mcquic_channel_frame(
+        &mut self,
+        frame: crate::mcquic::ChannelFrame,
+        now: Instant,
+    ) -> Res<()> {
+        match frame {
+            crate::mcquic::ChannelFrame::Padding { len } => {
+                self.stats.borrow_mut().frame_rx.padding += len;
+            }
+            crate::mcquic::ChannelFrame::Ping => {
+                self.stats.borrow_mut().frame_rx.ping += 1;
+            }
+            crate::mcquic::ChannelFrame::ResetStream {
+                stream_id,
+                error_code,
+                final_size,
+            } => {
+                let frame = Frame::ResetStream {
+                    stream_id: StreamId::from(stream_id),
+                    application_error_code: error_code,
+                    final_size,
+                };
+                self.streams
+                    .input_frame(&frame, &mut self.stats.borrow_mut().frame_rx)?;
+            }
+            crate::mcquic::ChannelFrame::Stream {
+                stream_id,
+                offset,
+                fin,
+                data,
+            } => {
+                let frame = Frame::Stream {
+                    stream_id: StreamId::from(stream_id),
+                    offset,
+                    data: &data,
+                    fin,
+                    fill: false,
+                };
+                self.streams
+                    .input_frame(&frame, &mut self.stats.borrow_mut().frame_rx)?;
+            }
+            crate::mcquic::ChannelFrame::Datagram { data } => {
+                self.stats.borrow_mut().frame_rx.datagram += 1;
+                self.quic_datagrams
+                    .handle_datagram(&data, &mut self.stats.borrow_mut())?;
+            }
+            crate::mcquic::ChannelFrame::Multicast(frame) => {
+                self.input_mcquic_frame(frame, now)?;
+            }
+        }
         Ok(())
     }
 
@@ -4123,6 +4290,78 @@ impl Connection {
     pub fn send_datagram<I: Into<DatagramTracking>>(&mut self, buf: Vec<u8>, id: I) -> Res<()> {
         self.quic_datagrams
             .add_datagram(buf, id.into(), &mut self.stats.borrow_mut())
+    }
+
+    /// Process one protected multicast UDP payload for an announced channel.
+    ///
+    /// Authenticated `STREAM` and `RESET_STREAM` frames enter the ordinary QUIC
+    /// receive-stream machinery. Authenticated `DATAGRAM` frames also retain the
+    /// legacy channel `DATAGRAM` queue while entering ordinary QUIC `DATAGRAM`
+    /// delivery.
+    ///
+    /// # Errors
+    ///
+    /// Returns `NotAvailable` for an unknown channel, an authentication error
+    /// for an invalid channel packet, or the QUIC stream error raised while
+    /// applying an authenticated frame. Stream errors also close the
+    /// connection in the same way as errors from unicast packets.
+    #[cfg(feature = "mcquic")]
+    pub fn mcquic_process_channel_packet(
+        &mut self,
+        channel_id: &[u8],
+        protected_packet: &[u8],
+        now: Instant,
+    ) -> Res<()> {
+        if !self.mcquic_negotiated() {
+            return Err(Error::NotAvailable);
+        }
+        let released = self
+            .mcquic_channels
+            .get_mut(channel_id)
+            .ok_or(Error::NotAvailable)?
+            .process_protected_packet_for_connection(protected_packet)?;
+
+        match self.process_mcquic_released_packets(released, now) {
+            Ok(()) => Ok(()),
+            Err((frame_type, error)) => self.capture_error(None, now, frame_type, Err(error)),
+        }
+    }
+
+    /// Pop a legacy DATAGRAM released from an authenticated channel packet.
+    ///
+    /// New stream-based integrations do not need this compatibility API.
+    #[cfg(feature = "mcquic")]
+    pub fn mcquic_pop_channel_datagram(&mut self) -> Option<crate::mcquic::ChannelDatagram> {
+        self.mcquic_channels
+            .values_mut()
+            .find_map(crate::mcquic::ChannelReceiveState::pop_datagram)
+    }
+
+    /// Queue all pending channel acknowledgements for unicast delivery.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if MCQUIC is unavailable or an ACK cannot be queued.
+    #[cfg(feature = "mcquic")]
+    pub fn mcquic_send_pending_acks(&mut self) -> Res<bool> {
+        let pending = self
+            .mcquic_channels
+            .iter()
+            .filter_map(|(channel_id, channel)| {
+                channel.pending_ack().map(|ack| (channel_id.clone(), ack))
+            })
+            .collect::<Vec<_>>();
+
+        for (_, ack) in &pending {
+            self.mcquic_send(crate::mcquic::Frame::Ack(ack.clone()))?;
+        }
+        for (channel_id, _) in &pending {
+            self.mcquic_channels
+                .get_mut(channel_id)
+                .ok_or(Error::Internal)?
+                .mark_ack_sent();
+        }
+        Ok(!pending.is_empty())
     }
 
     /// Queue an experimental MCQUIC control frame for unicast delivery.

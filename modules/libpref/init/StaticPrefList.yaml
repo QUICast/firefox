@@ -16066,9 +16066,8 @@
   value: false
   mirror: always
 
-# Enable the experimental native MoQ demo path. This implies MCQUIC transport
-# support and internally enables the native subscriber, media sink, decoder, and
-# debug overlay.
+# Enable the experimental native MoQ demo subscriber, media sink, decoder, and
+# debug overlay. The generic MCQUIC transport preference must also be enabled.
 - name: network.http.http3.mcquic.native_moq_demo.enabled
   type: RelaxedAtomicBool
   value: false

@@ -629,12 +629,23 @@ impl ChannelReceiveState {
         &self.announce.channel_id
     }
 
+    /// Return the announcement that defines this receive state.
+    #[must_use]
+    pub const fn announce(&self) -> &Announce {
+        &self.announce
+    }
+
     /// Insert an `MC_KEY` for this channel.
     ///
     /// # Errors
     ///
     /// Returns an error if the key is for another channel.
     pub fn insert_key(&mut self, key: Key) -> Res<Vec<ChannelDatagram>> {
+        let packets = self.insert_key_for_connection(key)?;
+        Ok(self.datagrams_from_packets(&packets))
+    }
+
+    pub(crate) fn insert_key_for_connection(&mut self, key: Key) -> Res<Vec<ChannelPacket>> {
         self.check_channel_id(&key.channel_id)?;
         if let Some(existing) = self.keys.get(&key.key_sequence)
             && (existing.from_packet_number != key.from_packet_number
@@ -652,7 +663,19 @@ impl ChannelReceiveState {
     ///
     /// Returns an error if the frame is for another channel or its hash payload
     /// does not align with the announced hash algorithm.
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "Public API accepts decoded frames by value for queue handoff."
+    )]
     pub fn insert_integrity(&mut self, integrity: Integrity) -> Res<Vec<ChannelDatagram>> {
+        let packets = self.insert_integrity_for_connection(&integrity)?;
+        Ok(self.datagrams_from_packets(&packets))
+    }
+
+    pub(crate) fn insert_integrity_for_connection(
+        &mut self,
+        integrity: &Integrity,
+    ) -> Res<Vec<ChannelPacket>> {
         self.check_channel_id(&integrity.channel_id)?;
         let hash_len = self.integrity_hash.output_len();
         let hash_count = if let Some(hash_count) = integrity.packet_hash_count {
@@ -698,6 +721,14 @@ impl ChannelReceiveState {
         &mut self,
         protected_packet: &[u8],
     ) -> Res<Vec<ChannelDatagram>> {
+        let packets = self.process_protected_packet_for_connection(protected_packet)?;
+        Ok(self.datagrams_from_packets(&packets))
+    }
+
+    pub(crate) fn process_protected_packet_for_connection(
+        &mut self,
+        protected_packet: &[u8],
+    ) -> Res<Vec<ChannelPacket>> {
         let parsed = parse_channel_packet_metadata(
             &self.announce,
             protected_packet,
@@ -721,8 +752,10 @@ impl ChannelReceiveState {
             },
         );
 
-        self.try_release_packet(parsed.packet_number)
-            .map(Option::unwrap_or_default)
+        Ok(self
+            .try_release_packet(parsed.packet_number)?
+            .into_iter()
+            .collect())
     }
 
     /// Validate an already-decoded channel packet and release any DATAGRAMs.
@@ -742,13 +775,19 @@ impl ChannelReceiveState {
         protected_packet: &[u8],
     ) -> Res<Vec<ChannelDatagram>> {
         self.check_channel_id(&packet.channel_id)?;
+        let packet_number = packet.packet_number;
+        if self.accepted_packets.contains(&packet_number) {
+            return Ok(Vec::new());
+        }
         if !self.keys.contains_key(&packet.key_sequence) {
             return Err(Error::NotAvailable);
         }
-        self.validate_integrity(packet.packet_number, protected_packet)?;
+        self.validate_integrity(packet_number, protected_packet)?;
 
-        let released = self.release_packet_datagrams(packet);
-        Ok(released)
+        self.pending_packets.remove(&packet_number);
+        self.accepted_packets.insert(packet_number);
+        let packet = self.release_packet(packet);
+        Ok(self.datagrams_from_packets(std::slice::from_ref(&packet)))
     }
 
     /// Pop a released channel DATAGRAM.
@@ -788,18 +827,18 @@ impl ChannelReceiveState {
         }
     }
 
-    fn release_ready_packets(&mut self) -> Res<Vec<ChannelDatagram>> {
+    fn release_ready_packets(&mut self) -> Res<Vec<ChannelPacket>> {
         let packet_numbers = self.pending_packets.keys().copied().collect::<Vec<_>>();
         let mut released = Vec::new();
         for packet_number in packet_numbers {
-            if let Some(mut datagrams) = self.try_release_packet(packet_number)? {
-                released.append(&mut datagrams);
+            if let Some(packet) = self.try_release_packet(packet_number)? {
+                released.push(packet);
             }
         }
         Ok(released)
     }
 
-    fn try_release_packet(&mut self, packet_number: u64) -> Res<Option<Vec<ChannelDatagram>>> {
+    fn try_release_packet(&mut self, packet_number: u64) -> Res<Option<ChannelPacket>> {
         let Some(pending) = self.pending_packets.get(&packet_number) else {
             return Ok(None);
         };
@@ -823,32 +862,48 @@ impl ChannelReceiveState {
             self.largest_observed_packet_number,
         )?;
         self.accepted_packets.insert(packet_number);
-        Ok(Some(self.release_packet_datagrams(packet)))
+        Ok(Some(self.release_packet(packet)))
     }
 
     fn select_key(&self, packet_number: u64, key_phase: bool) -> Option<&Key> {
         self.keys.values().rev().find(|key| {
             key.from_packet_number <= packet_number
-                && (key.key_sequence % 2 == if key_phase { 1 } else { 0 })
+                && (key.key_sequence % 2 == u64::from(key_phase))
         })
     }
 
-    fn release_packet_datagrams(&mut self, packet: ChannelPacket) -> Vec<ChannelDatagram> {
+    fn release_packet(&mut self, packet: ChannelPacket) -> ChannelPacket {
         let packet_number = packet.packet_number;
-        let mut released = Vec::new();
-        for frame in packet.frames {
+        for frame in &packet.frames {
             if let ChannelFrame::Datagram { data } = frame {
                 let datagram = ChannelDatagram {
                     channel_id: self.announce.channel_id.clone(),
                     packet_number,
-                    data,
+                    data: data.clone(),
                 };
-                self.datagrams.push_back(datagram.clone());
-                released.push(datagram);
+                self.datagrams.push_back(datagram);
             }
         }
         self.ack_tracker.record_packet(packet_number);
-        released
+        packet
+    }
+
+    fn datagrams_from_packets(&self, packets: &[ChannelPacket]) -> Vec<ChannelDatagram> {
+        packets
+            .iter()
+            .flat_map(|packet| {
+                packet.frames.iter().filter_map(|frame| {
+                    let ChannelFrame::Datagram { data } = frame else {
+                        return None;
+                    };
+                    Some(ChannelDatagram {
+                        channel_id: self.announce.channel_id.clone(),
+                        packet_number: packet.packet_number,
+                        data: data.clone(),
+                    })
+                })
+            })
+            .collect()
     }
 }
 
@@ -1170,11 +1225,14 @@ fn decode_channel_frame(announce: &Announce, frame: QuicFrame) -> Res<ChannelFra
             stream_id,
             application_error_code,
             final_size,
-        } => ChannelFrame::ResetStream {
-            stream_id: stream_id.as_u64(),
-            error_code: application_error_code,
-            final_size,
-        },
+        } => {
+            validate_channel_stream_id(stream_id.as_u64())?;
+            ChannelFrame::ResetStream {
+                stream_id: stream_id.as_u64(),
+                error_code: application_error_code,
+                final_size,
+            }
+        }
         QuicFrame::Stream {
             stream_id,
             offset,

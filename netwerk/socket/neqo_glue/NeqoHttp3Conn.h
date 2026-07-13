@@ -109,6 +109,13 @@ class NeqoHttp3Conn final {
                                                    aSequence);
   }
 
+  nsresult McquicSendState(const nsACString& aChannelId, uint64_t aSequence,
+                           McquicChannelStateExternal aState,
+                           uint64_t aReasonCode) {
+    return neqo_http3conn_mcquic_send_state(this, &aChannelId, aSequence,
+                                            aState, aReasonCode);
+  }
+
   McquicSendPendingAcksResult McquicSendPendingAcks() {
     return neqo_http3conn_mcquic_send_pending_acks(this);
   }

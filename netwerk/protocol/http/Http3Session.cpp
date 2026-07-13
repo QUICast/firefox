@@ -77,6 +77,9 @@ const uint32_t MCQUIC_MAX_PACKETS_PER_POLL = 32;
 const uint64_t MCQUIC_MOQ_MULTICAST_STALL_MS = 1000;
 const uint32_t MCQUIC_MOQ_MAX_DEFERRED_UNICAST_DATAGRAMS = 64;
 const uint64_t MCQUIC_MOQ_NATIVE_DEMO_FALLBACK_TRACK_ALIAS = 1;
+const uint64_t MCQUIC_STATE_REASON_UNSPECIFIED_OTHER = 0x0;
+const uint64_t MCQUIC_STATE_REASON_REQUESTED_BY_SERVER = 0x1;
+const uint64_t MCQUIC_STATE_REASON_UNSYNCHRONIZED_PROPERTIES = 0x5;
 const char MCQUIC_NATIVE_MOQ_DEMO_ORIGIN_PREF[] =
     "network.http.http3.mcquic.native_moq_demo.origin";
 const char MCQUIC_NATIVE_MOQ_DEMO_TRACK_PREF[] =
@@ -84,8 +87,7 @@ const char MCQUIC_NATIVE_MOQ_DEMO_TRACK_PREF[] =
 const char MCQUIC_MOQ_SESSION_READY_TOPIC[] = "mcquic-moq-session-ready";
 
 static bool McquicTransportEnabled() {
-  return StaticPrefs::network_http_http3_mcquic_enabled() ||
-         StaticPrefs::network_http_http3_mcquic_native_moq_demo_enabled();
+  return StaticPrefs::network_http_http3_mcquic_enabled();
 }
 
 static bool McquicNativeMoqDemoEnabled() {
@@ -183,6 +185,16 @@ static nsCString McquicHexPrefix(const nsTArray<uint8_t>& aBytes,
   size_t limit = aBytes.Length() < aMaxBytes ? aBytes.Length() : aMaxBytes;
   for (size_t i = 0; i < limit; ++i) {
     out.AppendPrintf("%02x", aBytes[i]);
+  }
+  return out;
+}
+
+static nsCString McquicHexPrefix(const nsACString& aBytes,
+                                 size_t aMaxBytes = 8) {
+  nsCString out;
+  size_t limit = aBytes.Length() < aMaxBytes ? aBytes.Length() : aMaxBytes;
+  for (size_t i = 0; i < limit; ++i) {
+    out.AppendPrintf("%02x", static_cast<unsigned char>(aBytes[i]));
   }
   return out;
 }
@@ -903,7 +915,7 @@ nsresult Http3Session::ProcessTransactionRead(Http3StreamBase* stream) {
   return NS_OK;
 }
 
-nsresult Http3Session::ProcessEvents() {
+nsresult Http3Session::ProcessHttp3Events() {
   MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
   LOG(("Http3Session::ProcessEvents [this=%p]", this));
@@ -1497,6 +1509,15 @@ nsresult Http3Session::ProcessEvents() {
     }
   }
 
+  return NS_OK;
+}
+
+nsresult Http3Session::ProcessEvents() {
+  nsresult rv = ProcessHttp3Events();
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
+
   rv = ProcessMcquicControlFrames();
   if (NS_FAILED(rv)) {
     return rv;
@@ -1518,7 +1539,7 @@ nsresult Http3Session::ProcessEvents() {
 nsresult Http3Session::EnsureMcquicReceiver() {
   MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
-  if (!McquicNativeMoqDemoEnabled()) {
+  if (!McquicTransportEnabled()) {
     return NS_ERROR_NOT_AVAILABLE;
   }
 
@@ -1940,6 +1961,68 @@ nsresult Http3Session::ProcessMcquicMoqUnicastDatagrams() {
   return NS_OK;
 }
 
+bool Http3Session::HasJoinedMcquicChannel() const {
+  for (auto iter = mMcquicChannels.ConstIter(); !iter.Done(); iter.Next()) {
+    if (iter.Data().mJoined) {
+      return true;
+    }
+  }
+  return false;
+}
+
+nsresult Http3Session::SendMcquicState(const nsACString& aChannelId,
+                                       McquicChannelStateExternal aState,
+                                       uint64_t aReasonCode) {
+  auto channel = mMcquicChannels.Lookup(aChannelId);
+  if (!channel) {
+    return NS_ERROR_NOT_AVAILABLE;
+  }
+
+  uint64_t sequence = ++channel.Data().mStateSequence;
+  nsresult rv = mHttp3Connection->McquicSendState(aChannelId, sequence, aState,
+                                                  aReasonCode);
+  if (NS_FAILED(rv)) {
+    LOG(
+        ("MCQUIC failed to queue MC_STATE [this=%p channel=%s state=%u "
+         "sequence=%" PRIu64 " reason=%" PRIu64 " rv=0x%08" PRIx32 "]",
+         this, McquicHexPrefix(aChannelId).get(), static_cast<uint32_t>(aState),
+         sequence, aReasonCode, static_cast<uint32_t>(rv)));
+    return rv;
+  }
+
+  mMcquicNeedsOutput = true;
+  LOG(("MCQUIC queued MC_STATE [this=%p channel=%s state=%u sequence=%" PRIu64
+       " reason=%" PRIu64 "]",
+       this, McquicHexPrefix(aChannelId).get(), static_cast<uint32_t>(aState),
+       sequence, aReasonCode));
+  return NS_OK;
+}
+
+nsresult Http3Session::PumpMcquicAuthenticatedData() {
+  nsresult rv = ProcessHttp3Events();
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
+
+  // Legacy native-demo DATAGRAMs are drained here only when its separate pref
+  // is enabled. STREAM and RESET_STREAM have already entered ordinary Neqo
+  // receive-stream processing and are surfaced by ProcessHttp3Events().
+  ProcessMcquicValidatedDatagrams();
+
+  McquicSendPendingAcksResult ack = mHttp3Connection->McquicSendPendingAcks();
+  if (NS_FAILED(ack.result)) {
+    LOG(("MCQUIC failed to queue MC_ACK [this=%p rv=0x%08" PRIx32 "]", this,
+         static_cast<uint32_t>(ack.result)));
+    return ack.result;
+  }
+  if (ack.sent) {
+    mMcquicNeedsOutput = true;
+    LOG(("MCQUIC queued pending MC_ACK [this=%p]", this));
+  }
+
+  return NS_OK;
+}
+
 nsresult Http3Session::ProcessMcquicControlFrames() {
   MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
@@ -1975,11 +2058,27 @@ nsresult Http3Session::ProcessMcquicControlFrames() {
              "port=%u]",
              this, channelHex.get(), frame.source_ip.get(),
              frame.group_ip.get(), frame.udp_port));
-        LOG(
-            ("MCQUIC multicast join attempted [this=%p channel=%s "
-             "source=%s group=%s port=%u]",
-             this, channelHex.get(), frame.source_ip.get(),
-             frame.group_ip.get(), frame.udp_port));
+
+        McquicChannelInfo info;
+        if (auto existing = mMcquicChannels.Lookup(channelId)) {
+          info = existing.Data();
+        }
+        info.mSource = frame.source_ip;
+        info.mGroup = frame.group_ip;
+        info.mInterface = McquicInterfaceForJoin(info.mSource);
+        info.mPort = frame.udp_port;
+
+        // MC_ANNOUNCE only creates local receive state. Membership changes are
+        // exclusively driven by MC_JOIN and MC_LEAVE.
+        if (info.mSubscriptionId != 0) {
+          LOG(
+              ("MCQUIC SSM subscription already configured [this=%p "
+               "channel=%s id=%" PRIu64 "]",
+               this, channelHex.get(), info.mSubscriptionId));
+          break;
+        }
+
+        mMcquicChannels.InsertOrUpdate(channelId, info);
 
         rv = EnsureMcquicReceiver();
         if (NS_FAILED(rv)) {
@@ -1987,25 +2086,12 @@ nsresult Http3Session::ProcessMcquicControlFrames() {
               ("MCQUIC receiver unavailable for announcement, continuing "
                "unicast [this=%p rv=0x%08" PRIx32 "]",
                this, static_cast<uint32_t>(rv)));
-          SetMcquicMoqDeliveryMode(McquicMoqDeliveryMode::Fallback,
-                                   "receiver unavailable");
+          if (McquicNativeMoqDemoEnabled()) {
+            SetMcquicMoqDeliveryMode(McquicMoqDeliveryMode::Fallback,
+                                     "receiver unavailable");
+          }
           break;
         }
-
-        McquicChannelInfo oldInfo;
-        if (mMcquicChannels.Remove(channelId, &oldInfo) && mMcquicReceiver) {
-          if (oldInfo.mJoined) {
-            (void)mMcquicReceiver->Leave(oldInfo.mSubscriptionId);
-          }
-          (void)mMcquicReceiver->Remove(oldInfo.mSubscriptionId);
-          mMcquicSubscriptionToChannel.Remove(oldInfo.mSubscriptionId);
-        }
-
-        McquicChannelInfo info;
-        info.mSource = frame.source_ip;
-        info.mGroup = frame.group_ip;
-        info.mInterface = McquicInterfaceForJoin(info.mSource);
-        info.mPort = frame.udp_port;
 
         rv = mMcquicReceiver->AddSsmSubscription(
             info.mSource, info.mGroup, info.mPort, info.mInterface, Nothing(),
@@ -2015,8 +2101,94 @@ nsresult Http3Session::ProcessMcquicControlFrames() {
               ("MCQUIC failed to add SSM subscription [this=%p channel=%s "
                "rv=0x%08" PRIx32 " continuing_unicast=1]",
                this, channelHex.get(), static_cast<uint32_t>(rv)));
-          SetMcquicMoqDeliveryMode(McquicMoqDeliveryMode::Fallback,
-                                   "subscription add failed");
+          if (McquicNativeMoqDemoEnabled()) {
+            SetMcquicMoqDeliveryMode(McquicMoqDeliveryMode::Fallback,
+                                     "subscription add failed");
+          }
+          break;
+        }
+
+        mMcquicSubscriptionToChannel.InsertOrUpdate(info.mSubscriptionId,
+                                                    channelId);
+        mMcquicChannels.InsertOrUpdate(channelId, info);
+        LOG(
+            ("MCQUIC SSM subscription configured without joining [this=%p "
+             "channel=%s id=%" PRIu64 "]",
+             this, channelHex.get(), info.mSubscriptionId));
+      } break;
+      case McquicControlFrameTag::Key: {
+        LOG(("MCQUIC MC_KEY [this=%p channel=%s key_sequence=%" PRIu64 "]",
+             this, channelHex.get(), frame.key_sequence));
+        if (!mMcquicChannels.Contains(channelId)) {
+          mMcquicChannels.InsertOrUpdate(channelId, McquicChannelInfo{});
+        }
+        auto channel = mMcquicChannels.Lookup(channelId);
+        MOZ_ASSERT(channel);
+        if (channel.Data().mLatestKeySequence < frame.key_sequence) {
+          channel.Data().mLatestKeySequence = frame.key_sequence;
+        }
+        rv = PumpMcquicAuthenticatedData();
+        if (NS_FAILED(rv)) {
+          return rv;
+        }
+      } break;
+      case McquicControlFrameTag::Integrity:
+        LOG(("MCQUIC MC_INTEGRITY [this=%p channel=%s start=%" PRIu64
+             " hashes=%" PRIu64 "]",
+             this, channelHex.get(), frame.packet_number_start,
+             frame.packet_hash_count));
+        rv = PumpMcquicAuthenticatedData();
+        if (NS_FAILED(rv)) {
+          return rv;
+        }
+        break;
+      case McquicControlFrameTag::Join: {
+        LOG(("MCQUIC MC_JOIN [this=%p channel=%s key_sequence=%" PRIu64
+             " state_sequence=%" PRIu64 "]",
+             this, channelHex.get(), frame.key_sequence, frame.state_sequence));
+        if (!mMcquicChannels.Contains(channelId)) {
+          mMcquicChannels.InsertOrUpdate(channelId, McquicChannelInfo{});
+        }
+        auto channel = mMcquicChannels.Lookup(channelId);
+        MOZ_ASSERT(channel);
+        McquicChannelInfo& info = channel.Data();
+        if (info.mLastControlStateSequence < frame.state_sequence) {
+          info.mLastControlStateSequence = frame.state_sequence;
+        }
+
+        if (info.mJoined) {
+          LOG(
+              ("MCQUIC duplicate MC_JOIN ignored for joined channel [this=%p "
+               "channel=%s]",
+               this, channelHex.get()));
+          break;
+        }
+
+        uint64_t declineReason = MCQUIC_STATE_REASON_UNSPECIFIED_OTHER;
+        if (info.mSource.IsEmpty() ||
+            info.mLatestKeySequence < frame.key_sequence ||
+            frame.state_sequence < info.mStateSequence) {
+          declineReason = MCQUIC_STATE_REASON_UNSYNCHRONIZED_PROPERTIES;
+        }
+
+        if (!mMcquicReceiver || info.mSubscriptionId == 0 ||
+            declineReason != MCQUIC_STATE_REASON_UNSPECIFIED_OTHER) {
+          LOG(
+              ("MCQUIC declining MC_JOIN and continuing unicast [this=%p "
+               "channel=%s subscription=%" PRIu64 " latest_key=%" PRIu64
+               " requested_key=%" PRIu64 " reason=%" PRIu64 "]",
+               this, channelHex.get(), info.mSubscriptionId,
+               info.mLatestKeySequence, frame.key_sequence, declineReason));
+          if (McquicNativeMoqDemoEnabled()) {
+            SetMcquicMoqDeliveryMode(McquicMoqDeliveryMode::Fallback,
+                                     "join declined");
+          }
+          rv = SendMcquicState(channelId,
+                               McquicChannelStateExternal::DeclinedJoin,
+                               declineReason);
+          if (NS_FAILED(rv)) {
+            return rv;
+          }
           break;
         }
 
@@ -2027,62 +2199,113 @@ nsresult Http3Session::ProcessMcquicControlFrames() {
                "id=%" PRIu64 " rv=0x%08" PRIx32 " continuing_unicast=1]",
                this, channelHex.get(), info.mSubscriptionId,
                static_cast<uint32_t>(rv)));
-          (void)mMcquicReceiver->Remove(info.mSubscriptionId);
-          SetMcquicMoqDeliveryMode(McquicMoqDeliveryMode::Fallback,
-                                   "subscription join failed");
+          if (McquicNativeMoqDemoEnabled()) {
+            SetMcquicMoqDeliveryMode(McquicMoqDeliveryMode::Fallback,
+                                     "subscription join failed");
+          }
+          rv = SendMcquicState(channelId,
+                               McquicChannelStateExternal::DeclinedJoin,
+                               MCQUIC_STATE_REASON_UNSPECIFIED_OTHER);
+          if (NS_FAILED(rv)) {
+            return rv;
+          }
           break;
         }
 
         info.mJoined = true;
-        mMcquicSubscriptionToChannel.InsertOrUpdate(info.mSubscriptionId,
-                                                    channelId);
-        mMcquicChannels.InsertOrUpdate(channelId, info);
-        mMcquicMoqMulticastJoinStarted = TimeStamp::Now();
-        mMcquicMoqLastMulticastDatagram = TimeStamp();
-        mMcquicMoqLastMulticastMediaProgress = TimeStamp();
-        mMcquicMoqMulticastObjectsWithoutMediaProgress = 0;
-        mMcquicMoqMulticastMediaReady = false;
-        SetMcquicMoqDeliveryMode(McquicMoqDeliveryMode::MulticastJoining,
-                                 "mc-announce joined");
-
-        rv = mHttp3Connection->McquicSendJoinedState(channelId,
-                                                     ++mMcquicStateSequence);
-        if (NS_SUCCEEDED(rv)) {
-          mMcquicNeedsOutput = true;
-          LOG(
-              ("MCQUIC queued MC_STATE(JOINED) [this=%p channel=%s "
-               "sequence=%" PRIu64 "]",
-               this, channelHex.get(), mMcquicStateSequence));
-        } else {
-          LOG(
-              ("MCQUIC failed to queue MC_STATE(JOINED) [this=%p channel=%s "
-               "rv=0x%08" PRIx32 "]",
-               this, channelHex.get(), static_cast<uint32_t>(rv)));
+        if (McquicNativeMoqDemoEnabled()) {
+          mMcquicMoqMulticastJoinStarted = TimeStamp::Now();
+          mMcquicMoqLastMulticastDatagram = TimeStamp();
+          mMcquicMoqLastMulticastMediaProgress = TimeStamp();
+          mMcquicMoqMulticastObjectsWithoutMediaProgress = 0;
+          mMcquicMoqMulticastMediaReady = false;
+          SetMcquicMoqDeliveryMode(McquicMoqDeliveryMode::MulticastJoining,
+                                   "mc-join succeeded");
         }
 
+        rv = SendMcquicState(channelId, McquicChannelStateExternal::Joined,
+                             MCQUIC_STATE_REASON_REQUESTED_BY_SERVER);
+        if (NS_FAILED(rv)) {
+          return rv;
+        }
         ScheduleMcquicPoll();
       } break;
-      case McquicControlFrameTag::Key:
-        LOG(("MCQUIC MC_KEY [this=%p channel=%s key_sequence=%" PRIu64 "]",
-             this, channelHex.get(), frame.key_sequence));
-        ProcessMcquicValidatedDatagrams();
-        break;
-      case McquicControlFrameTag::Integrity:
-        LOG(("MCQUIC MC_INTEGRITY [this=%p channel=%s start=%" PRIu64
-             " hashes=%" PRIu64 "]",
-             this, channelHex.get(), frame.packet_number_start,
-             frame.packet_hash_count));
-        ProcessMcquicValidatedDatagrams();
-        break;
-      case McquicControlFrameTag::Join:
-        LOG(("MCQUIC MC_JOIN [this=%p channel=%s]", this, channelHex.get()));
-        break;
-      case McquicControlFrameTag::Leave:
-        LOG(("MCQUIC MC_LEAVE [this=%p channel=%s]", this, channelHex.get()));
-        break;
-      case McquicControlFrameTag::Retire:
+      case McquicControlFrameTag::Leave: {
+        LOG(("MCQUIC MC_LEAVE [this=%p channel=%s state_sequence=%" PRIu64 "]",
+             this, channelHex.get(), frame.state_sequence));
+        auto channel = mMcquicChannels.Lookup(channelId);
+        if (!channel || !channel.Data().mJoined) {
+          LOG(
+              ("MCQUIC MC_LEAVE ignored for unjoined channel [this=%p "
+               "channel=%s]",
+               this, channelHex.get()));
+          break;
+        }
+
+        McquicChannelInfo& info = channel.Data();
+        if (frame.state_sequence < info.mLastControlStateSequence) {
+          LOG(
+              ("MCQUIC stale MC_LEAVE ignored [this=%p channel=%s "
+               "state_sequence=%" PRIu64 " latest=%" PRIu64 "]",
+               this, channelHex.get(), frame.state_sequence,
+               info.mLastControlStateSequence));
+          break;
+        }
+        info.mLastControlStateSequence = frame.state_sequence;
+
+        rv = mMcquicReceiver->Leave(info.mSubscriptionId);
+        if (NS_FAILED(rv)) {
+          LOG(
+              ("MCQUIC SSM leave failed; removing subscription [this=%p "
+               "channel=%s id=%" PRIu64 " rv=0x%08" PRIx32 "]",
+               this, channelHex.get(), info.mSubscriptionId,
+               static_cast<uint32_t>(rv)));
+          (void)mMcquicReceiver->Remove(info.mSubscriptionId);
+          mMcquicSubscriptionToChannel.Remove(info.mSubscriptionId);
+          info.mSubscriptionId = 0;
+        }
+        info.mJoined = false;
+        if (McquicNativeMoqDemoEnabled()) {
+          SetMcquicMoqDeliveryMode(McquicMoqDeliveryMode::Fallback,
+                                   "server requested leave");
+        }
+        rv = SendMcquicState(channelId, McquicChannelStateExternal::Left,
+                             MCQUIC_STATE_REASON_REQUESTED_BY_SERVER);
+        if (NS_FAILED(rv)) {
+          return rv;
+        }
+      } break;
+      case McquicControlFrameTag::Retire: {
         LOG(("MCQUIC MC_RETIRE [this=%p channel=%s]", this, channelHex.get()));
-        break;
+        if (!mMcquicChannels.Contains(channelId)) {
+          mMcquicChannels.InsertOrUpdate(channelId, McquicChannelInfo{});
+        }
+        {
+          auto channel = mMcquicChannels.Lookup(channelId);
+          MOZ_ASSERT(channel);
+          McquicChannelInfo& info = channel.Data();
+          if (mMcquicReceiver && info.mSubscriptionId != 0) {
+            if (info.mJoined) {
+              (void)mMcquicReceiver->Leave(info.mSubscriptionId);
+            }
+            (void)mMcquicReceiver->Remove(info.mSubscriptionId);
+            mMcquicSubscriptionToChannel.Remove(info.mSubscriptionId);
+            info.mSubscriptionId = 0;
+            info.mJoined = false;
+          }
+        }
+
+        rv = SendMcquicState(channelId, McquicChannelStateExternal::Retired,
+                             MCQUIC_STATE_REASON_REQUESTED_BY_SERVER);
+        if (NS_FAILED(rv)) {
+          return rv;
+        }
+        mMcquicChannels.Remove(channelId);
+        if (McquicNativeMoqDemoEnabled()) {
+          SetMcquicMoqDeliveryMode(McquicMoqDeliveryMode::Fallback,
+                                   "server retired channel");
+        }
+      } break;
       case McquicControlFrameTag::State:
         LOG(("MCQUIC MC_STATE [this=%p channel=%s state=%u sequence=%" PRIu64
              "]",
@@ -2107,12 +2330,14 @@ nsresult Http3Session::ProcessMcquicControlFrames() {
 nsresult Http3Session::ProcessMcquicPackets() {
   MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
-  if (!McquicNativeMoqDemoEnabled() || !mMcquicReceiver ||
-      mMcquicChannels.IsEmpty()) {
+  if (!McquicTransportEnabled() || !mMcquicReceiver ||
+      !HasJoinedMcquicChannel()) {
     return NS_OK;
   }
 
-  MaybeFallbackMcquicMoqUnicast("multicast transport stalled while polling");
+  if (McquicNativeMoqDemoEnabled()) {
+    MaybeFallbackMcquicMoqUnicast("multicast transport stalled while polling");
+  }
 
   for (uint32_t i = 0; i < MCQUIC_MAX_PACKETS_PER_POLL; ++i) {
     McquicMcrxPacket packet{};
@@ -2133,33 +2358,30 @@ nsresult Http3Session::ProcessMcquicPackets() {
       continue;
     }
 
+    auto channelInfo = mMcquicChannels.Lookup(channel.Data());
+    if (!channelInfo || !channelInfo.Data().mJoined) {
+      LOG(("MCQUIC packet ignored for unjoined channel [this=%p id=%" PRIu64
+           "]",
+           this, packet.subscription_id));
+      continue;
+    }
+
     rv = mHttp3Connection->McquicProcessChannelPacket(channel.Data(),
                                                       packet.payload);
     if (NS_FAILED(rv)) {
       LOG(("MCQUIC packet validation failed [this=%p id=%" PRIu64
            " rv=0x%08" PRIx32 "]",
            this, packet.subscription_id, static_cast<uint32_t>(rv)));
-      SetMcquicMoqDeliveryMode(McquicMoqDeliveryMode::Fallback,
-                               "multicast validation failed");
+      if (McquicNativeMoqDemoEnabled()) {
+        SetMcquicMoqDeliveryMode(McquicMoqDeliveryMode::Fallback,
+                                 "multicast validation failed");
+      }
       continue;
     }
 
-    ProcessMcquicValidatedDatagrams();
-
-    McquicSendPendingAcksResult ack = mHttp3Connection->McquicSendPendingAcks();
-    if (NS_FAILED(ack.result)) {
-      LOG(("MCQUIC failed to queue MC_ACK [this=%p rv=0x%08" PRIx32 "]", this,
-           static_cast<uint32_t>(ack.result)));
-      continue;
-    }
-    if (ack.sent) {
-      mMcquicNeedsOutput = true;
-      LOG(("MCQUIC queued MC_ACK [this=%p id=%" PRIu64 "]", this,
-           packet.subscription_id));
-      LOG(
-          ("MCQUIC multicast transport acknowledged; media readiness not "
-           "implied [this=%p id=%" PRIu64 " media_ready=%d]",
-           this, packet.subscription_id, mMcquicMoqMulticastMediaReady));
+    rv = PumpMcquicAuthenticatedData();
+    if (NS_FAILED(rv)) {
+      return rv;
     }
   }
 
@@ -2480,8 +2702,8 @@ void Http3Session::ProcessMcquicValidatedDatagrams() {
 void Http3Session::ScheduleMcquicPoll() {
   MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
-  if (!McquicNativeMoqDemoEnabled() || mMcquicChannels.IsEmpty() ||
-      IsClosing()) {
+  if (!McquicTransportEnabled() || !mMcquicReceiver ||
+      !HasJoinedMcquicChannel() || IsClosing()) {
     return;
   }
 

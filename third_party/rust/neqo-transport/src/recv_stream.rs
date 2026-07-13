@@ -9,7 +9,7 @@
 
 use std::{
     cell::RefCell,
-    cmp::max,
+    cmp::{max, min},
     collections::BTreeMap,
     fmt::Debug,
     mem,
@@ -128,6 +128,30 @@ impl RxStreamOrderer {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    fn inbound_frame_checked(&mut self, new_start: u64, new_data: &[u8]) -> Res<()> {
+        let new_end = new_start + u64::try_from(new_data.len())?;
+        for (&existing_start, existing_data) in self.data_ranges.range(..new_end) {
+            let existing_end = existing_start + u64::try_from(existing_data.len())?;
+            let overlap_start = max(new_start, existing_start);
+            let overlap_end = min(new_end, existing_end);
+            if overlap_start >= overlap_end {
+                continue;
+            }
+
+            let new_range = usize::try_from(overlap_start - new_start)?
+                ..usize::try_from(overlap_end - new_start)?;
+            let existing_range = usize::try_from(overlap_start - existing_start)?
+                ..usize::try_from(overlap_end - existing_start)?;
+            if new_data[new_range] != existing_data[existing_range] {
+                // MC_EXTENSION_ERROR has no assigned code in the current draft.
+                return Err(Error::ProtocolViolation);
+            }
+        }
+
+        self.inbound_frame(new_start, new_data);
+        Ok(())
     }
 
     /// Process an incoming stream frame off the wire. This may result in data
@@ -616,7 +640,7 @@ impl RecvStream {
                 fc,
                 session_fc,
             } => {
-                recv_buf.inbound_frame(offset, data);
+                recv_buf.inbound_frame_checked(offset, data)?;
                 if fin {
                     let all_recv =
                         fc.consumed() == recv_buf.retired() + recv_buf.bytes_ready() as u64;
@@ -643,7 +667,7 @@ impl RecvStream {
                 fc,
                 session_fc,
             } => {
-                recv_buf.inbound_frame(offset, data);
+                recv_buf.inbound_frame_checked(offset, data)?;
                 if fc.consumed() == recv_buf.retired() + recv_buf.bytes_ready() as u64 {
                     let buf = mem::replace(recv_buf, RxStreamOrderer::new());
                     let fc_copy = mem::take(fc);
@@ -655,8 +679,10 @@ impl RecvStream {
                     });
                 }
             }
-            RecvStreamState::DataRecvd { .. }
-            | RecvStreamState::DataRead { .. }
+            RecvStreamState::DataRecvd { recv_buf, .. } => {
+                recv_buf.inbound_frame_checked(offset, data)?;
+            }
+            RecvStreamState::DataRead { .. }
             | RecvStreamState::AbortReading { .. }
             | RecvStreamState::WaitForReset { .. }
             | RecvStreamState::ResetRecvd { .. } => {
@@ -1310,7 +1336,7 @@ mod tests {
         check_stats(&s, 22, 10);
 
         // another frame that overlaps the first
-        s.inbound_stream_frame(false, 14, &[3; 8]).unwrap();
+        s.inbound_stream_frame(false, 14, &[2; 8]).unwrap();
         assert!(!s.data_ready());
         assert_eq!(s.state.recv_buf().unwrap().retired(), 10);
         assert_eq!(s.state.recv_buf().unwrap().buffered(), 12);
@@ -1327,7 +1353,8 @@ mod tests {
         check_stats(&s, 22, 10);
 
         // fill in the gap
-        s.inbound_stream_frame(false, 10, &[5; 10]).unwrap();
+        s.inbound_stream_frame(false, 10, &[5, 5, 2, 2, 2, 2, 2, 2, 2, 2])
+            .unwrap();
         assert!(s.data_ready());
         assert_eq!(s.state.recv_buf().unwrap().retired(), 10);
         assert_eq!(s.state.recv_buf().unwrap().buffered(), 14);

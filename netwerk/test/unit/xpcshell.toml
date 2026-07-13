@@ -1928,5 +1928,13 @@ skip-if = [
   "os == 'win' && os_version == '11.26200' && arch == 'x86_64' && msix", # Bug 1807931
 ]
 
+["test_webtransport_mcquic.js"]
+run-if = [
+  "!socketprocess_networking",
+]
+skip-if = [
+  "os == 'android'", # Loopback SSM is in the host test-server namespace.
+]
+
 ["test_xmlhttprequest.js"]
 prefs = ["network.xhr.block_sync_system_requests=false"] # Bug 721336

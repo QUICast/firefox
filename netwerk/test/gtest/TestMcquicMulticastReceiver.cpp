@@ -18,6 +18,7 @@
 
 namespace mozilla::net {
 
+constexpr auto kMcquicTransportPref = "network.http.http3.mcquic.enabled";
 constexpr auto kMcquicNativeMoqDemoPref =
     "network.http.http3.mcquic.native_moq_demo.enabled";
 constexpr auto kSource = "127.0.0.1"_ns;
@@ -233,9 +234,13 @@ class RecordingMcquicMoqAccessUnitConsumer final
 
 TEST(TestMcquicMulticastReceiver, PrefOffIsInert)
 {
-  ASSERT_NS_SUCCEEDED(Preferences::SetBool(kMcquicNativeMoqDemoPref, false));
-  auto clearPref =
-      MakeScopeExit([] { Preferences::ClearUser(kMcquicNativeMoqDemoPref); });
+  ASSERT_NS_SUCCEEDED(Preferences::SetBool(kMcquicTransportPref, false));
+  // The native prototype no longer implicitly enables multicast transport.
+  ASSERT_NS_SUCCEEDED(Preferences::SetBool(kMcquicNativeMoqDemoPref, true));
+  auto clearPrefs = MakeScopeExit([] {
+    Preferences::ClearUser(kMcquicTransportPref);
+    Preferences::ClearUser(kMcquicNativeMoqDemoPref);
+  });
 
   auto* sts = gSocketTransportService;
   ASSERT_TRUE(sts);
@@ -254,9 +259,12 @@ TEST(TestMcquicMulticastReceiver, PrefOffIsInert)
 
 TEST(TestMcquicMulticastReceiver, LoopbackSsmLogsPacketWhenPrefOn)
 {
-  ASSERT_NS_SUCCEEDED(Preferences::SetBool(kMcquicNativeMoqDemoPref, true));
-  auto clearPref =
-      MakeScopeExit([] { Preferences::ClearUser(kMcquicNativeMoqDemoPref); });
+  ASSERT_NS_SUCCEEDED(Preferences::SetBool(kMcquicTransportPref, true));
+  ASSERT_NS_SUCCEEDED(Preferences::SetBool(kMcquicNativeMoqDemoPref, false));
+  auto clearPrefs = MakeScopeExit([] {
+    Preferences::ClearUser(kMcquicTransportPref);
+    Preferences::ClearUser(kMcquicNativeMoqDemoPref);
+  });
 
   uint16_t port = 0;
   ASSERT_NS_SUCCEEDED(PickUnusedUdpPort(&port));
@@ -323,6 +331,84 @@ TEST(TestMcquicMulticastReceiver, LoopbackSsmLogsPacketWhenPrefOn)
   ASSERT_EQ(
       std::memcmp(packet.payload.Elements(), kPayload, std::strlen(kPayload)),
       0);
+}
+
+TEST(TestMcquicMulticastReceiver, SubscriptionCanLeaveRejoinAndRemove)
+{
+  ASSERT_NS_SUCCEEDED(Preferences::SetBool(kMcquicTransportPref, true));
+  auto clearPref =
+      MakeScopeExit([] { Preferences::ClearUser(kMcquicTransportPref); });
+
+  uint16_t port = 0;
+  ASSERT_NS_SUCCEEDED(PickUnusedUdpPort(&port));
+
+  auto* sts = gSocketTransportService;
+  ASSERT_TRUE(sts);
+
+  nsresult initRv = NS_OK;
+  nsresult unknownJoinRv = NS_OK;
+  nsresult addRv = NS_OK;
+  nsresult firstJoinRv = NS_OK;
+  nsresult leaveRv = NS_OK;
+  nsresult secondJoinRv = NS_OK;
+  nsresult secondLeaveRv = NS_OK;
+  nsresult removeRv = NS_OK;
+  nsresult removedJoinRv = NS_OK;
+
+  NS_DispatchAndSpinEventLoopUntilComplete(
+      "TestMcquicMulticastReceiver::SubscriptionCanLeaveRejoinAndRemove"_ns,
+      sts,
+      NS_NewRunnableFunction(
+          "TestMcquicMulticastReceiver::SubscriptionCanLeaveRejoinAndRemove",
+          [&] {
+            McquicMulticastReceiver receiver;
+            initRv = receiver.Init();
+            if (NS_FAILED(initRv)) {
+              return;
+            }
+
+            unknownJoinRv = receiver.Join(UINT64_MAX);
+
+            uint64_t subscriptionId = 0;
+            addRv = receiver.AddSsmSubscription(
+                kSource, kGroup, port, kInterface, Nothing(), &subscriptionId);
+            if (NS_FAILED(addRv)) {
+              return;
+            }
+            firstJoinRv = receiver.Join(subscriptionId);
+            if (NS_FAILED(firstJoinRv)) {
+              return;
+            }
+            leaveRv = receiver.Leave(subscriptionId);
+            if (NS_FAILED(leaveRv)) {
+              return;
+            }
+            secondJoinRv = receiver.Join(subscriptionId);
+            if (NS_FAILED(secondJoinRv)) {
+              return;
+            }
+            secondLeaveRv = receiver.Leave(subscriptionId);
+            if (NS_FAILED(secondLeaveRv)) {
+              return;
+            }
+            removeRv = receiver.Remove(subscriptionId);
+            if (NS_FAILED(removeRv)) {
+              return;
+            }
+            removedJoinRv = receiver.Join(subscriptionId);
+          }));
+
+  ASSERT_NS_SUCCEEDED(initRv);
+  ASSERT_NS_FAILED(unknownJoinRv);
+  ASSERT_NS_SUCCEEDED(addRv);
+  if (NS_FAILED(firstJoinRv)) {
+    GTEST_SKIP() << "loopback SSM join is unavailable on this host";
+  }
+  ASSERT_NS_SUCCEEDED(leaveRv);
+  ASSERT_NS_SUCCEEDED(secondJoinRv);
+  ASSERT_NS_SUCCEEDED(secondLeaveRv);
+  ASSERT_NS_SUCCEEDED(removeRv);
+  ASSERT_NS_FAILED(removedJoinRv);
 }
 
 TEST(TestMcquicMoqDecoder, NativeMoqtObjectDatagram)

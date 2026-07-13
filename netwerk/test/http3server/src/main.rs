@@ -18,6 +18,12 @@ use neqo_transport::server::ConnectionRef;
 use neqo_transport::{
     ConnectionEvent, ConnectionParameters, OutputBatch, RandomConnectionIdGenerator, StreamType,
 };
+use neqo_transport::mcquic::{
+    Announce as McquicAnnounce, ChannelFrame as McquicChannelFrame,
+    ChannelSendState as McquicChannelSendState, ChannelState as McquicChannelState,
+    Frame as McquicFrame, Integrity as McquicIntegrity, Join as McquicJoin, Key as McquicKey,
+    Leave as McquicLeave, Retire as McquicRetire,
+};
 use std::env;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -51,13 +57,633 @@ use std::collections::hash_map::DefaultHasher;
 use std::collections::HashSet;
 use std::collections::{HashMap, VecDeque};
 use std::hash::{Hash, Hasher};
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket as StdUdpSocket};
 
 const MAX_TABLE_SIZE: u64 = 65536;
 const MAX_BLOCKED_STREAMS: u16 = 10;
 const PROTOCOLS: &[&str] = &["h3"];
 const ECH_CONFIG_ID: u8 = 7;
 const ECH_PUBLIC_NAME: &str = "public.example";
+const MCQUIC_WEBTRANSPORT_PATH: &[u8] = b"/mcquic_webtransport_stream";
+const MCQUIC_CHANNEL_ID: &[u8] = b"mcquic-wt-test";
+const MCQUIC_SOURCE: Ipv4Addr = Ipv4Addr::LOCALHOST;
+const MCQUIC_GROUP: Ipv4Addr = Ipv4Addr::new(232, 0, 0, 1);
+const MCQUIC_STREAM_BODY_OFFSET: u64 = 10;
+const MCQUIC_STEP_DELAY: Duration = Duration::from_millis(150);
+const MCQUIC_SCENARIO_TIMEOUT: Duration = Duration::from_secs(20);
+
+#[derive(Clone, Debug)]
+enum McquicWebTransportPhase {
+    AwaitingInitialDecline,
+    AwaitingJoin,
+    BeforePrefixDelay {
+        release_at: Instant,
+    },
+    AwaitingBeforePrefixAck {
+        stream_id: StreamId,
+        packet_number: u64,
+    },
+    KeyReleaseDelay {
+        release_at: Instant,
+        key: McquicKey,
+        packet_number: u64,
+    },
+    AwaitingKeyDelayedAck {
+        packet_number: u64,
+    },
+    IntegrityReleaseDelay {
+        release_at: Instant,
+        integrity: McquicIntegrity,
+        packet_number: u64,
+    },
+    AwaitingIntegrityDelayedAck {
+        packet_number: u64,
+    },
+    ResetPrefixDelay {
+        release_at: Instant,
+        stream_id: StreamId,
+    },
+    AwaitingResetAck {
+        packet_number: u64,
+    },
+    AwaitingLeft,
+    RetireDelay {
+        release_at: Instant,
+    },
+    AwaitingRetired,
+    Complete,
+}
+
+struct McquicWebTransportScenario {
+    session: WebTransportRequest,
+    sender: StdUdpSocket,
+    destination: SocketAddrV4,
+    announce: McquicAnnounce,
+    first_key: McquicKey,
+    channel_sender: McquicChannelSendState,
+    phase: McquicWebTransportPhase,
+    deadline: Instant,
+    latest_limits_sequence: u64,
+    latest_state_sequence: u64,
+    latest_packet_number: u64,
+    acknowledged_packets: HashSet<u64>,
+    ack_frames_seen: usize,
+    saw_initial_decline: bool,
+    saw_joined: bool,
+    saw_left: bool,
+    saw_retired: bool,
+}
+
+fn mcquic_webtransport_prefix(session_id: StreamId) -> Result<[u8; 10], String> {
+    let session_id = session_id.as_u64();
+    if session_id >= (1 << 62) {
+        return Err(format!("WebTransport session ID {session_id} is not a QUIC varint"));
+    }
+
+    let mut prefix = [0; 10];
+    prefix[..2].copy_from_slice(&[0x40, 0x54]);
+    prefix[2..].copy_from_slice(&(session_id | (3 << 62)).to_be_bytes());
+    Ok(prefix)
+}
+
+fn create_raw_webtransport_unidi_stream(
+    session: &WebTransportRequest,
+) -> Result<StreamId, String> {
+    session
+        .conn
+        .borrow_mut()
+        .stream_create(StreamType::UniDi)
+        .map_err(|e| format!("create WebTransport unidirectional stream: {e}"))
+}
+
+fn send_raw_webtransport_prefix(
+    session: &WebTransportRequest,
+    stream_id: StreamId,
+) -> Result<(), String> {
+    let prefix = mcquic_webtransport_prefix(session.stream_id())?;
+    let sent = session
+        .conn
+        .borrow_mut()
+        .stream_send(stream_id, &prefix)
+        .map_err(|e| format!("send WebTransport prefix on stream {stream_id}: {e}"))?;
+    if sent != prefix.len() {
+        return Err(format!(
+            "short WebTransport prefix write on stream {stream_id}: {sent}/{}",
+            prefix.len()
+        ));
+    }
+    Ok(())
+}
+
+fn send_raw_webtransport_message(
+    session: &WebTransportRequest,
+    body: &[u8],
+) -> Result<StreamId, String> {
+    let stream_id = create_raw_webtransport_unidi_stream(session)?;
+    let prefix = mcquic_webtransport_prefix(session.stream_id())?;
+    let mut data = Vec::with_capacity(prefix.len() + body.len());
+    data.extend_from_slice(&prefix);
+    data.extend_from_slice(body);
+
+    let mut conn = session.conn.borrow_mut();
+    let sent = conn
+        .stream_send(stream_id, &data)
+        .map_err(|e| format!("send unicast WebTransport stream {stream_id}: {e}"))?;
+    if sent != data.len() {
+        return Err(format!(
+            "short unicast WebTransport write on stream {stream_id}: {sent}/{}",
+            data.len()
+        ));
+    }
+    conn.stream_close_send(stream_id)
+        .map_err(|e| format!("finish unicast WebTransport stream {stream_id}: {e}"))?;
+    Ok(stream_id)
+}
+
+fn create_loopback_ssm_sender() -> io::Result<(StdUdpSocket, u16)> {
+    let receiver = socket2::Socket::new(
+        socket2::Domain::IPV4,
+        socket2::Type::DGRAM,
+        Some(socket2::Protocol::UDP),
+    )?;
+    receiver.set_reuse_address(true)?;
+    receiver.bind(&SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0).into())?;
+    let port = receiver
+        .local_addr()?
+        .as_socket_ipv4()
+        .ok_or_else(|| io::Error::other("SSM probe did not bind an IPv4 socket"))?
+        .port();
+    receiver.join_ssm_v4(&MCQUIC_SOURCE, &MCQUIC_GROUP, &MCQUIC_SOURCE)?;
+    let receiver: StdUdpSocket = receiver.into();
+    receiver.set_read_timeout(Some(Duration::from_millis(500)))?;
+
+    let sender = socket2::Socket::new(
+        socket2::Domain::IPV4,
+        socket2::Type::DGRAM,
+        Some(socket2::Protocol::UDP),
+    )?;
+    sender.bind(&SocketAddrV4::new(MCQUIC_SOURCE, 0).into())?;
+    sender.set_multicast_loop_v4(true)?;
+    sender.set_multicast_ttl_v4(1)?;
+    sender.set_multicast_if_v4(&MCQUIC_SOURCE)?;
+    let sender: StdUdpSocket = sender.into();
+
+    const PROBE: &[u8] = b"mcquic-loopback-ssm-probe";
+    sender.send_to(PROBE, SocketAddrV4::new(MCQUIC_GROUP, port))?;
+    let mut received = [0; 64];
+    let (len, source) = receiver.recv_from(&mut received)?;
+    if source.ip() != IpAddr::V4(MCQUIC_SOURCE) || &received[..len] != PROBE {
+        return Err(io::Error::other(format!(
+            "SSM probe received unexpected packet from {source}"
+        )));
+    }
+
+    Ok((sender, port))
+}
+
+impl McquicWebTransportScenario {
+    fn new(session: WebTransportRequest, now: Instant) -> io::Result<Self> {
+        let (sender, port) = create_loopback_ssm_sender()?;
+        let announce = McquicAnnounce {
+            channel_id: MCQUIC_CHANNEL_ID.to_vec(),
+            source: IpAddr::V4(MCQUIC_SOURCE),
+            group: IpAddr::V4(MCQUIC_GROUP),
+            udp_port: port,
+            header_protection_algorithm: 0x1301,
+            header_secret: vec![0x11; 32],
+            aead_algorithm: 0x1301,
+            integrity_hash_algorithm: 1,
+            max_rate_kibps: 1024,
+            max_ack_delay_ms: 10,
+        };
+        let first_key = McquicKey {
+            channel_id: MCQUIC_CHANNEL_ID.to_vec(),
+            key_sequence: 1,
+            from_packet_number: 0,
+            secret: vec![0x22; 32],
+        };
+        let channel_sender =
+            McquicChannelSendState::new(announce.clone(), first_key.clone()).map_err(|e| {
+                io::Error::other(format!("create authenticated MCQUIC sender: {e}"))
+            })?;
+
+        Ok(Self {
+            session,
+            sender,
+            destination: SocketAddrV4::new(MCQUIC_GROUP, port),
+            announce,
+            first_key,
+            channel_sender,
+            phase: McquicWebTransportPhase::AwaitingInitialDecline,
+            deadline: now + MCQUIC_SCENARIO_TIMEOUT,
+            latest_limits_sequence: 0,
+            latest_state_sequence: 0,
+            latest_packet_number: 0,
+            acknowledged_packets: HashSet::new(),
+            ack_frames_seen: 0,
+            saw_initial_decline: false,
+            saw_joined: false,
+            saw_left: false,
+            saw_retired: false,
+        })
+    }
+
+    fn conn(&self) -> ConnectionRef {
+        self.session.conn.clone()
+    }
+
+    fn start(&mut self, server: &mut Http3Server) -> Result<(), String> {
+        let conn = self.conn();
+        if server.peer_mcquic_client_params(&conn).is_none() {
+            return Err("client did not advertise generic MCQUIC transport parameters".into());
+        }
+
+        self.send_control(server, McquicFrame::Announce(self.announce.clone()))?;
+        // Deliberately request a key the client has not received. The client must
+        // decline this join while ordinary unicast WebTransport remains usable.
+        self.send_control(
+            server,
+            McquicFrame::Join(McquicJoin {
+                channel_id: MCQUIC_CHANNEL_ID.to_vec(),
+                mc_limits_sequence: 0,
+                mc_state_sequence: 0,
+                mc_key_sequence: self.first_key.key_sequence,
+            }),
+        )
+    }
+
+    fn send_control(
+        &self,
+        server: &mut Http3Server,
+        frame: McquicFrame,
+    ) -> Result<(), String> {
+        server
+            .mcquic_send(&self.conn(), frame)
+            .map_err(|e| format!("queue MCQUIC control frame: {e}"))
+    }
+
+    fn create_stream_with_prefix(&self) -> Result<StreamId, String> {
+        let stream_id = create_raw_webtransport_unidi_stream(&self.session)?;
+        send_raw_webtransport_prefix(&self.session, stream_id)?;
+        Ok(stream_id)
+    }
+
+    fn send_channel_packet(
+        &mut self,
+        server: &mut Http3Server,
+        frame: McquicChannelFrame,
+        send_integrity: bool,
+    ) -> Result<(u64, McquicIntegrity), String> {
+        let mut packet = [0; 1200];
+        let output = self
+            .channel_sender
+            .write_packet(&[frame], &mut packet)
+            .map_err(|e| format!("encode authenticated MCQUIC packet: {e}"))?;
+        if send_integrity {
+            self.send_control(
+                server,
+                McquicFrame::Integrity(output.integrity.clone()),
+            )?;
+        }
+        let sent = self
+            .sender
+            .send_to(&packet[..output.packet_len], self.destination)
+            .map_err(|e| format!("send loopback MCQUIC packet: {e}"))?;
+        if sent != output.packet_len {
+            return Err(format!(
+                "short loopback MCQUIC packet write: {sent}/{}",
+                output.packet_len
+            ));
+        }
+        self.latest_packet_number = output.packet_number;
+        Ok((output.packet_number, output.integrity))
+    }
+
+    fn drain_feedback(&mut self, server: &Http3Server) -> Result<(), String> {
+        let conn = self.conn();
+        while server.mcquic_readable(&conn) {
+            let Some(frame) = server.mcquic_recv(&conn) else {
+                return Err("MCQUIC feedback was readable but no frame was returned".into());
+            };
+            match frame {
+                McquicFrame::Ack(ack) => {
+                    if ack.channel_id != MCQUIC_CHANNEL_ID {
+                        return Err("client ACK named an unexpected MCQUIC channel".into());
+                    }
+                    qinfo!(
+                        "MCQUIC WebTransport test observed ACK for packet {}",
+                        ack.largest_acknowledged
+                    );
+                    self.acknowledged_packets
+                        .insert(ack.largest_acknowledged);
+                    self.ack_frames_seen += 1;
+                }
+                McquicFrame::State(state) => {
+                    if state.channel_id != MCQUIC_CHANNEL_ID {
+                        return Err("client state named an unexpected MCQUIC channel".into());
+                    }
+                    qinfo!(
+                        "MCQUIC WebTransport test observed state {:?} sequence {} reason {}",
+                        state.state,
+                        state.sequence,
+                        state.reason_code
+                    );
+                    self.latest_state_sequence = self.latest_state_sequence.max(state.sequence);
+                    match state.state {
+                        McquicChannelState::DeclinedJoin => {
+                            if !matches!(
+                                self.phase,
+                                McquicWebTransportPhase::AwaitingInitialDecline
+                            ) {
+                                return Err(format!(
+                                    "client unexpectedly declined MCQUIC join after key installation: reason {}",
+                                    state.reason_code
+                                ));
+                            }
+                            self.saw_initial_decline = true;
+                        }
+                        McquicChannelState::Joined => {
+                            if matches!(
+                                self.phase,
+                                McquicWebTransportPhase::AwaitingInitialDecline
+                            ) {
+                                return Err(
+                                    "client joined before declining the intentionally unsynchronized join"
+                                        .into(),
+                                );
+                            }
+                            self.saw_joined = true;
+                        }
+                        McquicChannelState::Left => self.saw_left = true,
+                        McquicChannelState::Retired => self.saw_retired = true,
+                    }
+                }
+                McquicFrame::Limits(limits) => {
+                    qinfo!(
+                        "MCQUIC WebTransport test observed client limits sequence {}",
+                        limits.sequence
+                    );
+                    self.latest_limits_sequence =
+                        self.latest_limits_sequence.max(limits.sequence);
+                }
+                other => {
+                    return Err(format!(
+                        "unexpected client MCQUIC feedback frame: {other:?}"
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn acknowledged(&self, packet_number: u64) -> bool {
+        self.acknowledged_packets.contains(&packet_number)
+    }
+
+    fn advance(&mut self, server: &mut Http3Server, now: Instant) -> Result<(), String> {
+        if now >= self.deadline {
+            return Err(format!(
+                "MCQUIC WebTransport scenario timed out in phase {:?}",
+                self.phase
+            ));
+        }
+        self.drain_feedback(server)?;
+
+        loop {
+            match self.phase.clone() {
+                McquicWebTransportPhase::AwaitingInitialDecline => {
+                    if !self.saw_initial_decline {
+                        break;
+                    }
+                    send_raw_webtransport_message(
+                        &self.session,
+                        b"unicast-fallback-before-join",
+                    )?;
+                    self.send_control(server, McquicFrame::Key(self.first_key.clone()))?;
+                    self.send_control(
+                        server,
+                        McquicFrame::Join(McquicJoin {
+                            channel_id: MCQUIC_CHANNEL_ID.to_vec(),
+                            mc_limits_sequence: self.latest_limits_sequence,
+                            mc_state_sequence: self.latest_state_sequence,
+                            mc_key_sequence: self.first_key.key_sequence,
+                        }),
+                    )?;
+                    self.phase = McquicWebTransportPhase::AwaitingJoin;
+                }
+                McquicWebTransportPhase::AwaitingJoin => {
+                    if !self.saw_joined {
+                        break;
+                    }
+                    self.phase = McquicWebTransportPhase::BeforePrefixDelay {
+                        release_at: now + MCQUIC_STEP_DELAY,
+                    };
+                    break;
+                }
+                McquicWebTransportPhase::BeforePrefixDelay { release_at } => {
+                    if now < release_at {
+                        break;
+                    }
+                    let stream_id = create_raw_webtransport_unidi_stream(&self.session)?;
+                    let (packet_number, _) = self.send_channel_packet(
+                        server,
+                        McquicChannelFrame::Stream {
+                            stream_id: stream_id.as_u64(),
+                            offset: MCQUIC_STREAM_BODY_OFFSET,
+                            fin: true,
+                            data: b"multicast-before-prefix".to_vec(),
+                        },
+                        true,
+                    )?;
+                    self.phase = McquicWebTransportPhase::AwaitingBeforePrefixAck {
+                        stream_id,
+                        packet_number,
+                    };
+                    break;
+                }
+                McquicWebTransportPhase::AwaitingBeforePrefixAck {
+                    stream_id,
+                    packet_number,
+                } => {
+                    if !self.acknowledged(packet_number) {
+                        break;
+                    }
+                    send_raw_webtransport_prefix(&self.session, stream_id)?;
+
+                    let key = McquicKey {
+                        channel_id: MCQUIC_CHANNEL_ID.to_vec(),
+                        key_sequence: 2,
+                        from_packet_number: self.channel_sender.next_packet_number(),
+                        secret: vec![0x33; 32],
+                    };
+                    self.channel_sender
+                        .update_key(key.clone())
+                        .map_err(|e| format!("rotate MCQUIC test key: {e}"))?;
+                    let stream_id = self.create_stream_with_prefix()?;
+                    let (packet_number, _) = self.send_channel_packet(
+                        server,
+                        McquicChannelFrame::Stream {
+                            stream_id: stream_id.as_u64(),
+                            offset: MCQUIC_STREAM_BODY_OFFSET,
+                            fin: true,
+                            data: b"multicast-key-delayed".to_vec(),
+                        },
+                        true,
+                    )?;
+                    self.phase = McquicWebTransportPhase::KeyReleaseDelay {
+                        release_at: now + MCQUIC_STEP_DELAY,
+                        key,
+                        packet_number,
+                    };
+                    break;
+                }
+                McquicWebTransportPhase::KeyReleaseDelay {
+                    release_at,
+                    key,
+                    packet_number,
+                } => {
+                    if now < release_at {
+                        break;
+                    }
+                    self.send_control(server, McquicFrame::Key(key))?;
+                    self.phase = McquicWebTransportPhase::AwaitingKeyDelayedAck { packet_number };
+                    break;
+                }
+                McquicWebTransportPhase::AwaitingKeyDelayedAck { packet_number } => {
+                    if !self.acknowledged(packet_number) {
+                        break;
+                    }
+                    let stream_id = self.create_stream_with_prefix()?;
+                    let (packet_number, integrity) = self.send_channel_packet(
+                        server,
+                        McquicChannelFrame::Stream {
+                            stream_id: stream_id.as_u64(),
+                            offset: MCQUIC_STREAM_BODY_OFFSET,
+                            fin: true,
+                            data: b"multicast-integrity-delayed".to_vec(),
+                        },
+                        false,
+                    )?;
+                    self.phase = McquicWebTransportPhase::IntegrityReleaseDelay {
+                        release_at: now + MCQUIC_STEP_DELAY,
+                        integrity,
+                        packet_number,
+                    };
+                    break;
+                }
+                McquicWebTransportPhase::IntegrityReleaseDelay {
+                    release_at,
+                    integrity,
+                    packet_number,
+                } => {
+                    if now < release_at {
+                        break;
+                    }
+                    self.send_control(server, McquicFrame::Integrity(integrity))?;
+                    self.phase = McquicWebTransportPhase::AwaitingIntegrityDelayedAck {
+                        packet_number,
+                    };
+                    break;
+                }
+                McquicWebTransportPhase::AwaitingIntegrityDelayedAck { packet_number } => {
+                    if !self.acknowledged(packet_number) {
+                        break;
+                    }
+                    let stream_id = self.create_stream_with_prefix()?;
+                    self.phase = McquicWebTransportPhase::ResetPrefixDelay {
+                        release_at: now + MCQUIC_STEP_DELAY,
+                        stream_id,
+                    };
+                    break;
+                }
+                McquicWebTransportPhase::ResetPrefixDelay {
+                    release_at,
+                    stream_id,
+                } => {
+                    if now < release_at {
+                        break;
+                    }
+                    let (packet_number, _) = self.send_channel_packet(
+                        server,
+                        McquicChannelFrame::ResetStream {
+                            stream_id: stream_id.as_u64(),
+                            error_code: Error::HttpNone.code(),
+                            final_size: MCQUIC_STREAM_BODY_OFFSET,
+                        },
+                        true,
+                    )?;
+                    self.phase =
+                        McquicWebTransportPhase::AwaitingResetAck { packet_number };
+                    break;
+                }
+                McquicWebTransportPhase::AwaitingResetAck { packet_number } => {
+                    if !self.acknowledged(packet_number) {
+                        break;
+                    }
+                    self.send_control(
+                        server,
+                        McquicFrame::Leave(McquicLeave {
+                            channel_id: MCQUIC_CHANNEL_ID.to_vec(),
+                            mc_state_sequence: self.latest_state_sequence,
+                            after_packet_number: self.latest_packet_number,
+                        }),
+                    )?;
+                    self.phase = McquicWebTransportPhase::AwaitingLeft;
+                    break;
+                }
+                McquicWebTransportPhase::AwaitingLeft => {
+                    if !self.saw_left {
+                        break;
+                    }
+                    send_raw_webtransport_message(&self.session, b"unicast-fallback-after-leave")?;
+                    self.phase = McquicWebTransportPhase::RetireDelay {
+                        release_at: now + MCQUIC_STEP_DELAY,
+                    };
+                    break;
+                }
+                McquicWebTransportPhase::RetireDelay { release_at } => {
+                    if now < release_at {
+                        break;
+                    }
+                    self.send_control(
+                        server,
+                        McquicFrame::Retire(McquicRetire {
+                            channel_id: MCQUIC_CHANNEL_ID.to_vec(),
+                            after_packet_number: self.latest_packet_number,
+                        }),
+                    )?;
+                    self.phase = McquicWebTransportPhase::AwaitingRetired;
+                    break;
+                }
+                McquicWebTransportPhase::AwaitingRetired => {
+                    if !self.saw_retired {
+                        break;
+                    }
+                    if self.ack_frames_seen < 4 {
+                        return Err(format!(
+                            "client retired after only {} MC_ACK frames",
+                            self.ack_frames_seen
+                        ));
+                    }
+                    let complete = format!(
+                        "mcquic-complete:declined,joined,left,retired;acks={}",
+                        self.ack_frames_seen
+                    );
+                    send_raw_webtransport_message(&self.session, complete.as_bytes())?;
+                    self.phase = McquicWebTransportPhase::Complete;
+                    break;
+                }
+                McquicWebTransportPhase::Complete => break,
+            }
+        }
+
+        Ok(())
+    }
+
+    fn is_complete(&self) -> bool {
+        matches!(self.phase, McquicWebTransportPhase::Complete)
+    }
+}
 
 const HTTP_RESPONSE_WITH_WRONG_FRAME: &[u8] = &[
     0x01, 0x06, 0x00, 0x00, 0xd9, 0x54, 0x01, 0x37, // headers
@@ -77,6 +703,8 @@ struct Http3TestServer {
     wt_unidi_conn_to_stream: HashMap<ConnectionRef, Http3OrWebTransportStream>,
     wt_unidi_echo_back: HashMap<Http3OrWebTransportStream, Http3OrWebTransportStream>,
     received_datagram: Option<Bytes>,
+    mcquic_webtransport_scenario: Option<McquicWebTransportScenario>,
+    mcquic_webtransport_pending_status: Option<(Instant, WebTransportRequest, Vec<u8>)>,
     // When true, server will stop processing datagrams after accepting 0-RTT,
     // simulating a stuck ZERORTT session that never transitions to CONNECTED.
     stuck_0rtt_mode: bool,
@@ -101,6 +729,8 @@ impl Http3TestServer {
             wt_unidi_conn_to_stream: HashMap::new(),
             wt_unidi_echo_back: HashMap::new(),
             received_datagram: None,
+            mcquic_webtransport_scenario: None,
+            mcquic_webtransport_pending_status: None,
             stuck_0rtt_mode: false,
             stuck_0rtt_activated: false,
         }
@@ -193,6 +823,44 @@ impl Http3TestServer {
             }
         }
     }
+
+    fn advance_mcquic_webtransport_scenario(&mut self, now: Instant) {
+        let Some(mut scenario) = self.mcquic_webtransport_scenario.take() else {
+            return;
+        };
+
+        if let Err(error) = scenario.advance(&mut self.server, now) {
+            qerror!("MCQUIC WebTransport test failed: {error}");
+            let message = format!("MCQUIC-ERROR:{error}");
+            if let Err(send_error) =
+                send_raw_webtransport_message(&scenario.session, message.as_bytes())
+            {
+                qerror!("Unable to report MCQUIC WebTransport test failure: {send_error}");
+            }
+            return;
+        }
+
+        if !scenario.is_complete() {
+            self.mcquic_webtransport_scenario = Some(scenario);
+        }
+    }
+
+    fn maybe_send_mcquic_webtransport_status(&mut self, now: Instant) {
+        let Some((send_at, _, _)) = self.mcquic_webtransport_pending_status.as_ref() else {
+            return;
+        };
+        if now < *send_at {
+            return;
+        }
+
+        let (_, session, message) = self
+            .mcquic_webtransport_pending_status
+            .take()
+            .expect("pending MCQUIC WebTransport status exists");
+        if let Err(error) = send_raw_webtransport_message(&session, &message) {
+            qerror!("Unable to send MCQUIC WebTransport status: {error}");
+        }
+    }
 }
 
 impl HttpServer for Http3TestServer {
@@ -218,7 +886,11 @@ impl HttpServer for Http3TestServer {
             self.stuck_0rtt_activated = true;
         }
 
-        let output = if self.sessions_to_close.is_empty() && self.connections_to_close.is_empty() {
+        let output = if self.sessions_to_close.is_empty()
+            && self.connections_to_close.is_empty()
+            && self.mcquic_webtransport_scenario.is_none()
+            && self.mcquic_webtransport_pending_status.is_none()
+        {
             output
         } else {
             // In case there are pending sessions to close, use a shorter
@@ -239,6 +911,8 @@ impl HttpServer for Http3TestServer {
         self.maybe_close_connection();
         self.maybe_close_session(now);
         self.maybe_create_wt_stream(now);
+        self.maybe_send_mcquic_webtransport_status(now);
+        self.advance_mcquic_webtransport_scenario(now);
 
         while let Some(event) = self.server.next_event() {
             qtrace!("Event: {:?}", event);
@@ -677,6 +1351,42 @@ impl HttpServer for Http3TestServer {
                                     StreamType::BiDi,
                                     Some(data),
                                 ));
+                            } else if path == MCQUIC_WEBTRANSPORT_PATH {
+                                session.response(&SessionAcceptAction::Accept, now).unwrap();
+                                if self.mcquic_webtransport_scenario.is_some()
+                                    || self.mcquic_webtransport_pending_status.is_some()
+                                {
+                                    self.mcquic_webtransport_pending_status = Some((
+                                        now + MCQUIC_STEP_DELAY,
+                                        session,
+                                        b"MCQUIC-ERROR:another MCQUIC WebTransport scenario is active"
+                                            .to_vec(),
+                                    ));
+                                } else {
+                                    match McquicWebTransportScenario::new(session.clone(), now) {
+                                        Ok(mut scenario) => {
+                                            if let Err(error) = scenario.start(&mut self.server) {
+                                                self.mcquic_webtransport_pending_status = Some((
+                                                    now + MCQUIC_STEP_DELAY,
+                                                    session,
+                                                    format!("MCQUIC-ERROR:{error}").into_bytes(),
+                                                ));
+                                            } else {
+                                                self.mcquic_webtransport_scenario = Some(scenario);
+                                            }
+                                        }
+                                        Err(error) => {
+                                            self.mcquic_webtransport_pending_status = Some((
+                                                now + MCQUIC_STEP_DELAY,
+                                                session,
+                                                format!(
+                                                    "MCQUIC-SKIP:loopback SSM unavailable: {error}"
+                                                )
+                                                .into_bytes(),
+                                            ));
+                                        }
+                                    }
+                                }
                             } else {
                                 session.response(&SessionAcceptAction::Accept, now).unwrap();
                             }
@@ -737,6 +1447,8 @@ impl HttpServer for Http3TestServer {
                 }
             }
         }
+
+        self.advance_mcquic_webtransport_scenario(now);
     }
 
     fn has_events(&self) -> bool {
@@ -1631,7 +2343,11 @@ async fn main() -> Result<(), io::Error> {
                     .max_table_size_decoder(MAX_TABLE_SIZE)
                     .max_blocked_streams(MAX_BLOCKED_STREAMS)
                     .webtransport(true)
-                    .connection_parameters(ConnectionParameters::default().datagram_size(1200)),
+                    .connection_parameters(
+                        ConnectionParameters::default()
+                            .datagram_size(1200)
+                            .mcquic_server_support(true),
+                    ),
                 None,
             )
             .expect("We cannot make a server!"),

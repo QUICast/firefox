@@ -1392,6 +1392,43 @@ impl Http3Client {
         self.conn.mcquic_recv()
     }
 
+    /// Process one protected multicast channel packet in transport context.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when authentication or ordinary QUIC frame processing
+    /// fails.
+    #[cfg(feature = "mcquic")]
+    pub fn mcquic_process_channel_packet(
+        &mut self,
+        channel_id: &[u8],
+        protected_packet: &[u8],
+        now: Instant,
+    ) -> Res<()> {
+        self.conn
+            .mcquic_process_channel_packet(channel_id, protected_packet, now)?;
+        self.process_http3(now);
+        Ok(())
+    }
+
+    /// Pop a legacy DATAGRAM released from an authenticated channel packet.
+    #[cfg(feature = "mcquic")]
+    pub fn mcquic_pop_channel_datagram(
+        &mut self,
+    ) -> Option<neqo_transport::mcquic::ChannelDatagram> {
+        self.conn.mcquic_pop_channel_datagram()
+    }
+
+    /// Queue pending channel ACKs on the unicast QUIC connection.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when an ACK cannot be queued.
+    #[cfg(feature = "mcquic")]
+    pub fn mcquic_send_pending_acks(&mut self) -> Res<bool> {
+        Ok(self.conn.mcquic_send_pending_acks()?)
+    }
+
     #[cfg(feature = "mcquic")]
     pub fn mcquic_moq_open_stream(&mut self) -> Res<StreamId> {
         if !self.conn.peer_mcquic_server_support() {

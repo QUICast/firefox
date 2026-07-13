@@ -28,12 +28,13 @@ fn connect() {
 mod mcquic_tests {
     use std::net::{IpAddr, Ipv4Addr};
 
+    use neqo_common::event::Provider as _;
     use neqo_transport::{
-        Connection,
+        Connection, ConnectionEvent, StreamId,
         mcquic::{
-            Ack, Announce, ChannelState, ClientLimits, ClientTransportParams, Frame, Integrity,
-            Join, Key, Limits, STATE_REASON_REQUESTED_BY_SERVER, State as McState,
-            StateReasonScope,
+            Ack, Announce, ChannelFrame, ChannelSendState, ChannelState, ClientLimits,
+            ClientTransportParams, Frame, Integrity, Join, Key, Limits,
+            STATE_REASON_REQUESTED_BY_SERVER, State as McState, StateReasonScope,
         },
     };
 
@@ -92,8 +93,8 @@ mod mcquic_tests {
         b"demo-channel".to_vec()
     }
 
-    fn announce_frame() -> Frame {
-        Frame::Announce(Announce {
+    fn announce() -> Announce {
+        Announce {
             channel_id: channel_id(),
             source: IpAddr::V4(Ipv4Addr::new(192, 0, 2, 1)),
             group: IpAddr::V4(Ipv4Addr::new(233, 252, 0, 1)),
@@ -104,16 +105,24 @@ mod mcquic_tests {
             integrity_hash_algorithm: 1,
             max_rate_kibps: 10_000,
             max_ack_delay_ms: 25,
-        })
+        }
     }
 
-    fn key_frame() -> Frame {
-        Frame::Key(Key {
+    fn announce_frame() -> Frame {
+        Frame::Announce(announce())
+    }
+
+    fn key() -> Key {
+        Key {
             channel_id: channel_id(),
             key_sequence: 1,
             from_packet_number: 0,
             secret: vec![0x22; 32],
-        })
+        }
+    }
+
+    fn key_frame() -> Frame {
+        Frame::Key(key())
     }
 
     fn integrity_frame() -> Frame {
@@ -164,6 +173,89 @@ mod mcquic_tests {
         })
     }
 
+    const WEBTRANSPORT_UNI_PREFIX: [u8; 10] = [
+        0x40, 0x54, // stream type 0x54, encoded in two bytes
+        0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // session ID 0, eight bytes
+    ];
+
+    fn connected_mcquic_with_client_connection_params(
+        connection_parameters: ConnectionParameters,
+    ) -> (Connection, Connection) {
+        let mut client = new_client::<CountingConnectionIdGenerator>(
+            connection_parameters.mcquic_client_params(Some(client_params())),
+        );
+        let mut server = new_server::<CountingConnectionIdGenerator, &str>(
+            DEFAULT_ALPN,
+            ConnectionParameters::default().mcquic_server_support(true),
+        );
+
+        test_fixture::handshake(&mut client, &mut server);
+        assert_eq!(*client.state(), State::Confirmed);
+        assert_eq!(*server.state(), State::Confirmed);
+        (client, server)
+    }
+
+    fn send_server_control(client: &mut Connection, server: &mut Connection, frame: Frame) {
+        server.mcquic_send(frame).expect("queue server control");
+        let datagram = server
+            .process_output(now())
+            .dgram()
+            .expect("server control packet");
+        client.process_input(datagram, now());
+    }
+
+    fn send_server_stream_data(
+        client: &mut Connection,
+        server: &mut Connection,
+        stream_id: StreamId,
+        data: &[u8],
+    ) {
+        assert_eq!(
+            server
+                .stream_send(stream_id, data)
+                .expect("send stream data"),
+            data.len()
+        );
+        let datagram = server
+            .process_output(now())
+            .dgram()
+            .expect("server stream packet");
+        client.process_input(datagram, now());
+    }
+
+    fn encode_channel_packet(frames: &[ChannelFrame]) -> (Vec<u8>, Integrity) {
+        let mut sender =
+            ChannelSendState::new(announce(), key()).expect("create channel send state");
+        let mut packet = vec![0; 1200];
+        let sent = sender
+            .write_packet(frames, &mut packet)
+            .expect("encode channel packet");
+        packet.truncate(sent.packet_len);
+        (packet, sent.integrity)
+    }
+
+    fn prepare_channel(client: &mut Connection, server: &mut Connection) {
+        send_server_control(client, server, announce_frame());
+        send_server_control(client, server, key_frame());
+    }
+
+    fn process_channel_packet(client: &mut Connection, packet: &[u8]) -> Result<(), Error> {
+        client.mcquic_process_channel_packet(&channel_id(), packet, now())
+    }
+
+    fn read_stream(
+        client: &mut Connection,
+        stream_id: StreamId,
+        capacity: usize,
+    ) -> (Vec<u8>, bool) {
+        let mut data = vec![0; capacity];
+        let (read, fin) = client
+            .stream_recv(stream_id, &mut data)
+            .expect("read receive stream");
+        data.truncate(read);
+        (data, fin)
+    }
+
     #[test]
     fn transport_params_negotiate() {
         let (client, server, params) = connected_mcquic();
@@ -209,6 +301,407 @@ mod mcquic_tests {
             assert_eq!(client.mcquic_recv(), Some(frame));
         }
         assert_eq!(client.mcquic_recv(), None);
+    }
+
+    #[test]
+    fn stream_prefix_over_unicast_body_over_multicast() {
+        let (mut client, mut server, _) = connected_mcquic();
+        let stream_id = server
+            .stream_create(StreamType::UniDi)
+            .expect("server stream");
+        send_server_stream_data(
+            &mut client,
+            &mut server,
+            stream_id,
+            &WEBTRANSPORT_UNI_PREFIX,
+        );
+        prepare_channel(&mut client, &mut server);
+
+        let body = b"shared-body";
+        let (packet, integrity) = encode_channel_packet(&[ChannelFrame::Stream {
+            stream_id: stream_id.as_u64(),
+            offset: 10,
+            fin: true,
+            data: body.to_vec(),
+        }]);
+        send_server_control(&mut client, &mut server, Frame::Integrity(integrity));
+        process_channel_packet(&mut client, &packet).expect("authenticated channel packet");
+
+        let (received, fin) = read_stream(&mut client, stream_id, 64);
+        assert_eq!(
+            received,
+            [WEBTRANSPORT_UNI_PREFIX.as_slice(), body].concat()
+        );
+        assert!(fin);
+        assert!(
+            client
+                .mcquic_send_pending_acks()
+                .expect("queue channel ACK")
+        );
+        assert!(
+            !client
+                .mcquic_send_pending_acks()
+                .expect("ACK state was marked sent")
+        );
+    }
+
+    #[test]
+    fn connection_preserves_legacy_channel_datagram_queue() {
+        let (mut client, mut server, _) = connected_mcquic();
+        prepare_channel(&mut client, &mut server);
+        let payload = b"legacy-datagram";
+        let (packet, integrity) = encode_channel_packet(&[ChannelFrame::Datagram {
+            data: payload.to_vec(),
+        }]);
+        send_server_control(&mut client, &mut server, Frame::Integrity(integrity));
+        process_channel_packet(&mut client, &packet).expect("authenticated channel DATAGRAM");
+
+        let released = client
+            .mcquic_pop_channel_datagram()
+            .expect("legacy DATAGRAM queue");
+        assert_eq!(released.channel_id, channel_id());
+        assert_eq!(released.packet_number, 0);
+        assert_eq!(released.data, payload);
+        assert!(client.mcquic_pop_channel_datagram().is_none());
+    }
+
+    #[test]
+    fn multicast_body_waits_for_unicast_prefix() {
+        let (mut client, mut server, _) = connected_mcquic();
+        let stream_id = server
+            .stream_create(StreamType::UniDi)
+            .expect("server stream");
+        prepare_channel(&mut client, &mut server);
+
+        let body = b"body-first";
+        let (packet, integrity) = encode_channel_packet(&[ChannelFrame::Stream {
+            stream_id: stream_id.as_u64(),
+            offset: 10,
+            fin: true,
+            data: body.to_vec(),
+        }]);
+        send_server_control(&mut client, &mut server, Frame::Integrity(integrity));
+        process_channel_packet(&mut client, &packet).expect("buffer out-of-order body");
+        assert_eq!(read_stream(&mut client, stream_id, 64), (Vec::new(), false));
+
+        send_server_stream_data(
+            &mut client,
+            &mut server,
+            stream_id,
+            &WEBTRANSPORT_UNI_PREFIX,
+        );
+        let (received, fin) = read_stream(&mut client, stream_id, 64);
+        assert_eq!(
+            received,
+            [WEBTRANSPORT_UNI_PREFIX.as_slice(), body].concat()
+        );
+        assert!(fin);
+    }
+
+    #[test]
+    fn identical_unicast_multicast_overlap_deduplicates() {
+        let (mut client, mut server, _) = connected_mcquic();
+        let stream_id = server
+            .stream_create(StreamType::UniDi)
+            .expect("server stream");
+        let body = b"identical";
+        send_server_stream_data(
+            &mut client,
+            &mut server,
+            stream_id,
+            &WEBTRANSPORT_UNI_PREFIX,
+        );
+        send_server_stream_data(&mut client, &mut server, stream_id, body);
+        prepare_channel(&mut client, &mut server);
+
+        let (packet, integrity) = encode_channel_packet(&[ChannelFrame::Stream {
+            stream_id: stream_id.as_u64(),
+            offset: 10,
+            fin: true,
+            data: body.to_vec(),
+        }]);
+        send_server_control(&mut client, &mut server, Frame::Integrity(integrity));
+        process_channel_packet(&mut client, &packet).expect("deduplicate identical overlap");
+
+        let (received, fin) = read_stream(&mut client, stream_id, 64);
+        assert_eq!(
+            received,
+            [WEBTRANSPORT_UNI_PREFIX.as_slice(), body].concat()
+        );
+        assert!(fin);
+    }
+
+    #[test]
+    fn conflicting_unicast_multicast_overlap_closes_connection() {
+        let (mut client, mut server, _) = connected_mcquic();
+        let stream_id = server
+            .stream_create(StreamType::UniDi)
+            .expect("server stream");
+        send_server_stream_data(
+            &mut client,
+            &mut server,
+            stream_id,
+            &WEBTRANSPORT_UNI_PREFIX,
+        );
+        send_server_stream_data(&mut client, &mut server, stream_id, b"unicast");
+        prepare_channel(&mut client, &mut server);
+
+        let (packet, integrity) = encode_channel_packet(&[ChannelFrame::Stream {
+            stream_id: stream_id.as_u64(),
+            offset: 10,
+            fin: false,
+            data: b"conflict".to_vec(),
+        }]);
+        send_server_control(&mut client, &mut server, Frame::Integrity(integrity));
+        assert_eq!(
+            process_channel_packet(&mut client, &packet),
+            Err(Error::ProtocolViolation)
+        );
+        assert!(matches!(
+            client.state(),
+            State::Closing {
+                error: CloseReason::Transport(Error::ProtocolViolation),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn conflicting_multicast_unicast_overlap_closes_connection() {
+        let (mut client, mut server, _) = connected_mcquic();
+        let stream_id = server
+            .stream_create(StreamType::UniDi)
+            .expect("server stream");
+        prepare_channel(&mut client, &mut server);
+
+        let (packet, integrity) = encode_channel_packet(&[ChannelFrame::Stream {
+            stream_id: stream_id.as_u64(),
+            offset: 10,
+            fin: true,
+            data: b"multicast".to_vec(),
+        }]);
+        send_server_control(&mut client, &mut server, Frame::Integrity(integrity));
+        process_channel_packet(&mut client, &packet).expect("buffer multicast body");
+
+        let unicast = [WEBTRANSPORT_UNI_PREFIX.as_slice(), b"conflicts"].concat();
+        send_server_stream_data(&mut client, &mut server, stream_id, &unicast);
+        assert!(matches!(
+            client.state(),
+            State::Closing {
+                error: CloseReason::Transport(Error::ProtocolViolation),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn multicast_loss_is_recovered_by_unicast_stream_data() {
+        let (mut client, mut server, _) = connected_mcquic();
+        let stream_id = server
+            .stream_create(StreamType::UniDi)
+            .expect("server stream");
+        send_server_stream_data(
+            &mut client,
+            &mut server,
+            stream_id,
+            &WEBTRANSPORT_UNI_PREFIX,
+        );
+        prepare_channel(&mut client, &mut server);
+
+        let missing = b"lost-";
+        let tail = b"tail";
+        let (packet, integrity) = encode_channel_packet(&[ChannelFrame::Stream {
+            stream_id: stream_id.as_u64(),
+            offset: 10 + u64::try_from(missing.len()).expect("length fits"),
+            fin: true,
+            data: tail.to_vec(),
+        }]);
+        send_server_control(&mut client, &mut server, Frame::Integrity(integrity));
+        process_channel_packet(&mut client, &packet).expect("buffer multicast tail");
+        assert_eq!(
+            read_stream(&mut client, stream_id, 64),
+            (WEBTRANSPORT_UNI_PREFIX.to_vec(), false)
+        );
+
+        send_server_stream_data(&mut client, &mut server, stream_id, missing);
+        let (received, fin) = read_stream(&mut client, stream_id, 64);
+        assert_eq!(received, [missing.as_slice(), tail.as_slice()].concat());
+        assert!(fin);
+    }
+
+    #[test]
+    fn multicast_reset_stream_uses_ordinary_receive_state() {
+        let (mut client, mut server, _) = connected_mcquic();
+        let stream_id = server
+            .stream_create(StreamType::UniDi)
+            .expect("server stream");
+        send_server_stream_data(
+            &mut client,
+            &mut server,
+            stream_id,
+            &WEBTRANSPORT_UNI_PREFIX,
+        );
+        prepare_channel(&mut client, &mut server);
+
+        let (packet, integrity) = encode_channel_packet(&[ChannelFrame::ResetStream {
+            stream_id: stream_id.as_u64(),
+            error_code: 42,
+            final_size: 10,
+        }]);
+        send_server_control(&mut client, &mut server, Frame::Integrity(integrity));
+        process_channel_packet(&mut client, &packet).expect("apply RESET_STREAM");
+
+        assert!(client.events().any(|event| matches!(
+            event,
+            ConnectionEvent::RecvStreamReset {
+                stream_id: id,
+                app_error: 42,
+            } if id == stream_id
+        )));
+    }
+
+    #[test]
+    fn channel_packet_releases_when_key_arrives() {
+        let (mut client, mut server, _) = connected_mcquic();
+        let stream_id = server
+            .stream_create(StreamType::UniDi)
+            .expect("server stream");
+        send_server_stream_data(
+            &mut client,
+            &mut server,
+            stream_id,
+            &WEBTRANSPORT_UNI_PREFIX,
+        );
+        send_server_control(&mut client, &mut server, announce_frame());
+
+        let body = b"after-key";
+        let (packet, integrity) = encode_channel_packet(&[ChannelFrame::Stream {
+            stream_id: stream_id.as_u64(),
+            offset: 10,
+            fin: true,
+            data: body.to_vec(),
+        }]);
+        send_server_control(&mut client, &mut server, Frame::Integrity(integrity));
+        process_channel_packet(&mut client, &packet).expect("packet waits for key");
+        assert_eq!(
+            read_stream(&mut client, stream_id, 64),
+            (WEBTRANSPORT_UNI_PREFIX.to_vec(), false)
+        );
+
+        send_server_control(&mut client, &mut server, key_frame());
+        assert_eq!(
+            read_stream(&mut client, stream_id, 64),
+            (body.to_vec(), true)
+        );
+        assert!(
+            client
+                .mcquic_send_pending_acks()
+                .expect("ACK released packet")
+        );
+    }
+
+    #[test]
+    fn channel_packet_releases_when_integrity_arrives() {
+        let (mut client, mut server, _) = connected_mcquic();
+        let stream_id = server
+            .stream_create(StreamType::UniDi)
+            .expect("server stream");
+        send_server_stream_data(
+            &mut client,
+            &mut server,
+            stream_id,
+            &WEBTRANSPORT_UNI_PREFIX,
+        );
+        prepare_channel(&mut client, &mut server);
+
+        let body = b"after-integrity";
+        let (packet, integrity) = encode_channel_packet(&[ChannelFrame::Stream {
+            stream_id: stream_id.as_u64(),
+            offset: 10,
+            fin: true,
+            data: body.to_vec(),
+        }]);
+        process_channel_packet(&mut client, &packet).expect("packet waits for integrity");
+        assert_eq!(
+            read_stream(&mut client, stream_id, 64),
+            (WEBTRANSPORT_UNI_PREFIX.to_vec(), false)
+        );
+
+        send_server_control(&mut client, &mut server, Frame::Integrity(integrity));
+        assert_eq!(
+            read_stream(&mut client, stream_id, 64),
+            (body.to_vec(), true)
+        );
+        assert!(
+            client
+                .mcquic_send_pending_acks()
+                .expect("ACK released packet")
+        );
+    }
+
+    #[test]
+    fn multicast_stream_obeys_stream_limits() {
+        let (mut client, mut server) = connected_mcquic_with_client_connection_params(
+            ConnectionParameters::default().max_streams(StreamType::UniDi, 0),
+        );
+        prepare_channel(&mut client, &mut server);
+        let (packet, integrity) = encode_channel_packet(&[ChannelFrame::Stream {
+            stream_id: 3,
+            offset: 10,
+            fin: false,
+            data: b"body".to_vec(),
+        }]);
+        send_server_control(&mut client, &mut server, Frame::Integrity(integrity));
+
+        assert_eq!(
+            process_channel_packet(&mut client, &packet),
+            Err(Error::StreamLimit)
+        );
+        assert!(matches!(
+            client.state(),
+            State::Closing {
+                error: CloseReason::Transport(Error::StreamLimit),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn multicast_stream_obeys_flow_control() {
+        let (mut client, mut server) = connected_mcquic_with_client_connection_params(
+            ConnectionParameters::default()
+                .max_data(10)
+                .max_stream_data(StreamType::UniDi, true, 10),
+        );
+        let stream_id = server
+            .stream_create(StreamType::UniDi)
+            .expect("server stream");
+        send_server_stream_data(
+            &mut client,
+            &mut server,
+            stream_id,
+            &WEBTRANSPORT_UNI_PREFIX,
+        );
+        prepare_channel(&mut client, &mut server);
+        let (packet, integrity) = encode_channel_packet(&[ChannelFrame::Stream {
+            stream_id: stream_id.as_u64(),
+            offset: 10,
+            fin: false,
+            data: vec![0xff],
+        }]);
+        send_server_control(&mut client, &mut server, Frame::Integrity(integrity));
+
+        assert_eq!(
+            process_channel_packet(&mut client, &packet),
+            Err(Error::FlowControl)
+        );
+        assert!(matches!(
+            client.state(),
+            State::Closing {
+                error: CloseReason::Transport(Error::FlowControl),
+                ..
+            }
+        ));
     }
 
     #[test]

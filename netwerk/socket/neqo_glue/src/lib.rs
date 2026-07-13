@@ -4,8 +4,6 @@
 
 #![expect(clippy::missing_panics_doc, reason = "OK here")]
 
-#[cfg(feature = "mcquic")]
-use std::collections::BTreeMap;
 #[cfg(feature = "fuzzing")]
 use std::time::Duration;
 use std::{
@@ -128,8 +126,6 @@ pub struct NeqoHttp3Conn {
 
     #[cfg(feature = "mcquic")]
     mcquic_client_limits: Option<neqo_transport::mcquic::ClientLimits>,
-    #[cfg(feature = "mcquic")]
-    mcquic_channels: BTreeMap<Vec<u8>, neqo_transport::mcquic::ChannelReceiveState>,
 
     datagram_segment_size_sent: LocalMemoryDistribution<'static>,
     datagram_segment_size_received: LocalMemoryDistribution<'static>,
@@ -209,6 +205,15 @@ pub enum McquicControlFrameTag {
     State,
     Ack,
     Limits,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum McquicChannelStateExternal {
+    Left,
+    DeclinedJoin,
+    Joined,
+    Retired,
 }
 
 #[repr(C)]
@@ -1029,46 +1034,6 @@ fn fill_mcquic_control_frame(
     }
 }
 
-#[cfg(feature = "mcquic")]
-fn apply_mcquic_control_frame(conn: &mut NeqoHttp3Conn, frame: &neqo_transport::mcquic::Frame) {
-    match frame {
-        neqo_transport::mcquic::Frame::Announce(announce) => {
-            match neqo_transport::mcquic::ChannelReceiveState::new(announce.clone()) {
-                Ok(state) => {
-                    qdebug!(
-                        "MCQUIC created receive state for channel {} bytes",
-                        announce.channel_id.len()
-                    );
-                    conn.mcquic_channels
-                        .insert(announce.channel_id.clone(), state);
-                }
-                Err(err) => {
-                    qwarn!("MCQUIC failed to create channel receive state: {err}");
-                }
-            }
-        }
-        neqo_transport::mcquic::Frame::Key(key) => {
-            let Some(channel) = conn.mcquic_channels.get_mut(&key.channel_id) else {
-                qwarn!("MCQUIC received MC_KEY for unknown channel");
-                return;
-            };
-            if let Err(err) = channel.insert_key(key.clone()) {
-                qwarn!("MCQUIC failed to insert MC_KEY: {err}");
-            }
-        }
-        neqo_transport::mcquic::Frame::Integrity(integrity) => {
-            let Some(channel) = conn.mcquic_channels.get_mut(&integrity.channel_id) else {
-                qwarn!("MCQUIC received MC_INTEGRITY for unknown channel");
-                return;
-            };
-            if let Err(err) = channel.insert_integrity(integrity.clone()) {
-                qwarn!("MCQUIC failed to insert MC_INTEGRITY: {err}");
-            }
-        }
-        _ => {}
-    }
-}
-
 extern "C" {
     pub fn moz_netaddr_get_family(arg: *const NetAddr) -> u16;
     pub fn moz_netaddr_get_network_order_ip(arg: *const NetAddr) -> u32;
@@ -1546,8 +1511,6 @@ impl NeqoHttp3Conn {
             buffered_outbound_datagram: None,
             #[cfg(feature = "mcquic")]
             mcquic_client_limits,
-            #[cfg(feature = "mcquic")]
-            mcquic_channels: BTreeMap::new(),
             would_block_counter: WouldBlockCounter::new(),
         }));
         unsafe { RefPtr::from_raw(conn).ok_or(NS_ERROR_NOT_CONNECTED) }
@@ -2283,7 +2246,6 @@ pub extern "C" fn neqo_http3conn_mcquic_recv_control_frame(
             return NS_OK;
         };
         fill_mcquic_control_frame(frame, &mcquic_frame);
-        apply_mcquic_control_frame(conn, &mcquic_frame);
         return NS_OK;
     }
 
@@ -2303,21 +2265,18 @@ pub extern "C" fn neqo_http3conn_mcquic_process_channel_packet(
     #[cfg(feature = "mcquic")]
     {
         let channel_id = channel_id.to_vec();
-        let Some(channel) = conn.mcquic_channels.get_mut(&channel_id) else {
-            qwarn!("MCQUIC protected packet for unknown channel");
-            return NS_ERROR_NOT_AVAILABLE;
-        };
-        match channel.process_protected_packet(packet.as_slice()) {
-            Ok(datagrams) => {
-                qdebug!(
-                    "MCQUIC processed protected channel packet; released {} datagrams",
-                    datagrams.len()
-                );
+        match conn.conn.mcquic_process_channel_packet(
+            &channel_id,
+            packet.as_slice(),
+            Instant::now(),
+        ) {
+            Ok(()) => {
+                qdebug!("MCQUIC processed protected channel packet");
                 NS_OK
             }
             Err(err) => {
                 qwarn!("MCQUIC failed to process protected channel packet: {err}");
-                mcquic_transport_error_to_nsresult(err)
+                mcquic_http3_error_to_nsresult(err)
             }
         }
     }
@@ -2338,13 +2297,11 @@ pub extern "C" fn neqo_http3conn_mcquic_pop_channel_datagram(
 
     #[cfg(feature = "mcquic")]
     {
-        for channel in conn.mcquic_channels.values_mut() {
-            if let Some(released) = channel.pop_datagram() {
-                datagram.channel_id = released.channel_id.into();
-                datagram.packet_number = released.packet_number;
-                datagram.payload = released.data.into();
-                return true;
-            }
+        if let Some(released) = conn.conn.mcquic_pop_channel_datagram() {
+            datagram.channel_id = released.channel_id.into();
+            datagram.packet_number = released.packet_number;
+            datagram.payload = released.data.into();
+            return true;
         }
         false
     }
@@ -2391,15 +2348,49 @@ pub extern "C" fn neqo_http3conn_mcquic_send_joined_state(
     channel_id: &nsACString,
     sequence: u64,
 ) -> nsresult {
+    neqo_http3conn_mcquic_send_state(
+        conn,
+        channel_id,
+        sequence,
+        McquicChannelStateExternal::Joined,
+        0x1,
+    )
+}
+
+#[no_mangle]
+pub extern "C" fn neqo_http3conn_mcquic_send_state(
+    conn: &mut NeqoHttp3Conn,
+    channel_id: &nsACString,
+    sequence: u64,
+    state: McquicChannelStateExternal,
+    reason_code: u64,
+) -> nsresult {
     #[cfg(feature = "mcquic")]
     {
+        let (state, reason_phrase) = match state {
+            McquicChannelStateExternal::Left => {
+                (neqo_transport::mcquic::ChannelState::Left, b"left".as_slice())
+            }
+            McquicChannelStateExternal::DeclinedJoin => (
+                neqo_transport::mcquic::ChannelState::DeclinedJoin,
+                b"join declined".as_slice(),
+            ),
+            McquicChannelStateExternal::Joined => (
+                neqo_transport::mcquic::ChannelState::Joined,
+                b"joined".as_slice(),
+            ),
+            McquicChannelStateExternal::Retired => (
+                neqo_transport::mcquic::ChannelState::Retired,
+                b"retired".as_slice(),
+            ),
+        };
         let frame = neqo_transport::mcquic::Frame::State(neqo_transport::mcquic::State {
             channel_id: channel_id.to_vec(),
             sequence,
-            state: neqo_transport::mcquic::ChannelState::Joined,
+            state,
             reason_scope: neqo_transport::mcquic::StateReasonScope::Transport,
-            reason_code: neqo_transport::mcquic::STATE_REASON_REQUESTED_BY_SERVER,
-            reason_phrase: b"joined".to_vec(),
+            reason_code,
+            reason_phrase: reason_phrase.to_vec(),
         });
         match conn.conn.mcquic_send(frame) {
             Ok(()) => NS_OK,
@@ -2409,7 +2400,7 @@ pub extern "C" fn neqo_http3conn_mcquic_send_joined_state(
 
     #[cfg(not(feature = "mcquic"))]
     {
-        let _ = (conn, channel_id, sequence);
+        let _ = (conn, channel_id, sequence, state, reason_code);
         NS_ERROR_NOT_AVAILABLE
     }
 }
@@ -2420,35 +2411,15 @@ pub extern "C" fn neqo_http3conn_mcquic_send_pending_acks(
 ) -> McquicSendPendingAcksResult {
     #[cfg(feature = "mcquic")]
     {
-        let mut pending = Vec::new();
-        for (channel_id, channel) in &mut conn.mcquic_channels {
-            if let Some(ack) = channel.pending_ack() {
-                pending.push((channel_id.clone(), ack));
-            }
-        }
-
-        let sent = !pending.is_empty();
-        for (_, ack) in &pending {
-            if let Err(err) = conn
-                .conn
-                .mcquic_send(neqo_transport::mcquic::Frame::Ack(ack.clone()))
-            {
-                return McquicSendPendingAcksResult {
-                    result: mcquic_http3_error_to_nsresult(err),
-                    sent: false,
-                };
-            }
-        }
-
-        for (channel_id, _) in pending {
-            if let Some(channel) = conn.mcquic_channels.get_mut(&channel_id) {
-                channel.mark_ack_sent();
-            }
-        }
-
-        McquicSendPendingAcksResult {
-            result: NS_OK,
-            sent,
+        match conn.conn.mcquic_send_pending_acks() {
+            Ok(sent) => McquicSendPendingAcksResult {
+                result: NS_OK,
+                sent,
+            },
+            Err(err) => McquicSendPendingAcksResult {
+                result: mcquic_http3_error_to_nsresult(err),
+                sent: false,
+            },
         }
     }
 

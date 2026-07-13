@@ -323,6 +323,7 @@ class Http3Session final : public Http3SessionBase,
   nsresult ProcessOutput(nsIUDPSocket* socket);
   nsresult ProcessInput(nsIUDPSocket* socket);
   nsresult ProcessEvents();
+  nsresult ProcessHttp3Events();
   nsresult EnsureMcquicReceiver();
   nsresult SendMcquicLimits();
   nsresult EnsureMcquicMoqSubscribe();
@@ -331,6 +332,11 @@ class Http3Session final : public Http3SessionBase,
   nsresult ProcessMcquicMoqUnicastDatagrams();
   nsresult ProcessMcquicControlFrames();
   nsresult ProcessMcquicPackets();
+  nsresult PumpMcquicAuthenticatedData();
+  nsresult SendMcquicState(const nsACString& aChannelId,
+                           McquicChannelStateExternal aState,
+                           uint64_t aReasonCode);
+  bool HasJoinedMcquicChannel() const;
   void ProcessMcquicValidatedDatagrams();
   void ProcessMcquicMoqNativeObject(const McquicMoqDatagramExternal& aObject,
                                     const nsTArray<uint8_t>& aChannelId,
@@ -397,6 +403,9 @@ class Http3Session final : public Http3SessionBase,
     nsCString mInterface;
     uint16_t mPort = 0;
     uint64_t mSubscriptionId = 0;
+    uint64_t mLatestKeySequence = 0;
+    uint64_t mStateSequence = 0;
+    uint64_t mLastControlStateSequence = 0;
     bool mJoined = false;
   };
 
@@ -429,7 +438,6 @@ class Http3Session final : public Http3SessionBase,
   nsCString mMcquicMoqTrackNamespace;
   nsCString mMcquicMoqTrackName;
   uint64_t mMcquicLimitsSequence = 0;
-  uint64_t mMcquicStateSequence = 0;
   uint64_t mMcquicMoqControlStreamId = 0;
   uint64_t mMcquicMoqUnicastSequence = 0;
   uint64_t mMcquicMoqUnicastDatagrams = 0;
