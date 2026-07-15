@@ -1075,10 +1075,6 @@ void nsHttpHandler::BuildUserAgent() {
     mUserAgent += '/';
     mUserAgent += mAppVersion;
   }
-
-  if (isFirefox) {
-    mUserAgent.AppendLiteral(" QUICastMCQUIC/1");
-  }
 }
 
 #ifdef XP_WIN

@@ -16386,28 +16386,6 @@
   value: false
   mirror: always
 
-# Enable the experimental native MoQ demo subscriber, media sink, decoder, and
-# debug overlay. The generic MCQUIC transport preference must also be enabled.
-- name: network.http.http3.mcquic.native_moq_demo.enabled
-  type: RelaxedAtomicBool
-  value: false
-  mirror: always
-
-# Restrict the experimental native MoQ demo path to this origin. Empty disables
-# the native demo subscriber/overlay until an origin is explicitly configured.
-- name: network.http.http3.mcquic.native_moq_demo.origin
-  type: String
-  value: ""
-  mirror: never
-
-# Optional native MoQ demo track override, formatted as
-# "<track-namespace>|<track-name>". Empty keeps the native debug subscriber
-# disabled until the track can be learned from server/page metadata.
-- name: network.http.http3.mcquic.native_moq_demo.track
-  type: String
-  value: ""
-  mirror: never
-
 # Receive buffer size of QUIC socket
 - name: network.http.http3.recvBufferSize
   type: RelaxedAtomicInt32

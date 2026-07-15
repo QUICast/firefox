@@ -1,128 +1,76 @@
-# Native MCQUIC Multicast Demo
+# Transparent MCQUIC WebTransport
 
-This branch can run the native MCQUIC/MoQ debug path against the live Quicast
-demo while keeping normal WebTransport playback available as the baseline.
-Native MCQUIC is experimental and internal to this branch; do not expose MCQUIC
-control frames, keys, integrity data, or multicast packets to web content.
+MCQUIC is a transport optimization beneath ordinary HTTP/3 and WebTransport.
+Web content opens the same `WebTransport` session and reads the same streams
+whether delivery is currently unicast or multicast. MCQUIC control frames,
+membership, keys, integrity data, packet recovery, and fallback remain internal
+to Firefox and Neqo.
+
+The former native `/moq` subscriber, media decoder, browser overlay, query
+trigger, and `native_moq_demo.*` preferences have been removed.
 
 ## Build Firefox
 
 From the Firefox checkout:
 
 ```bash
-git checkout huginn
 ./mach build
-```
-
-## Configure The Demo Profile
-
-The native multicast demo path is controlled by one demo switch plus an origin
-allowlist and an explicit temporary track override. `--setpref` is not supported
-when running with an explicit profile, so write the prefs to `user.js`.
-
-On macOS:
-
-```bash
-PROFILE=/private/tmp/mcquic-firefox-profile-live
-mkdir -p "$PROFILE"
-
-cat > "$PROFILE/user.js" <<'EOF'
-user_pref("network.http.http3.enable", true);
-user_pref("network.http.http3.mcquic.native_moq_demo.enabled", true);
-user_pref("network.http.http3.mcquic.native_moq_demo.origin", "live.quicast.de");
-user_pref("network.http.http3.mcquic.native_moq_demo.track", "ratatoskr/demo|h264-loc-msf");
-EOF
-```
-
-On Linux/Ubuntu, use `/tmp` instead of `/private/tmp`:
-
-```bash
-PROFILE=/tmp/mcquic-firefox-profile-live
-mkdir -p "$PROFILE"
-
-cat > "$PROFILE/user.js" <<'EOF'
-user_pref("network.http.http3.enable", true);
-user_pref("network.http.http3.mcquic.native_moq_demo.enabled", true);
-user_pref("network.http.http3.mcquic.native_moq_demo.origin", "live.quicast.de");
-user_pref("network.http.http3.mcquic.native_moq_demo.track", "ratatoskr/demo|h264-loc-msf");
-EOF
-```
-
-If the live stream is currently published as `h264-loc`, use this track line
-instead:
-
-```js
-user_pref("network.http.http3.mcquic.native_moq_demo.track", "ratatoskr/demo|h264-loc");
-```
-
-The old staged prefs are no longer used by the native demo path:
-
-```text
-network.http.http3.mcquic.moq_subscribe.*
-network.http.http3.mcquic.moq_media_*
 ```
 
 ## Run Firefox
 
-Open the live clock page with Bifrost's explicit native Firefox opt-in. The
-production page does not let the discovery manifest auto-start native playback.
-Use `?nativeFirefoxTrigger=1`; the shorter `?nativeTrigger=1` alias also works.
-Accepted enabled values are `1`, `true`, `on`, `yes`, and `force`. Accepted
-disabled values are `0`, `false`, `off`, and `no`.
-
-On macOS:
+The generic transport pref is the only MCQUIC switch:
 
 ```bash
 MOZ_LOG="timestamp,nsHttp:5,WebTransport:5" \
 MOZ_LOG_FILE="$HOME/Desktop/firefox-mcquic.log" \
 ./mach run \
-  --profile /private/tmp/mcquic-firefox-profile-live \
+  --temp-profile \
+  --setpref=network.http.http3.mcquic.enabled=true \
   -- \
   --no-remote \
-  'https://live.quicast.de/clock/?nativeFirefoxTrigger=1'
+  'https://live.quicast.de/clock/'
 ```
 
-On Linux/Ubuntu:
-
-```bash
-MOZ_LOG="timestamp,sync,nsHttp:5,WebTransport:5" \
-MOZ_LOG_FILE="$HOME/firefox-mcquic.log" \
-./mach run \
-  --profile /tmp/mcquic-firefox-profile-live \
-  -- \
-  --no-remote \
-  'https://live.quicast.de/clock/?nativeFirefoxTrigger=1'
-```
-
-Expected behavior:
-
-- With native multicast available, the native debug path joins SSM, validates
-  multicast packets, sends MC_ACKs, decodes media, and paints the native overlay
-  on the page playback surface.
-- Without native multicast, playback should continue via unicast fallback. The
-  JS WebTransport path remains the ordinary website baseline.
-
-For local Bifrost development only, the trigger can be persisted from the
-browser console with:
+Use a normal profile by adding this to its `user.js`:
 
 ```js
-localStorage.setItem("quicast.nativeFirefox.enabled", "on");
+user_pref("network.http.http3.mcquic.enabled", true);
 ```
 
-That localStorage switch is intentionally ignored on production hosts.
+No query parameter, localStorage switch, iframe activation, native GET
+navigation, track override, or overlay is involved.
+
+## Expected Data Path
+
+1. Bifrost creates an ordinary `new WebTransport()` connection and subscribes
+   to the clock through its normal JavaScript MoQ path.
+2. Yggdrasil sends the connection-specific 10-byte WebTransport
+   unidirectional-stream prefix over unicast.
+3. Authenticated MCQUIC STREAM frames contribute the shared stream body from
+   offset 10 onward through Neqo's ordinary receive-stream machinery.
+4. Bifrost reads the resulting `ReadableStream`, decodes the existing object
+   envelope, and renders it exactly as it does over unicast.
+5. Firefox sends MC_ACKs while multicast is useful. Missing multicast data is
+   recovered at the same stream offsets over unicast without a page reload.
+6. If multicast is disabled, membership fails, or the multicast path goes
+   stale, the same WebTransport stream continues over unicast.
+
+Authenticated legacy channel DATAGRAMs are accepted for mixed-version rollout
+compatibility, then discarded below the web API. They cannot be mistaken for
+media stream data.
 
 ## Optional AMT Gateway
 
-Use AMT only when the local network cannot receive the live SSM multicast
-natively. Run this from the sibling `amt` checkout and replace the relay
-placeholder with the live AMT relay endpoint.
+Use AMT when the local network cannot receive the live SSM multicast natively.
+Run this from the sibling `amt` checkout and replace the relay placeholder with
+the active relay endpoint.
 
 ```bash
 cd ../amt
 cargo build --locked --release --features metrics
 
 LOCAL_LAN_IP=$(ipconfig getifaddr en0)
-echo "$LOCAL_LAN_IP"
 
 sudo -E target/release/amt gateway \
   --relay "<AMT_RELAY_HOST_OR_IP>:2268" \
@@ -134,60 +82,26 @@ sudo -E target/release/amt gateway \
   --node-id local-amt-gateway
 ```
 
-Transparent mode listens for Firefox's local IGMPv3 SSM joins and forwards the
-corresponding multicast IP packets from the AMT relay to the local interface.
+Transparent mode observes Firefox's IGMPv3 SSM joins and forwards matching
+multicast IP packets from the AMT relay to the local interface.
 
-## Quick Diagnostics
+## Diagnostics
 
-If Firefox exits immediately on Linux/Ubuntu with a popup like "Firefox is
-already running but not responding", that usually means the profile is locked or
-stale rather than a graphics failure. The line `ATTENTION: default value of
-option mesa_glthread overridden` is usually harmless Mesa noise.
-
-Check for leftover Firefox processes:
+Useful Firefox log filter:
 
 ```bash
-pgrep -af 'firefox|plugin-container|Web Content'
+grep -E "MC_ANNOUNCE|MC_JOIN|MC_STATE|mcrx received|queued MC_ACK|ignored authenticated legacy DATAGRAMs" \
+  "$HOME/Desktop/firefox-mcquic.log"
 ```
 
-If nothing relevant is still running, remove stale profile locks:
+Useful packet-path evidence includes:
 
-```bash
-PROFILE=/tmp/mcquic-firefox-profile-live
-rm -f "$PROFILE/.parentlock" "$PROFILE/lock"
-```
+- per-client unicast QUIC traffic carrying the stream prefix and recovery;
+- one shared SSM flow carrying stream bodies;
+- advancing client MC_ACKs;
+- increased server unicast egress after stopping AMT;
+- resumed multicast delivery after membership returns.
 
-For a one-off clean run, create a fresh profile:
-
-```bash
-PROFILE=/tmp/mcquic-firefox-profile-live-$(date +%s)
-mkdir -p "$PROFILE"
-```
-
-Then write the `user.js` prefs above into that fresh profile and run with
-`--profile "$PROFILE"`.
-
-Useful log filter:
-
-```bash
-LOG_FILE="$HOME/firefox-mcquic.log" # Linux/Ubuntu
-# LOG_FILE="$HOME/Desktop/firefox-mcquic.log" # macOS
-
-grep -E "MoQ setup complete|MoQ subscribed|MC_ANNOUNCE|multicast join attempted|mcrx packet|MC_ACK|unicast object received|media frame decoded|delivery mode" \
-  "$LOG_FILE"
-```
-
-Useful landmarks:
-
-```text
-MCQUIC MoQ setup complete
-MCQUIC MoQ subscribed
-MCQUIC multicast join attempted
-MCQUIC mcrx packet
-MCQUIC queued MC_ACK
-MCQUIC MoQ unicast object received
-MCQUIC MoQ media decoded frame
-```
-
-If multicast is unavailable, it is fine to see join attempts without `mcrx`
-packets. Playback should remain on unicast fallback.
+Playback behavior alone is not sufficient to distinguish multicast from
+seamless unicast fallback. Use Firefox logs, Yggdrasil path counters, and packet
+capture together.

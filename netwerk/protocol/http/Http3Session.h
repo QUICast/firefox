@@ -6,7 +6,6 @@
 #define Http3Session_H_
 
 #include "HttpTrafficAnalyzer.h"
-#include "McquicMoqMediaSink.h"
 #include "mozilla/Array.h"
 #include "mozilla/UniquePtr.h"
 #include "mozilla/WeakPtr.h"
@@ -326,10 +325,6 @@ class Http3Session final : public Http3SessionBase,
   nsresult ProcessHttp3Events();
   nsresult EnsureMcquicReceiver();
   nsresult SendMcquicLimits();
-  nsresult EnsureMcquicMoqSubscribe();
-  void EnsureMcquicMoqImplicitFallbackTrackAlias();
-  nsresult ProcessMcquicMoqControlStream();
-  nsresult ProcessMcquicMoqUnicastDatagrams();
   nsresult ProcessMcquicControlFrames();
   nsresult ProcessMcquicPackets();
   nsresult PumpMcquicAuthenticatedData();
@@ -337,22 +332,6 @@ class Http3Session final : public Http3SessionBase,
                            McquicChannelStateExternal aState,
                            uint64_t aReasonCode);
   bool HasJoinedMcquicChannel() const;
-  void ProcessMcquicValidatedDatagrams();
-  void ProcessMcquicMoqNativeObject(const McquicMoqDatagramExternal& aObject,
-                                    const nsTArray<uint8_t>& aChannelId,
-                                    uint64_t aPacketNumber,
-                                    const char* aSource);
-  bool ProcessMcquicMoqRawMediaPayload(const nsTArray<uint8_t>& aPayload,
-                                       const nsTArray<uint8_t>& aChannelId,
-                                       uint64_t aPacketNumber,
-                                       const char* aSource, bool aIsMulticast,
-                                       bool aAllowSubscribedAnnexB);
-  void ProcessMcquicMoqRawMediaDatagram(const McquicChannelDatagram& aDatagram,
-                                        const char* aFormat,
-                                        const char* aSource, bool aIsMulticast);
-  void DrainMcquicMoqAccessUnits(const char* aSource);
-  void NoteMcquicMoqMulticastMediaProgress(
-      const McquicMoqMediaSinkProcessResult& aResult, const char* aSource);
   void ScheduleMcquicPoll();
 
   nsresult ProcessTransactionRead(uint64_t stream_id);
@@ -409,49 +388,11 @@ class Http3Session final : public Http3SessionBase,
     bool mJoined = false;
   };
 
-  struct McquicMoqTrackInfo {
-    nsCString mNamespace;
-    nsCString mTrackName;
-  };
-
-  enum class McquicMoqDeliveryMode {
-    None,
-    Unicast,
-    MulticastJoining,
-    Multicast,
-    Fallback,
-  };
-
-  static const char* McquicMoqDeliveryModeName(McquicMoqDeliveryMode aMode);
-  void SetMcquicMoqDeliveryMode(McquicMoqDeliveryMode aMode,
-                                const char* aReason);
-  void MaybeFallbackMcquicMoqUnicast(const char* aReason);
-
   UniquePtr<McquicMulticastReceiver> mMcquicReceiver;
-  UniquePtr<McquicMoqMediaSink> mMcquicMoqMediaSink;
-  UniquePtr<McquicMoqAccessUnitConsumer> mMcquicMoqAccessUnitConsumer;
   nsTHashMap<nsCStringHashKey, McquicChannelInfo> mMcquicChannels;
   nsTHashMap<nsUint64HashKey, nsCString> mMcquicSubscriptionToChannel;
-  nsTHashMap<nsUint64HashKey, McquicMoqTrackInfo> mMcquicMoqTrackAliases;
-  nsTArray<uint8_t> mMcquicMoqControlBuffer;
-  nsTArray<nsTArray<uint8_t>> mMcquicMoqDeferredUnicastDatagrams;
-  nsCString mMcquicMoqTrackNamespace;
-  nsCString mMcquicMoqTrackName;
   uint64_t mMcquicLimitsSequence = 0;
-  uint64_t mMcquicMoqControlStreamId = 0;
-  uint64_t mMcquicMoqUnicastSequence = 0;
-  uint64_t mMcquicMoqUnicastDatagrams = 0;
-  uint64_t mMcquicMoqMulticastDatagrams = 0;
-  uint64_t mMcquicMoqDroppedUnicastDatagrams = 0;
-  uint64_t mMcquicMoqMulticastObjectsWithoutMediaProgress = 0;
-  TimeStamp mMcquicMoqMulticastJoinStarted;
-  TimeStamp mMcquicMoqLastMulticastDatagram;
-  TimeStamp mMcquicMoqLastMulticastMediaProgress;
-  McquicMoqDeliveryMode mMcquicMoqDeliveryMode = McquicMoqDeliveryMode::None;
   bool mMcquicLimitsSent = false;
-  bool mMcquicMoqSubscribeQueued = false;
-  bool mMcquicMoqControlFin = false;
-  bool mMcquicMoqMulticastMediaReady = false;
   bool mMcquicNeedsOutput = false;
 
   // We need an extra map to store the mapping of WebTransportSession and

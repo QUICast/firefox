@@ -469,27 +469,6 @@ let JSWINDOWACTORS = {
     safeForUntrustedWebProcess: true,
   },
 
-  McquicVideoOverlay: {
-    parent: {
-      esModuleURI: "resource:///actors/McquicVideoOverlayParent.sys.mjs",
-    },
-
-    child: {
-      esModuleURI: "resource:///actors/McquicVideoOverlayChild.sys.mjs",
-      events: {
-        DOMDocElementInserted: { capture: true },
-        DOMContentLoaded: {},
-        pageshow: {},
-        resize: {},
-        scroll: { capture: true },
-      },
-    },
-
-    matches: ["http://*/*", "https://*/*"],
-    enablePreference: "network.http.http3.mcquic.native_moq_demo.enabled",
-    allFrames: true,
-  },
-
   DOMFullscreen: {
     parent: {
       esModuleURI: "resource:///actors/DOMFullscreenParent.sys.mjs",

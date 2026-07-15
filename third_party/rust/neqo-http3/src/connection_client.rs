@@ -1439,45 +1439,6 @@ impl Http3Client {
         Ok(self.conn.mcquic_send_due_acks(now)?)
     }
 
-    #[cfg(feature = "mcquic")]
-    pub fn mcquic_moq_open_stream(&mut self) -> Res<StreamId> {
-        if !self.conn.peer_mcquic_server_support() {
-            return Err(Error::Unavailable);
-        }
-
-        self.conn
-            .stream_create(StreamType::BiDi)
-            .map_err(|e| Error::map_stream_create_errors(&e))
-    }
-
-    #[cfg(feature = "mcquic")]
-    pub fn mcquic_moq_send_stream_data(
-        &mut self,
-        stream_id: StreamId,
-        buf: &[u8],
-    ) -> Res<usize> {
-        self.conn
-            .stream_send(stream_id, buf)
-            .map_err(|e| Error::map_stream_send_errors(&Error::from(e)))
-    }
-
-    #[cfg(feature = "mcquic")]
-    pub fn mcquic_moq_recv_stream_data(
-        &mut self,
-        stream_id: StreamId,
-        buf: &mut [u8],
-    ) -> Res<(usize, bool)> {
-        self.conn.stream_recv(stream_id, buf).map_err(|e| match e {
-            neqo_transport::Error::NoMoreData => Error::NoMoreData,
-            _ => Error::map_stream_recv_errors(&Error::from(e)),
-        })
-    }
-
-    #[cfg(feature = "mcquic")]
-    pub fn mcquic_moq_pop_unicast_datagram(&mut self) -> Option<Vec<u8>> {
-        self.base_handler.pop_mcquic_raw_datagram()
-    }
-
     #[must_use]
     pub const fn webtransport_enabled(&self) -> bool {
         self.base_handler.webtransport_enabled()

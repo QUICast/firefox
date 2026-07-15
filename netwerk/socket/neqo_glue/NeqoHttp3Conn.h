@@ -121,27 +121,6 @@ class NeqoHttp3Conn final {
     return neqo_http3conn_mcquic_send_pending_acks(this);
   }
 
-  nsresult McquicMoqOpenStream(uint64_t* aStreamId) {
-    return neqo_http3conn_mcquic_moq_open_stream(this, aStreamId);
-  }
-
-  nsresult McquicMoqSendStreamData(uint64_t aStreamId,
-                                   const nsTArray<uint8_t>& aPayload,
-                                   uint32_t* aSent) {
-    return neqo_http3conn_mcquic_moq_send_stream_data(this, aStreamId,
-                                                      &aPayload, aSent);
-  }
-
-  nsresult McquicMoqRecvStreamData(uint64_t aStreamId,
-                                   nsTArray<uint8_t>& aPayload, bool* aFin) {
-    return neqo_http3conn_mcquic_moq_recv_stream_data(this, aStreamId,
-                                                      &aPayload, aFin);
-  }
-
-  bool McquicMoqPopUnicastDatagram(nsTArray<uint8_t>& aPayload) {
-    return neqo_http3conn_mcquic_moq_pop_unicast_datagram(this, &aPayload);
-  }
-
   nsresult Fetch(const nsACString& aMethod, const nsACString& aScheme,
                  const nsACString& aHost, const nsACString& aPath,
                  const nsACString& aHeaders, uint64_t* aStreamId,

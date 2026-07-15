@@ -7,8 +7,6 @@
 "use strict";
 
 const MCQUIC_PREF = "network.http.http3.mcquic.enabled";
-const MCQUIC_NATIVE_DEMO_PREF =
-  "network.http.http3.mcquic.native_moq_demo.enabled";
 const EVENT_TIMEOUT_MS = 30000;
 
 const { clearTimeout, setTimeout } = ChromeUtils.importESModule(
@@ -78,7 +76,6 @@ function readWebTransportStream(stream, label) {
 
 registerCleanupFunction(() => {
   Services.prefs.clearUserPref(MCQUIC_PREF);
-  Services.prefs.clearUserPref(MCQUIC_NATIVE_DEMO_PREF);
   Services.prefs.clearUserPref("network.dns.localDomains");
   Services.prefs.clearUserPref(
     "network.http.http3.alt-svc-mapping-for-testing"
@@ -88,11 +85,9 @@ registerCleanupFunction(() => {
 add_task(
   async function test_authenticated_mcquic_streams_beneath_webtransport() {
     Services.prefs.setBoolPref(MCQUIC_PREF, true);
-    Services.prefs.setBoolPref(MCQUIC_NATIVE_DEMO_PREF, false);
     await http3_setup_tests("h3");
 
     Assert.ok(Services.prefs.getBoolPref(MCQUIC_PREF));
-    Assert.ok(!Services.prefs.getBoolPref(MCQUIC_NATIVE_DEMO_PREF));
 
     const port = Services.env.get("MOZHTTP3_PORT");
     Assert.notEqual(port, null);
