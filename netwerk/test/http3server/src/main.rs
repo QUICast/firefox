@@ -69,6 +69,8 @@ const MCQUIC_CHANNEL_ID: &[u8] = b"mcquic-wt-test";
 const MCQUIC_SOURCE: Ipv4Addr = Ipv4Addr::LOCALHOST;
 const MCQUIC_GROUP: Ipv4Addr = Ipv4Addr::new(232, 0, 0, 1);
 const MCQUIC_STREAM_BODY_OFFSET: u64 = 10;
+const MCQUIC_LATE_JOIN_STREAM_ID: u64 = 1_000_000 * 4 + 3;
+const MCQUIC_LATE_JOIN_RESET_STREAM_ID: u64 = 1_000_001 * 4 + 3;
 const MCQUIC_STEP_DELAY: Duration = Duration::from_millis(150);
 const MCQUIC_SCENARIO_TIMEOUT: Duration = Duration::from_secs(20);
 
@@ -76,10 +78,20 @@ const MCQUIC_SCENARIO_TIMEOUT: Duration = Duration::from_secs(20);
 enum McquicWebTransportPhase {
     AwaitingInitialDecline,
     AwaitingJoin,
+    AwaitingHighStreamAck {
+        packet_number: u64,
+    },
+    AwaitingHighResetAck {
+        packet_number: u64,
+    },
     BeforePrefixDelay {
         release_at: Instant,
     },
     AwaitingBeforePrefixAck {
+        stream_id: StreamId,
+        packet_number: u64,
+    },
+    AwaitingRecoveryAck {
         stream_id: StreamId,
         packet_number: u64,
     },
@@ -161,15 +173,23 @@ fn send_raw_webtransport_prefix(
     stream_id: StreamId,
 ) -> Result<(), String> {
     let prefix = mcquic_webtransport_prefix(session.stream_id())?;
+    send_raw_webtransport_bytes(session, stream_id, &prefix)
+}
+
+fn send_raw_webtransport_bytes(
+    session: &WebTransportRequest,
+    stream_id: StreamId,
+    data: &[u8],
+) -> Result<(), String> {
     let sent = session
         .conn
         .borrow_mut()
-        .stream_send(stream_id, &prefix)
-        .map_err(|e| format!("send WebTransport prefix on stream {stream_id}: {e}"))?;
-    if sent != prefix.len() {
+        .stream_send(stream_id, data)
+        .map_err(|e| format!("send WebTransport bytes on stream {stream_id}: {e}"))?;
+    if sent != data.len() {
         return Err(format!(
-            "short WebTransport prefix write on stream {stream_id}: {sent}/{}",
-            prefix.len()
+            "short WebTransport write on stream {stream_id}: {sent}/{}",
+            data.len()
         ));
     }
     Ok(())
@@ -475,6 +495,41 @@ impl McquicWebTransportScenario {
                     if !self.saw_joined {
                         break;
                     }
+                    let (packet_number, _) = self.send_channel_packet(
+                        server,
+                        McquicChannelFrame::Stream {
+                            stream_id: MCQUIC_LATE_JOIN_STREAM_ID,
+                            offset: MCQUIC_STREAM_BODY_OFFSET,
+                            fin: true,
+                            data: b"sparse-high-stream".to_vec(),
+                        },
+                        true,
+                    )?;
+                    self.phase =
+                        McquicWebTransportPhase::AwaitingHighStreamAck { packet_number };
+                    break;
+                }
+                McquicWebTransportPhase::AwaitingHighStreamAck { packet_number } => {
+                    if !self.acknowledged(packet_number) {
+                        break;
+                    }
+                    let (packet_number, _) = self.send_channel_packet(
+                        server,
+                        McquicChannelFrame::ResetStream {
+                            stream_id: MCQUIC_LATE_JOIN_RESET_STREAM_ID,
+                            error_code: Error::HttpNone.code(),
+                            final_size: 0,
+                        },
+                        true,
+                    )?;
+                    self.phase =
+                        McquicWebTransportPhase::AwaitingHighResetAck { packet_number };
+                    break;
+                }
+                McquicWebTransportPhase::AwaitingHighResetAck { packet_number } => {
+                    if !self.acknowledged(packet_number) {
+                        break;
+                    }
                     self.phase = McquicWebTransportPhase::BeforePrefixDelay {
                         release_at: now + MCQUIC_STEP_DELAY,
                     };
@@ -509,6 +564,35 @@ impl McquicWebTransportScenario {
                         break;
                     }
                     send_raw_webtransport_prefix(&self.session, stream_id)?;
+
+                    const MISSING: &[u8] = b"lost-";
+                    let stream_id = self.create_stream_with_prefix()?;
+                    let (packet_number, _) = self.send_channel_packet(
+                        server,
+                        McquicChannelFrame::Stream {
+                            stream_id: stream_id.as_u64(),
+                            offset: MCQUIC_STREAM_BODY_OFFSET
+                                + u64::try_from(MISSING.len())
+                                    .map_err(|e| format!("recovery gap length: {e}"))?,
+                            fin: true,
+                            data: b"tail".to_vec(),
+                        },
+                        true,
+                    )?;
+                    self.phase = McquicWebTransportPhase::AwaitingRecoveryAck {
+                        stream_id,
+                        packet_number,
+                    };
+                    break;
+                }
+                McquicWebTransportPhase::AwaitingRecoveryAck {
+                    stream_id,
+                    packet_number,
+                } => {
+                    if !self.acknowledged(packet_number) {
+                        break;
+                    }
+                    send_raw_webtransport_bytes(&self.session, stream_id, b"lost-")?;
 
                     let key = McquicKey {
                         channel_id: MCQUIC_CHANNEL_ID.to_vec(),
@@ -659,7 +743,7 @@ impl McquicWebTransportScenario {
                     if !self.saw_retired {
                         break;
                     }
-                    if self.ack_frames_seen < 4 {
+                    if self.ack_frames_seen < 7 {
                         return Err(format!(
                             "client retired after only {} MC_ACK frames",
                             self.ack_frames_seen
@@ -1326,6 +1410,18 @@ impl HttpServer for Http3TestServer {
                                     session,
                                     StreamType::UniDi,
                                     Some(Vec::from("qwerty")),
+                                ));
+                            } else if path == b"/create_two_unidi_streams_and_hello" {
+                                session.response(&SessionAcceptAction::Accept, now).unwrap();
+                                self.sessions_to_create_stream.push((
+                                    session.clone(),
+                                    StreamType::UniDi,
+                                    Some(Vec::from("second")),
+                                ));
+                                self.sessions_to_create_stream.push((
+                                    session,
+                                    StreamType::UniDi,
+                                    Some(Vec::from("first")),
                                 ));
                             } else if path == b"/create_bidi_stream" {
                                 session.response(&SessionAcceptAction::Accept, now).unwrap();

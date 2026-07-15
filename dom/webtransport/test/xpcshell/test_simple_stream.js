@@ -101,6 +101,28 @@ add_task(async function test_wt_incoming_unidi_stream() {
   wt.close();
 });
 
+add_task(async function test_wt_buffered_incoming_unidi_streams_keep_pulling() {
+  let wt = new WebTransport(
+    "https://" + host + "/create_two_unidi_streams_and_hello"
+  );
+  await wt.ready;
+
+  // Let both streams reach the DOM before the first read. This exercises the
+  // pull path where an incoming stream is already buffered.
+  await new Promise(resolve => do_timeout(250, resolve));
+
+  const stream_reader = wt.incomingUnidirectionalStreams.getReader();
+  const first = await stream_reader.read();
+  const second = await stream_reader.read();
+  Assert.ok(!first.done);
+  Assert.ok(!second.done);
+  Assert.equal(await read_stream_as_string(first.value), "first");
+  Assert.equal(await read_stream_as_string(second.value), "second");
+  stream_reader.releaseLock();
+
+  wt.close();
+});
+
 add_task(async function test_wt_incoming_and_outgoing_unidi_stream() {
   // create the client's incoming stream from the server side
   // we need it to listen to the echo back

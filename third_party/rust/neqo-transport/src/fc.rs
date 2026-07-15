@@ -648,6 +648,18 @@ impl RemoteStreamLimit {
         assert!(self.is_allowed(new_stream));
         new_stream
     }
+
+    #[cfg(feature = "mcquic")]
+    pub(crate) fn mark_opened_through(&mut self, stream_id: StreamId) -> Res<()> {
+        if !self.is_allowed(stream_id) {
+            return Err(Error::StreamLimit);
+        }
+        if stream_id >= self.next_stream {
+            self.next_stream = stream_id;
+            self.next_stream.next();
+        }
+        Ok(())
+    }
 }
 
 impl Deref for RemoteStreamLimit {

@@ -5,6 +5,8 @@
 // except according to those terms.
 
 // Stream management for a connection.
+#[cfg(feature = "mcquic")]
+use std::collections::BTreeMap;
 use std::{
     cell::RefCell,
     cmp::Ordering,
@@ -34,6 +36,83 @@ use crate::{
 };
 
 pub type SendOrder = i64;
+
+#[cfg(feature = "mcquic")]
+#[derive(Default)]
+struct SparseStreamIdRanges {
+    ranges: BTreeMap<u64, u64>,
+}
+
+#[cfg(feature = "mcquic")]
+impl SparseStreamIdRanges {
+    const STREAM_ID_INCREMENT: u64 = 4;
+
+    fn contains(&self, stream_id: StreamId) -> bool {
+        let stream_id = stream_id.as_u64();
+        self.ranges
+            .range(..=stream_id)
+            .next_back()
+            .is_some_and(|(_, end)| stream_id <= *end)
+    }
+
+    fn insert(&mut self, stream_id: StreamId) -> bool {
+        let stream_id = stream_id.as_u64();
+        if self
+            .ranges
+            .range(..=stream_id)
+            .next_back()
+            .is_some_and(|(_, end)| stream_id <= *end)
+        {
+            return false;
+        }
+
+        let left = self
+            .ranges
+            .range(..stream_id)
+            .next_back()
+            .and_then(|(start, end)| {
+                end.checked_add(Self::STREAM_ID_INCREMENT)
+                    .is_some_and(|next| next == stream_id)
+                    .then_some(*start)
+            });
+        let right = stream_id
+            .checked_add(Self::STREAM_ID_INCREMENT)
+            .and_then(|start| self.ranges.get(&start).copied().map(|end| (start, end)));
+
+        match (left, right) {
+            (Some(left_start), Some((right_start, right_end))) => {
+                self.ranges.remove(&right_start);
+                *self
+                    .ranges
+                    .get_mut(&left_start)
+                    .expect("adjacent sparse stream range exists") = right_end;
+            }
+            (Some(left_start), None) => {
+                *self
+                    .ranges
+                    .get_mut(&left_start)
+                    .expect("adjacent sparse stream range exists") = stream_id;
+            }
+            (None, Some((right_start, right_end))) => {
+                self.ranges.remove(&right_start);
+                self.ranges.insert(stream_id, right_end);
+            }
+            (None, None) => {
+                self.ranges.insert(stream_id, stream_id);
+            }
+        }
+        true
+    }
+
+    fn clear(&mut self) {
+        self.ranges.clear();
+    }
+
+    #[cfg(test)]
+    fn range_count(&self) -> usize {
+        self.ranges.len()
+    }
+}
 
 #[derive(Copy, Clone, Eq, PartialEq)]
 pub struct StreamOrder {
@@ -68,6 +147,9 @@ pub struct Streams {
     local_stream_limits: LocalStreamLimits,
     send: SendStreams,
     recv: RecvStreams,
+    #[cfg(feature = "mcquic")]
+    // Actual sparse streams plus compact tombstones; implicit gaps are represented by the high-water mark.
+    sparse_remote_uni_seen: Option<SparseStreamIdRanges>,
 }
 
 impl Streams {
@@ -79,6 +161,13 @@ impl Streams {
         let limit_bidi = tps.borrow().local().get_integer(InitialMaxStreamsBidi);
         let limit_uni = tps.borrow().local().get_integer(InitialMaxStreamsUni);
         let max_data = tps.borrow().local().get_integer(InitialMaxData);
+        #[cfg(feature = "mcquic")]
+        let sparse_remote_uni_seen = {
+            let tps = tps.borrow();
+            (tps.local().get_mcquic_client_params().is_some()
+                || tps.local().get_mcquic_server_support())
+            .then(SparseStreamIdRanges::default)
+        };
         Self {
             role,
             tps,
@@ -89,6 +178,8 @@ impl Streams {
             local_stream_limits: LocalStreamLimits::new(role),
             send: SendStreams::default(),
             recv: RecvStreams::default(),
+            #[cfg(feature = "mcquic")]
+            sparse_remote_uni_seen,
         }
     }
 
@@ -314,6 +405,10 @@ impl Streams {
     pub fn clear_streams(&mut self) {
         self.send.clear();
         self.recv.clear();
+        #[cfg(feature = "mcquic")]
+        if let Some(seen) = self.sparse_remote_uni_seen.as_mut() {
+            seen.clear();
+        }
     }
 
     pub fn cleanup_closed_streams(&mut self) {
@@ -329,13 +424,43 @@ impl Streams {
     }
 
     fn ensure_created_if_remote(&mut self, stream_id: StreamId) -> Res<()> {
-        if !stream_id.is_remote_initiated(self.role)
-            || !self.remote_stream_limits[stream_id.stream_type()].is_new_stream(stream_id)?
-        {
-            // If it is not a remote stream and stream already exist.
+        if !stream_id.is_remote_initiated(self.role) {
             return Ok(());
         }
 
+        #[cfg(feature = "mcquic")]
+        if stream_id.is_uni() && self.sparse_remote_uni_seen.is_some() {
+            self.remote_stream_limits[StreamType::UniDi].mark_opened_through(stream_id)?;
+            if self
+                .sparse_remote_uni_seen
+                .as_ref()
+                .is_some_and(|streams| streams.contains(stream_id))
+            {
+                return Ok(());
+            }
+            self.create_remote_stream(stream_id);
+            let inserted = self
+                .sparse_remote_uni_seen
+                .as_mut()
+                .expect("sparse stream mode is enabled")
+                .insert(stream_id);
+            debug_assert!(inserted);
+            return Ok(());
+        }
+
+        if !self.remote_stream_limits[stream_id.stream_type()].is_new_stream(stream_id)? {
+            return Ok(());
+        }
+
+        while self.remote_stream_limits[stream_id.stream_type()].is_new_stream(stream_id)? {
+            let next_stream_id =
+                self.remote_stream_limits[stream_id.stream_type()].take_stream_id();
+            self.create_remote_stream(next_stream_id);
+        }
+        Ok(())
+    }
+
+    fn create_remote_stream(&mut self, stream_id: StreamId) {
         let tp = match stream_id.stream_type() {
             // From the local perspective, this is a remote- originated BiDi stream. From
             // the remote perspective, this is a local-originated BiDi stream. Therefore,
@@ -347,44 +472,38 @@ impl Streams {
         };
         let recv_initial_max_stream_data = self.tps.borrow().local().get_integer(tp);
 
-        while self.remote_stream_limits[stream_id.stream_type()].is_new_stream(stream_id)? {
-            let next_stream_id =
-                self.remote_stream_limits[stream_id.stream_type()].take_stream_id();
-            self.events.new_stream(next_stream_id);
+        self.events.new_stream(stream_id);
+        self.recv.insert(
+            stream_id,
+            RecvStream::new(
+                stream_id,
+                recv_initial_max_stream_data,
+                Rc::clone(&self.receiver_fc),
+                self.events.clone(),
+            ),
+        );
 
-            self.recv.insert(
-                next_stream_id,
-                RecvStream::new(
-                    next_stream_id,
-                    recv_initial_max_stream_data,
-                    Rc::clone(&self.receiver_fc),
+        if stream_id.is_bidi() {
+            // From the local perspective, this is a remote- originated BiDi stream.
+            // From the remote perspective, this is a local-originated BiDi stream.
+            // Therefore, look at the remote's transport parameters for the
+            // INITIAL_MAX_STREAM_DATA_BIDI_LOCAL value to decide how much this endpoint
+            // is allowed to send its peer.
+            let send_initial_max_stream_data = self
+                .tps
+                .borrow()
+                .remote()
+                .get_integer(InitialMaxStreamDataBidiLocal);
+            self.send.insert(
+                stream_id,
+                SendStream::new(
+                    stream_id,
+                    send_initial_max_stream_data,
+                    Rc::clone(&self.sender_fc),
                     self.events.clone(),
                 ),
             );
-
-            if next_stream_id.is_bidi() {
-                // From the local perspective, this is a remote- originated BiDi stream.
-                // From the remote perspective, this is a local-originated BiDi stream.
-                // Therefore, look at the remote's transport parameters for the
-                // INITIAL_MAX_STREAM_DATA_BIDI_LOCAL value to decide how much this endpoint
-                // is allowed to send its peer.
-                let send_initial_max_stream_data = self
-                    .tps
-                    .borrow()
-                    .remote()
-                    .get_integer(InitialMaxStreamDataBidiLocal);
-                self.send.insert(
-                    next_stream_id,
-                    SendStream::new(
-                        next_stream_id,
-                        send_initial_max_stream_data,
-                        Rc::clone(&self.sender_fc),
-                        self.events.clone(),
-                    ),
-                );
-            }
         }
-        Ok(())
     }
 
     /// Get or make a stream, and implicitly open additional streams as
@@ -552,5 +671,32 @@ impl Streams {
     #[must_use]
     pub fn need_keep_alive(&self) -> bool {
         self.recv.need_keep_alive()
+    }
+}
+
+#[cfg(all(test, feature = "mcquic"))]
+mod sparse_stream_id_ranges_tests {
+    use super::SparseStreamIdRanges;
+    use crate::stream_id::StreamId;
+
+    #[test]
+    fn adjacent_stream_ids_coalesce_in_both_directions() {
+        let mut seen = SparseStreamIdRanges::default();
+        assert!(seen.insert(StreamId::new(3)));
+        assert!(seen.insert(StreamId::new(7)));
+        assert!(seen.insert(StreamId::new(19)));
+        assert_eq!(seen.range_count(), 2);
+
+        assert!(seen.insert(StreamId::new(15)));
+        assert_eq!(seen.range_count(), 2);
+        assert!(seen.insert(StreamId::new(11)));
+        assert_eq!(seen.range_count(), 1);
+        assert!(!seen.insert(StreamId::new(11)));
+        assert!(seen.contains(StreamId::new(3)));
+        assert!(seen.contains(StreamId::new(19)));
+
+        seen.clear();
+        assert_eq!(seen.range_count(), 0);
+        assert!(!seen.contains(StreamId::new(11)));
     }
 }

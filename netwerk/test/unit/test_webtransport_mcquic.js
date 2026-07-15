@@ -160,6 +160,12 @@ add_task(
       "multicast-before-prefix"
     );
 
+    const recoveryStream = await streams.next("the unicast recovery stream");
+    Assert.equal(
+      await readWebTransportStream(recoveryStream, "the recovered stream body"),
+      "lost-tail"
+    );
+
     const keyDelayedStream = await streams.next("the KEY-delayed stream");
     Assert.equal(
       await readWebTransportStream(keyDelayedStream, "the KEY-delayed body"),
@@ -203,7 +209,7 @@ add_task(
       /^mcquic-complete:declined,joined,left,retired;acks=(\d+)$/
     );
     Assert.ok(match, `Unexpected MCQUIC completion marker: ${completion}`);
-    Assert.greaterOrEqual(Number.parseInt(match[1], 10), 4);
+    Assert.greaterOrEqual(Number.parseInt(match[1], 10), 7);
 
     webTransport.closeSession(0, "");
   }

@@ -2378,11 +2378,13 @@ nsresult Http3Session::ProcessMcquicPackets() {
       }
       continue;
     }
+  }
 
-    rv = PumpMcquicAuthenticatedData();
-    if (NS_FAILED(rv)) {
-      return rv;
-    }
+  // Pump once per poll. Neqo coalesces MC_ACKs until the announced
+  // threshold or deadline, including polls where no new packet arrived.
+  nsresult rv = PumpMcquicAuthenticatedData();
+  if (NS_FAILED(rv)) {
+    return rv;
   }
 
   ScheduleMcquicPoll();

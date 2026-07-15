@@ -3701,6 +3701,10 @@ impl Connection {
         now: Instant,
     ) -> Result<(), (FrameType, Error)> {
         for packet in packets {
+            self.mcquic_channels
+                .get_mut(&packet.channel_id)
+                .ok_or((FrameType::Padding, Error::Internal))?
+                .note_released_at(now);
             for frame in packet.frames {
                 let frame_type = Self::mcquic_channel_frame_type(&frame)
                     .map_err(|error| (FrameType::Padding, error))?;
@@ -4344,11 +4348,30 @@ impl Connection {
     /// Returns an error if MCQUIC is unavailable or an ACK cannot be queued.
     #[cfg(feature = "mcquic")]
     pub fn mcquic_send_pending_acks(&mut self) -> Res<bool> {
+        self.mcquic_send_acks(None)
+    }
+
+    /// Queue channel acknowledgements whose advertised delay has elapsed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if MCQUIC is unavailable or an ACK cannot be queued.
+    #[cfg(feature = "mcquic")]
+    pub fn mcquic_send_due_acks(&mut self, now: Instant) -> Res<bool> {
+        self.mcquic_send_acks(Some(now))
+    }
+
+    #[cfg(feature = "mcquic")]
+    fn mcquic_send_acks(&mut self, now: Option<Instant>) -> Res<bool> {
         let pending = self
             .mcquic_channels
             .iter()
             .filter_map(|(channel_id, channel)| {
-                channel.pending_ack().map(|ack| (channel_id.clone(), ack))
+                let ack = now.map_or_else(
+                    || channel.pending_ack(),
+                    |now| channel.pending_ack_if_due(now),
+                );
+                ack.map(|ack| (channel_id.clone(), ack))
             })
             .collect::<Vec<_>>();
 
@@ -4385,7 +4408,7 @@ impl Connection {
         }
 
         frame.to_vec()?;
-        self.mcquic_send.push_back(frame);
+        queue_mcquic_frame(&mut self.mcquic_send, frame);
         Ok(())
     }
 
@@ -4453,6 +4476,20 @@ impl Connection {
 
         qlog::packet_io(&mut self.qlog, meta, now);
     }
+}
+
+#[cfg(feature = "mcquic")]
+fn queue_mcquic_frame(queue: &mut VecDeque<crate::mcquic::Frame>, frame: crate::mcquic::Frame) {
+    if let crate::mcquic::Frame::Ack(new_ack) = &frame
+        && let Some(queued) = queue.iter_mut().find(|queued| {
+            matches!(queued, crate::mcquic::Frame::Ack(ack) if ack.channel_id == new_ack.channel_id)
+        })
+    {
+        *queued = frame;
+        return;
+    }
+
+    queue.push_back(frame);
 }
 
 impl EventProvider for Connection {

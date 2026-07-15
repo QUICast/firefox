@@ -1217,6 +1217,9 @@ type SendFunc = extern "C" fn(
 
 type SetTimerFunc = extern "C" fn(context: *mut c_void, timeout: u64);
 
+#[cfg(feature = "mcquic")]
+const MCQUIC_INITIAL_MAX_STREAMS_UNI: u64 = 1 << 30;
+
 #[cfg(unix)]
 type BorrowedSocket = std::os::fd::BorrowedFd<'static>;
 #[cfg(windows)]
@@ -1397,6 +1400,7 @@ impl NeqoHttp3Conn {
 
         #[cfg(feature = "mcquic")]
         if mcquic_enabled {
+            params = params.max_streams(StreamType::UniDi, MCQUIC_INITIAL_MAX_STREAMS_UNI);
             if let Some(limits) = mcquic_client_limits.clone() {
                 params = params.mcquic_client_params(Some(
                     neqo_transport::mcquic::ClientTransportParams {
@@ -2411,7 +2415,7 @@ pub extern "C" fn neqo_http3conn_mcquic_send_pending_acks(
 ) -> McquicSendPendingAcksResult {
     #[cfg(feature = "mcquic")]
     {
-        match conn.conn.mcquic_send_pending_acks() {
+        match conn.conn.mcquic_send_due_acks(Instant::now()) {
             Ok(sent) => McquicSendPendingAcksResult {
                 result: NS_OK,
                 sent,
