@@ -20,13 +20,14 @@ use wgh::Instance;
 use wgt::error::{ErrorType, WebGpuError};
 
 use std::borrow::Cow;
+use std::collections::HashMap;
 #[allow(unused_imports)]
 use std::mem;
 #[cfg(target_os = "linux")]
 use std::os::fd::{FromRawFd, IntoRawFd, OwnedFd, RawFd};
 use std::os::raw::c_char;
 use std::ptr;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 #[allow(unused_imports)]
@@ -38,15 +39,18 @@ use windows::Win32::{Foundation, Graphics::Direct3D12};
 #[cfg(target_os = "linux")]
 use ash::{khr, vk};
 
-// The seemingly redundant u64 suffixes help cbindgen with generating the right C++ code.
-// See https://github.com/mozilla/cbindgen/issues/849.
+// The seemingly redundant u64 suffix helps cbindgen with generating the right C++ code.
+// See https://github.com/mozilla/cbindgen/issues/849#issuecomment-4759987548.
 
 /// We limit the size of buffer allocations for stability reason.
 /// We can reconsider this limit in the future. Note that some drivers (mesa for example),
 /// have issues when the size of a buffer, mapping or copy command does not fit into a
 /// signed 32 bits integer, so beyond a certain size, large allocations will need some form
 /// of driver allow/blocklist.
-pub const MAX_BUFFER_SIZE: wgt::BufferAddress = 1u64 << 30u64;
+///
+/// Buffer sizes don't have to be aligned, but storage bindings do, and we clamp
+/// maxStorageBufferBindingSize to MAX_BUFFER_SIZE, so use an aligned limit.
+pub const MAX_BUFFER_SIZE: wgt::BufferAddress = (1u64 << 31) - 4;
 
 // Mesa has issues with height/depth that don't fit in a 16 bits signed integers.
 const MAX_TEXTURE_EXTENT: u32 = std::i16::MAX as u32;
@@ -64,6 +68,28 @@ fn emit_critical_invalid_note(what: &'static str) {
     // SAFETY: We ensure that the pointer provided is not null.
     let msg = CString::new(format!("{what} is invalid")).unwrap();
     unsafe { gfx_critical_note(msg.as_ptr()) }
+}
+
+#[cfg(target_os = "linux")]
+fn get_linux_dmabuf_modifiers() -> Option<Vec<u64>> {
+    let mut modifiers_ptr: *const u64 = ptr::null();
+    let mut modifier_count = 0u32;
+
+    let ok =
+        unsafe { wgpu_server_get_linux_dmabuf_modifiers(&mut modifiers_ptr, &mut modifier_count) };
+    if !ok {
+        return None;
+    }
+    if modifier_count == 0 {
+        return Some(Vec::new());
+    }
+    if modifiers_ptr.is_null() {
+        return None;
+    }
+
+    // The pointer is owned by gfxVars storage and copied immediately.
+    let modifiers = unsafe { std::slice::from_raw_parts(modifiers_ptr, modifier_count as usize) };
+    Some(modifiers.to_vec())
 }
 
 fn restrict_limits(limits: wgt::Limits) -> wgt::Limits {
@@ -107,6 +133,31 @@ pub struct WebGPUParentPtr(*mut core::ffi::c_void);
 pub struct Global {
     owner: WebGPUParentPtr,
     global: wgc::global::Global,
+    swap_chain_configs: Mutex<HashMap<SwapChainId, SwapChainConfig>>,
+}
+
+/// Values for the descriptor when creating textures for an active swap chain.
+#[derive(Clone)]
+struct SwapChainConfig {
+    size: wgt::Extent3d,
+    format: wgt::TextureFormat,
+    usage: wgt::TextureUsages,
+    view_formats: Vec<wgt::TextureFormat>,
+}
+
+impl SwapChainConfig {
+    fn to_texture_descriptor(&self) -> wgc::resource::TextureDescriptor<'static> {
+        wgt::TextureDescriptor {
+            label: Some(Cow::Borrowed("swap chain texture")),
+            size: self.size,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgt::TextureDimension::D2,
+            format: self.format,
+            usage: self.usage,
+            view_formats: self.view_formats.clone(),
+        }
+    }
 }
 
 impl std::ops::Deref for Global {
@@ -138,7 +189,8 @@ pub extern "C" fn wgpu_server_new(owner: WebGPUParentPtr) -> *mut Global {
     };
 
     let mut instance_flags = (wgt::InstanceFlags::from_build_config()
-        | wgt::InstanceFlags::AUTOMATIC_TIMESTAMP_NORMALIZATION)
+        | wgt::InstanceFlags::AUTOMATIC_TIMESTAMP_NORMALIZATION
+        | wgt::InstanceFlags::STRICT_WEBGPU_COMPLIANCE)
         .with_env();
     if !static_prefs::pref!("dom.webgpu.hal-labels") {
         instance_flags.insert(wgt::InstanceFlags::DISCARD_HAL_LABELS);
@@ -173,7 +225,11 @@ pub extern "C" fn wgpu_server_new(owner: WebGPUParentPtr) -> *mut Global {
         },
         Some(build_telemetry_struct()),
     );
-    let global = Global { owner, global };
+    let global = Global {
+        owner,
+        global,
+        swap_chain_configs: Mutex::new(HashMap::new()),
+    };
     Box::into_raw(Box::new(global))
 }
 
@@ -386,37 +442,46 @@ fn create_next_numbered_dir(dir: &std::path::Path) -> std::io::Result<std::path:
 unsafe fn adapter_request_device(
     global: &Global,
     self_id: id::AdapterId,
-    mut desc: wgc::device::DeviceDescriptor,
+    desc: wgc::device::DeviceDescriptor,
     new_device_id: id::DeviceId,
     new_queue_id: id::QueueId,
 ) -> Option<String> {
-    if let wgt::Trace::Directory(ref path) = desc.trace {
-        log::warn!(
-            concat!(
-                "`DeviceDescriptor` from child process ",
-                "should not request wgpu trace path, ",
-                "but it did request `{}`"
-            ),
-            path.display()
-        );
-    }
-    desc.trace = wgt::Trace::Off;
+    let mut sanitized_desc = {
+        let wgc::device::DeviceDescriptor {
+            label,
+            required_features,
+            required_limits,
+            experimental_features,
+            memory_hints,
+            trace,
+        } = desc;
+
+        assert_eq!(required_features.features_wgpu, wgt::FeaturesWGPU::empty());
+        // TODO: compare to DeviceDescriptor::default() once wgpu offers `Eq`
+        // for the necessary types.
+        assert!(!experimental_features.is_enabled());
+        assert!(matches!(memory_hints, wgt::MemoryHints::Performance));
+        assert!(matches!(trace, wgt::Trace::Off));
+
+        // Note that wgpu-core will generally ignore all required features and limits that
+        // are not part of the spec. See docs of `InstanceFlags::STRICT_WEBGPU_COMPLIANCE`
+        // for exceptions and actual behavior.
+
+        wgc::device::DeviceDescriptor {
+            label,
+            required_features,
+            required_limits,
+            experimental_features: wgt::ExperimentalFeatures::disabled(),
+            memory_hints: wgt::MemoryHints::MemoryUsage,
+            trace: wgt::Trace::Off, // may be overridden below
+        }
+    };
+
     if let Some(env_dir) = std::env::var_os("WGPU_TRACE") {
         match create_next_numbered_dir(&std::path::PathBuf::from(env_dir)) {
-            Ok(path) => desc.trace = wgt::Trace::Directory(path),
+            Ok(path) => sanitized_desc.trace = wgt::Trace::Directory(path),
             Err(err) => log::warn!("Failed to create directory for wgpu recording: {err:?}"),
         }
-    }
-
-    if desc.experimental_features.is_enabled() {
-        log::warn!(
-            concat!(
-                "`DeviceDescriptor` from child process ",
-                "should not enable experimental features, ",
-                "but it did request {:?}"
-            ),
-            desc.experimental_features
-        );
     }
 
     if wgpu_parent_is_external_texture_enabled() {
@@ -431,14 +496,10 @@ unsafe fn adapter_request_device(
             wgt::Features::TEXTURE_FORMAT_16BIT_NORM,
         ] {
             if global.adapter_features(self_id).contains(feature) {
-                desc.required_features.insert(feature);
+                sanitized_desc.required_features.insert(feature);
             }
         }
     }
-
-    // TODO: in https://github.com/gfx-rs/wgpu/pull/3626/files#diff-033343814319f5a6bd781494692ea626f06f6c3acc0753a12c867b53a646c34eR97
-    // which introduced the queue id parameter, the queue id is also the device id. I don't know how applicable this is to
-    // other situations (this one in particular).
 
     #[cfg(target_os = "linux")]
     {
@@ -460,14 +521,16 @@ unsafe fn adapter_request_device(
             (Some(_), false) => {}
             (Some(hal_adapter), true) => {
                 let mut enabled_extensions =
-                    hal_adapter.required_device_extensions(desc.required_features);
+                    hal_adapter.required_device_extensions(sanitized_desc.required_features);
                 enabled_extensions.push(khr::external_memory_fd::NAME);
                 enabled_extensions.push(ash::ext::external_memory_dma_buf::NAME);
                 enabled_extensions.push(ash::ext::image_drm_format_modifier::NAME);
                 enabled_extensions.push(khr::external_semaphore_fd::NAME);
 
-                let mut enabled_phd_features = hal_adapter
-                    .physical_device_features(&enabled_extensions, desc.required_features);
+                let mut enabled_phd_features = hal_adapter.physical_device_features(
+                    &enabled_extensions,
+                    sanitized_desc.required_features,
+                );
 
                 let raw_instance = hal_adapter.shared_instance().raw_instance();
                 let raw_physical_device = hal_adapter.raw_physical_device();
@@ -523,9 +586,9 @@ unsafe fn adapter_request_device(
                     raw_device,
                     None,
                     &enabled_extensions,
-                    desc.required_features,
-                    &desc.required_limits,
-                    &desc.memory_hints,
+                    sanitized_desc.required_features,
+                    &sanitized_desc.required_limits,
+                    &sanitized_desc.memory_hints,
                     family_info.queue_family_index,
                     0,
                 ) {
@@ -541,7 +604,7 @@ unsafe fn adapter_request_device(
                 let res = global.create_device_from_hal(
                     self_id,
                     hal_device.into(),
-                    &desc,
+                    &sanitized_desc,
                     Some(new_device_id),
                     Some(new_queue_id),
                 );
@@ -553,8 +616,12 @@ unsafe fn adapter_request_device(
         }
     }
 
-    let res =
-        global.adapter_request_device(self_id, &desc, Some(new_device_id), Some(new_queue_id));
+    let res = global.adapter_request_device(
+        self_id,
+        &sanitized_desc,
+        Some(new_device_id),
+        Some(new_queue_id),
+    );
     if let Err(err) = res {
         return Some(format!("{err}"));
     } else {
@@ -1120,18 +1187,33 @@ pub extern "C" fn wgpu_vkimage_create_with_dma_buf(
         usage_flags |= vk::ImageUsageFlags::COLOR_ATTACHMENT;
 
         modifier_props.retain(|modifier_prop| {
-            let support = is_dmabuf_supported(
+            is_dmabuf_supported(
                 instance,
                 physical_device,
                 vk::Format::B8G8R8A8_UNORM,
                 modifier_prop.drm_format_modifier,
                 usage_flags,
-            );
-            support
+            )
         });
 
         if modifier_props.is_empty() {
             let msg = c"format not supported for dmabuf import";
+            gfx_critical_note(msg.as_ptr());
+            return ptr::null_mut();
+        }
+
+        let Some(consumer_modifiers) = get_linux_dmabuf_modifiers() else {
+            let msg = c"failed to get consumer dmabuf modifiers";
+            gfx_critical_note(msg.as_ptr());
+            return ptr::null_mut();
+        };
+
+        modifier_props.retain(|modifier_prop| {
+            consumer_modifiers.contains(&modifier_prop.drm_format_modifier)
+        });
+
+        if modifier_props.is_empty() {
+            let msg = c"no common dmabuf modifier found for WebGPU shared-texture swapchain";
             gfx_critical_note(msg.as_ptr());
             return ptr::null_mut();
         }
@@ -1452,6 +1534,11 @@ extern "C" {
     ) -> *const VkImageHandle;
     #[cfg(target_os = "linux")]
     fn wgpu_server_get_dma_buf_fd(parent: WebGPUParentPtr, id: id::TextureId) -> i32;
+    #[cfg(target_os = "linux")]
+    fn wgpu_server_get_linux_dmabuf_modifiers(
+        modifiers: *mut *const u64,
+        modifier_count: *mut u32,
+    ) -> bool;
     #[cfg(target_os = "macos")]
     fn wgpu_server_get_external_io_surface_id(parent: WebGPUParentPtr, id: id::TextureId) -> u32;
     fn wgpu_server_remove_shared_texture(parent: WebGPUParentPtr, id: id::TextureId);
@@ -1556,6 +1643,7 @@ extern "C" {
         message: &nsCString,
     );
     fn wgpu_parent_send_server_message(parent: WebGPUParentPtr, message: &mut ByteBuf);
+    fn wgpu_texture_format_is_valid_for_webidl(format: *const nsCString) -> bool;
 }
 
 #[cfg(target_os = "linux")]
@@ -1960,7 +2048,7 @@ impl Global {
                 // Don't trust the graphics driver with buffer sizes larger than our conservative max buffer size.
                 if shmem_allocation_failed || desc.size > MAX_BUFFER_SIZE {
                     error_buf.init(ErrMsg::oom(), device_id);
-                    self.create_buffer_error(Some(buffer_id), &desc);
+                    self.create_buffer_error(device_id, Some(buffer_id), &desc);
                     return;
                 }
 
@@ -1989,12 +2077,33 @@ impl Global {
             }
             #[allow(unused_variables)]
             DeviceAction::CreateTexture(id, desc, swap_chain_id) => {
+                let desc = if let Some(swap_chain_id) = swap_chain_id {
+                    self.swap_chain_configs
+                        .lock()
+                        .unwrap()
+                        .get(&swap_chain_id)
+                        .cloned()
+                        .expect("CreateTexture for unknown swap chain {swap_chain_id:?}")
+                        .to_texture_descriptor()
+                } else {
+                    desc
+                };
+
+                unsafe {
+                    assert!(wgpu_texture_format_is_valid_for_webidl(&nsCString::from(
+                        serde_json::to_value(&desc.format)
+                            .unwrap()
+                            .as_str()
+                            .unwrap(),
+                    ),));
+                }
+
                 let max = MAX_TEXTURE_EXTENT;
                 if desc.size.width > max
                     || desc.size.height > max
                     || desc.size.depth_or_array_layers > max
                 {
-                    self.create_texture_error(Some(id), &desc);
+                    self.create_texture_error(device_id, Some(id), &desc);
                     error_buf.init(ErrMsg::oom(), device_id);
                     return;
                 }
@@ -2006,7 +2115,7 @@ impl Global {
                 ]
                 .contains(&0)
                 {
-                    self.create_texture_error(Some(id), &desc);
+                    self.create_texture_error(device_id, Some(id), &desc);
                     error_buf.init(
                         ErrMsg {
                             message: "size is zero".into(),
@@ -2028,7 +2137,7 @@ impl Global {
                     if desc.size.width > limits.max_texture_dimension_2d
                         || desc.size.height > limits.max_texture_dimension_2d
                     {
-                        self.create_texture_error(Some(id), &desc);
+                        self.create_texture_error(device_id, Some(id), &desc);
                         error_buf.init(
                             ErrMsg {
                                 message: "size exceeds limits.max_texture_dimension_2d".into(),
@@ -2044,7 +2153,7 @@ impl Global {
                         && desc.usage.contains(wgt::TextureUsages::STORAGE_BINDING)
                         && !features.contains(wgt::Features::BGRA8UNORM_STORAGE)
                     {
-                        self.create_texture_error(Some(id), &desc);
+                        self.create_texture_error(device_id, Some(id), &desc);
                         error_buf.init(
                             ErrMsg {
                                 message: concat!(
@@ -2182,7 +2291,7 @@ impl Global {
                             sample_transform: Default::default(),
                             load_transform: Default::default(),
                         };
-                        self.create_external_texture_error(Some(id), &desc);
+                        self.create_external_texture_error(device_id, Some(id), &desc);
                     }
                 }
             }
@@ -2199,7 +2308,7 @@ impl Global {
                 }
             }
             DeviceAction::CreateBindGroupLayoutError(id, label) => {
-                self.create_bind_group_layout_error(Some(id), label);
+                self.create_bind_group_layout_error(device_id, Some(id), label);
             }
             DeviceAction::RenderPipelineGetBindGroupLayout(pipeline_id, index, bgl_id) => {
                 let (_, error) =
@@ -2317,14 +2426,15 @@ impl Global {
                     }
                 }
             }
-            DeviceAction::CreateRenderBundle(id, encoder, desc) => {
-                let (_, error) = self.render_bundle_encoder_finish(Box::new(encoder), &desc, Some(id));
+            DeviceAction::CreateRenderBundle(id, mut encoder, desc) => {
+                let (_, error) = self.render_bundle_encoder_finish(&mut encoder, &desc, Some(id));
                 if let Some(err) = error {
                     error_buf.init(err, device_id);
                 }
             }
             DeviceAction::CreateRenderBundleError(buffer_id, label) => {
                 self.create_render_bundle_error(
+                    device_id,
                     Some(buffer_id),
                     &wgt::RenderBundleDescriptor { label },
                 );
@@ -2725,7 +2835,7 @@ unsafe fn process_message(
                     driver,
                     driver_info,
                     backend,
-                    transient_saves_memory,
+                    transient_saves_memory: _,
                     device_pci_bus_id: _,
                     subgroup_min_size,
                     subgroup_max_size,
@@ -2767,7 +2877,6 @@ unsafe fn process_message(
                     driver_info: Cow::Owned(driver_info),
                     backend,
                     support_use_shared_texture_in_swap_chain,
-                    transient_saves_memory,
                     subgroup_min_size,
                     subgroup_max_size,
                 };
@@ -2891,10 +3000,26 @@ unsafe fn process_message(
             width,
             height,
             format,
+            texture_format,
+            usage,
+            view_formats,
             buffer_ids,
             remote_texture_owner_id,
             use_shared_texture_in_swap_chain,
         } => {
+            global.swap_chain_configs.lock().unwrap().insert(
+                SwapChainId(remote_texture_owner_id.0),
+                SwapChainConfig {
+                    size: wgt::Extent3d {
+                        width: width as u32,
+                        height: height as u32,
+                        depth_or_array_layers: 1,
+                    },
+                    format: texture_format,
+                    usage,
+                    view_formats,
+                },
+            );
             wgpu_parent_create_swap_chain(
                 global.owner,
                 device_id,
@@ -2929,6 +3054,11 @@ unsafe fn process_message(
             txn_type,
             txn_id,
         } => {
+            global
+                .swap_chain_configs
+                .lock()
+                .unwrap()
+                .remove(&SwapChainId(remote_texture_owner_id.0));
             wgpu_parent_swap_chain_drop(global.owner, remote_texture_owner_id, txn_type, txn_id);
         }
 
@@ -3179,9 +3309,7 @@ pub unsafe extern "C" fn wgpu_vksemaphore_destroy(
     unsafe {
         if let Some(hal_queue) = global.queue_as_hal::<wgc::api::Vulkan>(handle.queue_id) {
             if !hal_queue.remove_signal_semaphore(handle.semaphore) {
-                let _ = hal_queue
-                    .raw_device()
-                    .queue_wait_idle(hal_queue.as_raw());
+                let _ = hal_queue.raw_device().queue_wait_idle(hal_queue.as_raw());
             }
         }
 
@@ -3230,7 +3358,7 @@ pub unsafe extern "C" fn wgpu_server_device_import_texture_from_shared_handle(
 
     let Some(hal_device) = global.device_as_hal::<wgc::api::Dx12>(device_id) else {
         emit_critical_invalid_note("dx12 device");
-        global.create_texture_error(Some(id_in), &desc);
+        global.create_texture_error(device_id, Some(id_in), &desc);
         return;
     };
     let dx12_device = hal_device.raw_device();
@@ -3245,7 +3373,7 @@ pub unsafe extern "C" fn wgpu_server_device_import_texture_from_shared_handle(
             },
             device_id,
         );
-        global.create_texture_error(Some(id_in), &desc);
+        global.create_texture_error(device_id, Some(id_in), &desc);
         return;
     }
 
@@ -3345,13 +3473,13 @@ mod macos {
 
         let Some(surface) = IOSurfaceRef::lookup(io_surface_id) else {
             emit_critical_invalid_note("IOSurface");
-            global.create_texture_error(Some(id_in), &desc);
+            global.create_texture_error(device_id, Some(id_in), &desc);
             return;
         };
 
         let Some(hal_device) = global.device_as_hal::<wgc::api::Metal>(device_id) else {
             emit_critical_invalid_note("metal device");
-            global.create_texture_error(Some(id_in), &desc);
+            global.create_texture_error(device_id, Some(id_in), &desc);
             return;
         };
         let metal_device = hal_device.raw_device();
@@ -3396,7 +3524,7 @@ mod macos {
             metal_device.newTextureWithDescriptor_iosurface_plane(&metal_desc, &surface, plane)
         else {
             emit_critical_invalid_note("IOSurface");
-            global.create_texture_error(Some(id_in), &desc);
+            global.create_texture_error(device_id, Some(id_in), &desc);
             return;
         };
 
@@ -3407,6 +3535,7 @@ mod macos {
             desc.array_layer_count(),
             desc.mip_level_count,
             wgh::CopyExtent::map_extent_to_copy_size(&desc.size, desc.dimension),
+            None,
         );
 
         let (_, error) = unsafe {
@@ -3519,6 +3648,7 @@ mod macos {
                         height: desc.size.height,
                         depth: 1,
                     },
+                    None,
                 )
             };
 

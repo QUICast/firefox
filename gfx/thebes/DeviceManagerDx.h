@@ -5,6 +5,12 @@
 #ifndef mozilla_gfx_thebes_DeviceManagerDx_h
 #define mozilla_gfx_thebes_DeviceManagerDx_h
 
+#include <d3d11.h>
+#include <dxgi.h>
+#include <dxgi1_6.h>
+#include <objbase.h>
+#include <windows.h>
+
 #include <set>
 #include <unordered_map>
 
@@ -18,13 +24,6 @@
 #include "mozilla/gfx/GraphicsMessages.h"
 #include "nsTArray.h"
 #include "nsWindowsHelpers.h"
-
-#include <windows.h>
-#include <objbase.h>
-
-#include <d3d11.h>
-#include <dxgi.h>
-#include <dxgi1_6.h>
 
 // This header is available in the June 2010 SDK and in the Win8 SDK
 #include <d3dcommon.h>
@@ -101,7 +100,6 @@ class DeviceManagerDx final {
   bool SystemHDREnabled();
   bool WindowHDREnabled(HWND aWindow);
   bool MonitorHDREnabled(HMONITOR aMonitor);
-  bool VideoProcessorHDREnabled();
   Maybe<DXGI_HDR_METADATA_HDR10> WindowHDRMetadata(HWND aWindow);
   Maybe<DXGI_HDR_METADATA_HDR10> MonitorHDRMetadata(HMONITOR aMonitor);
 
@@ -224,7 +222,6 @@ class DeviceManagerDx final {
   Maybe<DeviceResetReason> mDeviceResetReason MOZ_GUARDED_BY(mDeviceLock);
   RefPtr<Runnable> mUpdateMonitorInfoRunnable MOZ_GUARDED_BY(mDeviceLock);
   Maybe<bool> mSystemHdrEnabled MOZ_GUARDED_BY(mDeviceLock);
-  Maybe<bool> mVideoHdrEnabled MOZ_GUARDED_BY(mDeviceLock);
   std::set<HMONITOR> mHdrMonitors MOZ_GUARDED_BY(mDeviceLock);
   std::unordered_map<HMONITOR, DXGI_HDR_METADATA_HDR10> mHdrMetadatas
       MOZ_GUARDED_BY(mDeviceLock);

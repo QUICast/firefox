@@ -42,9 +42,18 @@ fn init_nodb() {
 #[cfg(not(nss_nodb))]
 #[test]
 fn init_withdb() {
-    init_db(::test_fixture::NSS_DB_PATH).unwrap();
+    init_db(::test_fixture::db_path()).unwrap();
     assert_initialized();
     unsafe {
         assert_ne!(nss_init::NSS_IsInitialized(), 0);
     }
+}
+
+// Verify that calling init() a second time is a no-op.
+#[cfg(nss_nodb)]
+#[test]
+fn init_idempotent() {
+    nss_rs::init().unwrap();
+    nss_rs::init().unwrap();
+    assert_initialized();
 }

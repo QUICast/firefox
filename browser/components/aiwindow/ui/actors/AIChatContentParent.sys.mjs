@@ -6,12 +6,17 @@ const lazy = {};
 ChromeUtils.defineESModuleGetters(lazy, {
   AIWindow:
     "moz-src:///browser/components/aiwindow/ui/modules/AIWindow.sys.mjs",
+  captureThumbnail:
+    "moz-src:///browser/components/aiwindow/models/HistoryThumbnails.sys.mjs",
   SmartWindowTelemetry:
     "moz-src:///browser/components/aiwindow/ui/modules/SmartWindowTelemetry.sys.mjs",
   AIWindowUI:
     "moz-src:///browser/components/aiwindow/ui/modules/AIWindowUI.sys.mjs",
+  AIWindowTelemetry:
+    "moz-src:///browser/components/aiwindow/ui/modules/AIWindowTelemetry.sys.mjs",
   BrowserUtils: "resource://gre/modules/BrowserUtils.sys.mjs",
   URILoadingHelper: "resource:///modules/URILoadingHelper.sys.mjs",
+  PlacesUtils: "resource://gre/modules/PlacesUtils.sys.mjs",
 });
 
 /**
@@ -73,7 +78,7 @@ export class AIChatContentParent extends JSWindowActorParent {
 
   receiveMessage({ data, name }) {
     switch (name) {
-      case "aiChatContentActor:followUp":
+      case "AIChatContent:DispatchFollowUp":
         this.#handleFollowUpFromChild(data);
         break;
 
@@ -85,7 +90,7 @@ export class AIChatContentParent extends JSWindowActorParent {
         this.#handleNewChat();
         break;
 
-      case "aiChatContentActor:footer-action":
+      case "AIChatContent:DispatchAction":
         this.#handleFooterActionFromChild(data);
         break;
 
@@ -99,6 +104,19 @@ export class AIChatContentParent extends JSWindowActorParent {
 
       case "AIChatContent:ToolUIUpdate":
         this.#handleToolUIUpdate(data);
+        break;
+
+      case "AIChatContent:RequestAssets":
+        this.#handleRequestAssets(data);
+        break;
+
+      case "AIChatContent:HistoryGridRender":
+      case "AIChatContent:HistoryGridItemClick":
+        lazy.AIWindowTelemetry.recordHistoryGridEvent(
+          this.#getAIWindowElement(),
+          data,
+          name
+        );
         break;
 
       default:
@@ -127,7 +145,7 @@ export class AIChatContentParent extends JSWindowActorParent {
     aiWindow?.onOpenLink();
 
     try {
-      const { url } = data;
+      const { url, preferSwitchToTab } = data;
       if (!url) {
         return;
       }
@@ -166,8 +184,25 @@ export class AIChatContentParent extends JSWindowActorParent {
         window.gBrowser.selectedBrowser.browsingContext.originAttributes;
       const triggeringPrincipal =
         Services.scriptSecurityManager.createNullPrincipal({ userContextId });
-      const where = lazy.BrowserUtils.whereToOpenLink(data);
 
+      if (preferSwitchToTab) {
+        // Switch to an existing tab if one matches, otherwise
+        // open in a new tab
+        if (
+          lazy.URILoadingHelper.switchToTabHavingURI(window, url, false, {})
+        ) {
+          return;
+        }
+
+        lazy.URILoadingHelper.openWebLinkIn(window, url, "tab", {
+          triggeringPrincipal,
+          userContextId,
+          forceForeground: false,
+        });
+        return;
+      }
+
+      const where = lazy.BrowserUtils.whereToOpenLink(data);
       if (where === "current") {
         const tabFound = lazy.URILoadingHelper.switchToTabHavingURI(
           window,
@@ -240,6 +275,63 @@ export class AIChatContentParent extends JSWindowActorParent {
       aiWindow.handleToolUIUpdate(data);
     } catch (e) {
       console.warn("Could not handle tool UI update from AI Window chat", e);
+    }
+  }
+
+  /**
+   * For a set of history results, resolve the page assets — the thumbnail
+   * (`moz-page-thumb://` URI, or null) and whether Places has a real favicon for
+   * the page — then send them back to the requesting message.
+   *
+   * @param {object} data
+   * @param {string} data.conversationId - Identifies the conversation the
+   * message belongs to
+   * @param {string} data.messageId - Identifies the message whose grid requested
+   *   the assets, echoed back so the content side can route the results.
+   * @param {Array<{url: string, thumbnail?: string}>} data.items
+   */
+  async #handleRequestAssets({ conversationId, messageId, items = [] }) {
+    try {
+      const images = await Promise.all(
+        items.map(async ({ url, thumbnail }) => ({
+          url,
+          image: await lazy.captureThumbnail(thumbnail),
+          hasFavicon: await this.#pageHasFavicon(url),
+        }))
+      );
+
+      // Cache onto the conversation pool so later snapshots carry the assets,
+      // then push them to the requesting message for immediate render.
+      const aiWindowElement = this.#getAIWindowElement();
+      if (aiWindowElement) {
+        aiWindowElement.applyHistoryAssets(conversationId, images);
+      }
+
+      this.sendAsyncMessage("AIChatContent:AssetsReady", {
+        messageId,
+        images,
+      });
+    } catch (e) {
+      console.warn("Could not resolve history assets for AI Window chat", e);
+    }
+  }
+
+  /**
+   * Whether Places has a stored favicon for the page. When false, a
+   * `page-icon:` request for the URL would render the default favicon, so the
+   * UI can choose its own fallback instead.
+   *
+   * @param {string} url
+   * @returns {Promise<boolean>}
+   */
+  async #pageHasFavicon(url) {
+    try {
+      const favicon = await lazy.PlacesUtils.favicons.getFaviconForPage(
+        Services.io.newURI(url)
+      );
+      return !!favicon;
+    } catch (e) {
+      return false;
     }
   }
 }

@@ -605,7 +605,7 @@ async-event-dispatching:
 vertical-tabs:
     description: "{description} limited to tests identified as being applicable to also run with vertical tabs enabled"
     component: "Firefox::Tabbed Browser"
-    expiration: "2026-11-01"
+    expiration: "never"
     suffix: "vt"
     mozinfo: "vertical_tab"
     merge:
@@ -643,6 +643,7 @@ privatebrowsing:
             env:
                 MOZHARNESS_TEST_TAG:
                     - "privatebrowsing"
+                MOZ_PRIVATE_BROWSING: "1"
         mozharness:
             extra-options:
                 - "--setpref=browser.privatebrowsing.autostart=true"
@@ -660,6 +661,19 @@ privatebrowsing-inc-origin-init:
                 MOZHARNESS_TEST_TAG:
                     - "privatebrowsing-inc-origin-init"
                 MOZ_ENABLE_INC_ORIGIN_INIT: "1"
+                MOZ_PRIVATE_BROWSING: "1"
         mozharness:
             extra-options:
                 - "--setpref=browser.privatebrowsing.autostart=true"
+
+nova:
+    description: "{description} with Nova enabled"
+    component: "Firefox::Theme"
+    expiration: "2026-12-31"
+    suffix: "nv"
+    replace:
+        tier: 3
+    merge:
+        mozharness:
+            extra-options:
+                - "--setpref=browser.nova.enabled=true"

@@ -2,13 +2,16 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "ASpdySession.h"  // because of SoftStreamError()
 #include "Http3Session.h"
+
+#include <cstring>
+
+#include "ASpdySession.h"  // because of SoftStreamError()
+#include "Http3ConnectUDPStream.h"
 #include "Http3Stream.h"
 #include "Http3StreamBase.h"
-#include "Http3WebTransportSession.h"
-#include "Http3ConnectUDPStream.h"
 #include "Http3StreamTunnel.h"
+#include "Http3WebTransportSession.h"
 #include "Http3WebTransportStream.h"
 #include "HttpConnectionUDP.h"
 #include "HttpLog.h"
@@ -17,8 +20,9 @@
 #include "SSLServerCertVerification.h"
 #include "SSLTokensCache.h"
 #include "ScopedNSSTypes.h"
-#include "mozilla/RandomNum.h"
+#include "WebTransportCertificateVerifier.h"
 #include "mozilla/Preferences.h"
+#include "mozilla/RandomNum.h"
 #include "mozilla/RefPtr.h"
 #include "mozilla/ScopeExit.h"
 #include "mozilla/Services.h"
@@ -31,8 +35,8 @@
 #include "nsHttpHandler.h"
 #include "nsHttpTransaction.h"
 #include "nsIHttpActivityObserver.h"
-#include "nsIObserverService.h"
 #include "nsIOService.h"
+#include "nsIObserverService.h"
 #include "nsISupportsPrimitives.h"
 #include "nsITLSSocketControl.h"
 #include "nsNetAddr.h"
@@ -42,9 +46,6 @@
 #include "nsSupportsPrimitives.h"
 #include "nsThreadUtils.h"
 #include "sslerr.h"
-#include "WebTransportCertificateVerifier.h"
-
-#include <cstring>
 
 namespace mozilla::net {
 
@@ -718,7 +719,12 @@ void Http3Session::Shutdown() {
     }
   }
 
-  for (const auto& stream : mStreamTransactionHash.Values()) {
+  nsTArray<RefPtr<Http3StreamBase>> streams;
+  streams.SetCapacity(mStreamTransactionHash.Count());
+  for (const auto& s : mStreamTransactionHash.Values()) {
+    streams.AppendElement(s);
+  }
+  for (const auto& stream : streams) {
     if (mBeforeConnectedError) {
       // We have an error before we were connected, just restart transactions.
       // The transaction restart code path will remove AltSvc mapping and the
@@ -918,6 +924,8 @@ nsresult Http3Session::ProcessTransactionRead(Http3StreamBase* stream) {
 nsresult Http3Session::ProcessHttp3Events() {
   MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
+  RefPtr<Http3Session> self(this);
+
   LOG(("Http3Session::ProcessEvents [this=%p]", this));
 
   // We need an array to pick up header data or a resumption token.
@@ -1027,15 +1035,18 @@ nsresult Http3Session::ProcessHttp3Events() {
              this, event.stop_sending.error));
         if (event.stop_sending.error == HTTP3_APP_ERROR_NO_ERROR) {
           RefPtr<Http3StreamBase> stream =
-              mStreamIdHash.Get(event.data_writable.stream_id);
+              mStreamIdHash.Get(event.stop_sending.stream_id);
           if (stream) {
-            RefPtr<Http3Stream> httpStream = stream->GetHttp3Stream();
-            MOZ_RELEASE_ASSERT(httpStream, "This must be a Http3Stream");
-            httpStream->StopSending();
+            if (RefPtr<Http3Stream> httpStream = stream->GetHttp3Stream()) {
+              httpStream->StopSending();
+            } else {
+              ResetOrStopSendingRecvd(event.stop_sending.stream_id,
+                                      event.stop_sending.error, STOP_SENDING);
+            }
           }
         } else {
-          ResetOrStopSendingRecvd(event.reset.stream_id, event.reset.error,
-                                  STOP_SENDING);
+          ResetOrStopSendingRecvd(event.stop_sending.stream_id,
+                                  event.stop_sending.error, STOP_SENDING);
         }
         break;
       case Http3Event::Tag::PushPromise:
@@ -1069,6 +1080,9 @@ nsresult Http3Session::ProcessHttp3Events() {
           mState = INITIALIZING;
           mTransactionCount = 0;
           Finish0Rtt(true);
+          if (IsClosing()) {
+            break;
+          }
           ZeroRttTelemetry(ZeroRttOutcome::USED_REJECTED);
         }
         break;
@@ -1091,12 +1105,18 @@ nsresult Http3Session::ProcessHttp3Events() {
         LOG(("MCQUIC H3 connected [this=%p origin=%s authority=%s:%d]", this,
              mConnInfo->GetOrigin().get(), mConnInfo->GetOrigin().get(),
              mConnInfo->OriginPort()));
+        if (IsClosing()) {
+          break;
+        }
         bool was0RTT = mState == ZERORTT;
         mState = CONNECTED;
         SetSecInfo();
         mSocketControl->HandshakeCompleted();
         if (was0RTT) {
           Finish0Rtt(false);
+          if (IsClosing()) {
+            break;
+          }
           ZeroRttTelemetry(ZeroRttOutcome::USED_SUCCEEDED);
         }
 
@@ -3527,6 +3547,8 @@ nsresult Http3Session::ReadSegments(nsAHttpSegmentReader* reader,
 nsresult Http3Session::SendData(nsIUDPSocket* socket) {
   MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
+  RefPtr<Http3Session> self(this);
+
   LOG(("Http3Session::SendData [this=%p]", this));
 
   //   1) go through all streams/transactions that are ready to write and
@@ -3668,6 +3690,8 @@ nsresult Http3Session::WriteSegments(nsAHttpSegmentWriter* writer,
 nsresult Http3Session::RecvData(nsIUDPSocket* socket) {
   MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
+  RefPtr<Http3Session> self(this);
+
   // Process slow consumers.
   nsresult rv = ProcessSlowConsumers();
   if (NS_FAILED(rv)) {
@@ -3741,7 +3765,9 @@ void Http3Session::CloseInternal(bool aCallNeqoClose) {
 
   LOG(("Http3Session::Closing [this=%p]", this));
 
-  if (mState != CONNECTED) {
+  // A clean pre-CONNECTED shutdown closes with a success code; only flag a
+  // before-connected error when mError actually failed.
+  if (mState != CONNECTED && NS_FAILED(mError)) {
     mBeforeConnectedError = true;
   }
 
@@ -3772,7 +3798,7 @@ void Http3Session::SetProxyConnectFailed() {
   MOZ_ASSERT(false, "Http3Session::SetProxyConnectFailed()");
 }
 
-nsHttpRequestHead* Http3Session::RequestHead() {
+const nsHttpRequestHead* Http3Session::RequestHead() {
   MOZ_ASSERT(OnSocketThread(), "not on socket thread");
   MOZ_ASSERT(false,
              "Http3Session::RequestHead() "
@@ -4545,19 +4571,27 @@ void Http3Session::CloseConnectionTelemetry(CloseError& aError, bool aClosing) {
 }
 
 void Http3Session::Finish0Rtt(bool aRestart) {
-  for (size_t i = 0; i < m0RTTStreams.Length(); ++i) {
-    if (m0RTTStreams[i]) {
-      if (aRestart) {
-        // When we need to restart transactions remove them from all lists.
-        if (m0RTTStreams[i]->HasStreamId()) {
-          mStreamIdHash.Remove(m0RTTStreams[i]->StreamId());
-        }
-        RemoveStreamFromQueues(m0RTTStreams[i]);
-        // The stream is ready to write again.
-        mReadyForWrite.Push(m0RTTStreams[i]);
-      }
-      m0RTTStreams[i]->Finish0RTT(aRestart);
+  RefPtr<Http3Session> self(this);
+
+  nsTArray<RefPtr<Http3StreamBase>> streams;
+  for (const auto& weak : m0RTTStreams) {
+    if (RefPtr<Http3StreamBase> s = weak.get()) {
+      streams.AppendElement(std::move(s));
     }
+  }
+  m0RTTStreams.Clear();
+
+  for (const auto& stream : streams) {
+    if (aRestart) {
+      // When we need to restart transactions remove them from all lists.
+      if (stream->HasStreamId()) {
+        mStreamIdHash.Remove(stream->StreamId());
+      }
+      RemoveStreamFromQueues(stream);
+      // The stream is ready to write again.
+      mReadyForWrite.Push(stream);
+    }
+    stream->Finish0RTT(aRestart);
   }
 
   for (size_t i = 0; i < mCannotDo0RTTStreams.Length(); ++i) {
@@ -4565,7 +4599,6 @@ void Http3Session::Finish0Rtt(bool aRestart) {
       mReadyForWrite.Push(mCannotDo0RTTStreams[i]);
     }
   }
-  m0RTTStreams.Clear();
   mCannotDo0RTTStreams.Clear();
   MaybeResumeSend();
 }

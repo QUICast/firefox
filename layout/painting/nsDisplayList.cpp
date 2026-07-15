@@ -47,6 +47,7 @@
 #include "mozilla/SVGUtils.h"
 #include "mozilla/ScrollContainerFrame.h"
 #include "mozilla/ServoBindings.h"
+#include "mozilla/ServoComputedData.h"
 #include "mozilla/ShapeUtils.h"
 #include "mozilla/StaticPrefs_apz.h"
 #include "mozilla/StaticPrefs_gfx.h"
@@ -69,6 +70,7 @@
 #include "mozilla/dom/ViewTransition.h"
 #include "mozilla/gfx/2D.h"
 #include "mozilla/gfx/Logging.h"
+#include "mozilla/gfx/PathHelpers.h"
 #include "mozilla/gfx/gfxVars.h"
 #include "mozilla/glean/GfxMetrics.h"
 #include "mozilla/layers/AnimationHelper.h"
@@ -3467,11 +3469,101 @@ bool nsDisplayBackgroundImage::CanApplyOpacity(
 bool nsDisplayBackgroundImage::CanBuildWebRenderDisplayItems(
     WebRenderLayerManager* aManager, nsDisplayListBuilder* aBuilder) const {
   return mBackgroundStyle->StyleBackground()->mImage.mLayers[mLayer].mClip !=
-             StyleGeometryBox::Text &&
+             StyleBackgroundClip::Text &&
          nsCSSRendering::CanBuildWebRenderDisplayItemsForStyleImageLayer(
              aManager, *StyleFrame()->PresContext(), StyleFrame(),
              mBackgroundStyle->StyleBackground(), mLayer,
              aBuilder->GetBackgroundPaintFlags());
+}
+
+static void GetInnerBorderAreaClip(
+    nsIFrame* aFrame, const nsCSSRendering::ImageLayerClipState& aClip,
+    const nsRect& aBackgroundRect, nsRect& aRect, nsRectCornerRadii& aRadii) {
+  nsMargin border = aFrame->GetUsedBorder();
+  border.ApplySkipSides(aFrame->GetSkipSides());
+  aRect = aClip.mBGClipArea;
+  aRect.Deflate(border);
+  if (aClip.mHasRoundedCorners) {
+    aRadii = aClip.mRadii;
+    aRadii.AdjustInwards(border);
+  }
+}
+
+static bool GetBorderAreaExclusion(nsIFrame* aFrame,
+                                   const nsStyleImageLayers::Layer& aLayer,
+                                   const nsRect& aBackgroundRect, nsRect& aRect,
+                                   nsRectCornerRadii& aRadii) {
+  if (aLayer.mClip != StyleBackgroundClip::BorderArea) {
+    return false;
+  }
+  nsCSSRendering::ImageLayerClipState clip;
+  nsCSSRendering::GetImageLayerClip(
+      aLayer, aFrame, *aFrame->StyleBorder(), aBackgroundRect, aBackgroundRect,
+      /* aWillPaintBorder = */ false,
+      aFrame->PresContext()->AppUnitsPerDevPixel(), &clip);
+  GetInnerBorderAreaClip(aFrame, clip, aBackgroundRect, aRect, aRadii);
+  return true;
+}
+
+static void PushBorderAreaClipOut(
+    wr::DisplayListBuilder& aBuilder, nsIFrame* aFrame,
+    const nsStyleImageLayers::Layer& aLayer, const nsRect& aBackgroundRect,
+    Maybe<wr::SpaceAndClipChainHelper>& aClipHelper) {
+  nsRect rect;
+  nsRectCornerRadii radii;
+  if (!GetBorderAreaExclusion(aFrame, aLayer, aBackgroundRect, rect, radii)) {
+    return;
+  }
+
+  wr::ComplexClipRegion region = wr::ToComplexClipRegion(
+      rect, radii, aFrame->PresContext()->AppUnitsPerDevPixel());
+  region.mode = wr::ClipMode::ClipOut;
+  wr::WrClipId clipId = aBuilder.DefineRoundedRectClip(Nothing(), region);
+  wr::WrClipChainId chain = aBuilder.DefineClipChain(
+      {&clipId, 1}, aBuilder.CurrentClipChainIdIfNotRoot());
+  aClipHelper.emplace(aBuilder, chain);
+}
+
+// Software-rendering counterpart of PushBorderAreaClipOut: clips the context to
+// the area painted by the border (the border box with the padding box removed).
+static void ClipBackgroundToBorderArea(gfxContext* aCtx, nsIFrame* aFrame,
+                                       const nsStyleImageLayers::Layer& aLayer,
+                                       const nsRect& aBackgroundRect) {
+  MOZ_ASSERT(aLayer.mClip == StyleBackgroundClip::BorderArea);
+  const int32_t auPerDevPixel = aFrame->PresContext()->AppUnitsPerDevPixel();
+
+  nsCSSRendering::ImageLayerClipState clip;
+  nsCSSRendering::GetImageLayerClip(
+      aLayer, aFrame, *aFrame->StyleBorder(), aBackgroundRect, aBackgroundRect,
+      /* aWillPaintBorder = */ false, auPerDevPixel, &clip);
+
+  nsRect innerNsRect;
+  nsRectCornerRadii innerNsRadii;
+  GetInnerBorderAreaClip(aFrame, clip, aBackgroundRect, innerNsRect,
+                         innerNsRadii);
+
+  DrawTarget* dt = aCtx->GetDrawTarget();
+  RefPtr<PathBuilder> builder = dt->CreatePathBuilder();
+
+  Rect outerRect = NSRectToRect(clip.mBGClipArea, auPerDevPixel);
+  outerRect.Round();
+  Rect innerRect = NSRectToRect(innerNsRect, auPerDevPixel);
+  innerRect.Round();
+  // The ring is the outer rounded rect minus the inner rounded rect: append
+  // them with opposite winding so the nonzero fill rule leaves the ring.
+  if (clip.mHasRoundedCorners) {
+    RectCornerRadii outerRadii, innerRadii;
+    nsCSSRendering::ComputePixelRadii(clip.mRadii, auPerDevPixel, &outerRadii);
+    nsCSSRendering::ComputePixelRadii(innerNsRadii, auPerDevPixel, &innerRadii);
+
+    AppendRoundedRectToPath(builder, outerRect, outerRadii, true);
+    AppendRoundedRectToPath(builder, innerRect, innerRadii, false);
+  } else {
+    AppendRectToPath(builder, outerRect, true);
+    AppendRectToPath(builder, innerRect, false);
+  }
+  RefPtr<Path> ring = builder->Finish();
+  aCtx->Clip(ring);
 }
 
 bool nsDisplayBackgroundImage::CreateWebRenderCommands(
@@ -3491,6 +3583,13 @@ bool nsDisplayBackgroundImage::CreateWebRenderCommands(
           mBackgroundRect, StyleFrame(), paintFlags, mLayer,
           CompositionOp::OP_OVER, aBuilder.GetInheritedOpacity());
   params.bgClipRect = &mBounds;
+
+  Maybe<wr::SpaceAndClipChainHelper> borderAreaClip;
+  PushBorderAreaClipOut(
+      aBuilder, StyleFrame(),
+      mBackgroundStyle->StyleBackground()->mImage.mLayers[mLayer],
+      mBackgroundRect, borderAreaClip);
+
   ImgDrawResult result =
       nsCSSRendering::BuildWebRenderDisplayItemsForStyleImageLayer(
           params, aBuilder, aResources, aSc, aManager, this);
@@ -3525,7 +3624,7 @@ void nsDisplayBackgroundImage::HitTest(nsDisplayListBuilder* aBuilder,
 }
 
 static nsRect GetInsideClipRect(const nsDisplayItem* aItem,
-                                StyleGeometryBox aClip, const nsRect& aRect,
+                                StyleBackgroundClip aClip, const nsRect& aRect,
                                 const nsRect& aBackgroundRect) {
   if (aRect.IsEmpty()) {
     return {};
@@ -3537,10 +3636,10 @@ static nsRect GetInsideClipRect(const nsDisplayItem* aItem,
   if (frame->IsCanvasFrame()) {
     nsCanvasFrame* canvasFrame = static_cast<nsCanvasFrame*>(frame);
     clipRect = canvasFrame->CanvasArea() + aItem->ToReferenceFrame();
-  } else if (aClip == StyleGeometryBox::PaddingBox ||
-             aClip == StyleGeometryBox::ContentBox) {
+  } else if (aClip == StyleBackgroundClip::PaddingBox ||
+             aClip == StyleBackgroundClip::ContentBox) {
     nsMargin border = frame->GetUsedBorder();
-    if (aClip == StyleGeometryBox::ContentBox) {
+    if (aClip == StyleBackgroundClip::ContentBox) {
       border += frame->GetUsedPadding();
     }
     border.ApplySkipSides(frame->GetSkipSides());
@@ -3574,7 +3673,10 @@ nsRegion nsDisplayBackgroundImage::GetOpaqueRegion(
     if (layer.mImage.IsOpaque() && layer.mBlendMode == StyleBlend::Normal &&
         layer.mRepeat.mXRepeat != StyleImageLayerRepeat::Space &&
         layer.mRepeat.mYRepeat != StyleImageLayerRepeat::Space &&
-        layer.mClip != StyleGeometryBox::Text) {
+        layer.mClip != StyleBackgroundClip::Text &&
+        // 'border-area' leaves a hole in the middle, so nothing is reliably
+        // opaque.
+        layer.mClip != StyleBackgroundClip::BorderArea) {
       result = GetInsideClipRect(this, layer.mClip, mBounds, mBackgroundRect);
     }
   }
@@ -3631,14 +3733,29 @@ void nsDisplayBackgroundImage::PaintInternal(nsDisplayListBuilder* aBuilder,
                                              const nsRect& aBounds,
                                              nsRect* aClipRect) {
   gfxContext* ctx = aCtx;
-  StyleGeometryBox clip =
-      mBackgroundStyle->StyleBackground()->mImage.mLayers[mLayer].mClip;
-
-  if (clip == StyleGeometryBox::Text) {
+  const nsStyleImageLayers::Layer& layer =
+      mBackgroundStyle->StyleBackground()->mImage.mLayers[mLayer];
+  StyleBackgroundClip clip = layer.mClip;
+  if (clip == StyleBackgroundClip::Text) {
     if (!GenerateAndPushTextMask(StyleFrame(), aCtx, mBackgroundRect,
                                  aBuilder)) {
       return;
     }
+  }
+
+  auto popTextGroup = MakeScopeExit([&] {
+    if (clip == StyleBackgroundClip::Text) {
+      ctx->PopGroupAndBlend();
+    }
+  });
+
+  // For 'background-clip: border-area' clip out the padding box (the area not
+  // painted by the border). The outer border-box clip is applied by the
+  // display item's clip.
+  Maybe<gfxContextAutoSaveRestore> borderAreaClip;
+  if (clip == StyleBackgroundClip::BorderArea) {
+    borderAreaClip.emplace(ctx);
+    ClipBackgroundToBorderArea(ctx, StyleFrame(), layer, mBackgroundRect);
   }
 
   nsCSSRendering::PaintBGParams params =
@@ -3648,10 +3765,6 @@ void nsDisplayBackgroundImage::PaintInternal(nsDisplayListBuilder* aBuilder,
           1.0f);
   params.bgClipRect = aClipRect;
   (void)nsCSSRendering::PaintStyleImageLayer(params, *aCtx);
-
-  if (clip == StyleGeometryBox::Text) {
-    ctx->PopGroupAndBlend();
-  }
 }
 
 void nsDisplayBackgroundImage::ComputeInvalidationRegion(
@@ -3931,6 +4044,13 @@ bool nsDisplayBackgroundColor::CreateWebRenderCommands(
       mBackgroundRect, mFrame->PresContext()->AppUnitsPerDevPixel());
   wr::LayoutRect r = wr::ToLayoutRect(bounds);
 
+  Maybe<wr::SpaceAndClipChainHelper> borderAreaClip;
+  if (mBottomLayerClip == StyleBackgroundClip::BorderArea) {
+    PushBorderAreaClipOut(aBuilder, mFrame,
+                          mFrame->StyleBackground()->BottomLayer(),
+                          mBackgroundRect, borderAreaClip);
+  }
+
   if (animationsId) {
     wr::WrAnimationProperty prop{
         wr::WrAnimationType::BackgroundColor,
@@ -3950,6 +4070,7 @@ void nsDisplayBackgroundColor::PaintWithClip(nsDisplayListBuilder* aBuilder,
                                              gfxContext* aCtx,
                                              const DisplayItemClip& aClip) {
   MOZ_ASSERT(!HasBackgroundClipText());
+  MOZ_ASSERT(mBottomLayerClip != StyleBackgroundClip::BorderArea);
 
   if (mColor == sRGBColor()) {
     return;
@@ -4034,6 +4155,13 @@ void nsDisplayBackgroundColor::Paint(nsDisplayListBuilder* aBuilder,
     return;
   }
 
+  Maybe<gfxContextAutoSaveRestore> borderAreaClip;
+  if (mBottomLayerClip == StyleBackgroundClip::BorderArea) {
+    borderAreaClip.emplace(ctx);
+    ClipBackgroundToBorderArea(
+        ctx, mFrame, mFrame->StyleBackground()->BottomLayer(), mBackgroundRect);
+  }
+
   ctx->SetColor(mColor);
   ctx->NewPath();
   ctx->SnappedRectangle(bounds);
@@ -4054,7 +4182,8 @@ nsRegion nsDisplayBackgroundColor::GetOpaqueRegion(
     return nsRegion();
   }
 
-  if (!mHasStyle || HasBackgroundClipText()) {
+  if (!mHasStyle || HasBackgroundClipText() ||
+      mBottomLayerClip == StyleBackgroundClip::BorderArea) {
     return nsRegion();
   }
 
@@ -5928,14 +6057,10 @@ bool nsDisplayStickyPosition::UpdateScrollData(
     }
 
     if (ShouldGetStickyAnimationId()) {
-      // TODO(follow-up to bug 1730749): Should there be a
-      // "GetWebRenderUserData" method we should be calling here, rather than
-      // "CreateOrRecycle"?
       RefPtr<WebRenderAPZAnimationData> animationData =
           aData->GetManager()
               ->CommandBuilder()
-              .CreateOrRecycleWebRenderUserData<WebRenderAPZAnimationData>(
-                  this);
+              .GetWebRenderUserData<WebRenderAPZAnimationData>(this);
       MOZ_ASSERT(animationData);
       aLayerData->SetStickyPositionAnimationId(animationData->GetAnimationId());
     }
@@ -6367,10 +6492,13 @@ Matrix4x4 nsDisplayTransform::GetResultingTransformMatrixInternal(
   /* Transformed frames always have a transform, or are preserving 3d (and might
    * still have perspective!) */
   if (aProperties.HasTransform()) {
+    // Calling from the compositor side, where we don't have access to frames
+    // but transforms already have appropriate zoom applied.
+    const auto zoom = frame ? frame->Style()->EffectiveZoom() : StyleZoom::ONE;
     result = nsStyleTransformMatrix::ReadTransforms(
         aProperties.mTranslate, aProperties.mRotate, aProperties.mScale,
         aProperties.mMotion.ptrOr(nullptr), aProperties.mTransform, aRefBox,
-        aAppUnitsPerPixel);
+        aAppUnitsPerPixel, zoom);
   }
 
   // Apply any translation due to 'transform-origin' and/or 'transform-box':
@@ -6708,7 +6836,7 @@ const Matrix4x4Flagged& nsDisplayTransform::GetInverseTransform() const {
 }
 
 Matrix4x4 nsDisplayTransform::GetTransformForRendering(
-    LayoutDevicePoint* aOutOrigin) const {
+    LayoutDevicePoint* aOutOrigin, const nsDisplayListBuilder* aBuilder) const {
   if (!mFrame->HasPerspective() || mHasTransformGetter ||
       mIsTransformSeparator) {
     if (!mHasTransformGetter && !mIsTransformSeparator && aOutOrigin) {
@@ -6720,7 +6848,7 @@ Matrix4x4 nsDisplayTransform::GetTransformForRendering(
       *aOutOrigin = LayoutDevicePoint::FromAppUnits(ToReferenceFrame(), scale);
 
       // The rounding behavior should also be the same as GetTransform().
-      if (nsLayoutUtils::ShouldSnapToGrid(mFrame)) {
+      if (nsLayoutUtils::ShouldSnapToGrid(mFrame, aBuilder)) {
         aOutOrigin->Round();
       }
       return GetResultingTransformMatrix(mFrame, nsPoint(0, 0), scale,
@@ -6775,7 +6903,8 @@ bool nsDisplayTransform::CreateWebRenderCommands(
   // this frame goes into the stacking context bounds while the transform goes
   // into the transform.
   LayoutDevicePoint position;
-  Matrix4x4 newTransformMatrix = GetTransformForRendering(&position);
+  Matrix4x4 newTransformMatrix =
+      GetTransformForRendering(&position, aDisplayListBuilder);
 
   gfx::Matrix4x4* transformForSC = &newTransformMatrix;
   if (newTransformMatrix.IsIdentity()) {
@@ -6787,7 +6916,7 @@ bool nsDisplayTransform::CreateWebRenderCommands(
     // In ChooseScaleAndSetTransform, we round the offset from the reference
     // frame used to adjust the transform, if there is no transform, or it
     // is just a translation. We need to do the same here.
-    if (nsLayoutUtils::ShouldSnapToGrid(mFrame)) {
+    if (nsLayoutUtils::ShouldSnapToGrid(mFrame, aDisplayListBuilder)) {
       position.Round();
     }
   }
@@ -6840,13 +6969,6 @@ bool nsDisplayTransform::CreateWebRenderCommands(
   params.paired_with_perspective = mHasAssociatedPerspective;
   params.mDeferredTransformItem = deferredTransformItem;
   params.mAnimated = animated;
-  // Determine if we would have to rasterize any items in local raster space
-  // (i.e. disable subpixel AA). We don't always need to rasterize locally even
-  // if the stacking context is possibly animated (at the cost of potentially
-  // some false negatives with respect to will-change handling), so we pass in
-  // this determination separately to accurately match with when FLB would
-  // normally disable subpixel AA.
-  params.mRasterizeLocally = animated && Frame()->HasAnimationOfTransform();
   params.SetPreserve3D(mFrame->Extend3DContext() && !mIsTransformSeparator);
   params.clip =
       wr::WrStackingContextClip::ClipChain(aBuilder.CurrentClipChainId());
@@ -7827,8 +7949,9 @@ void nsDisplayText::RenderToContext(gfxContext* aCtx,
     params.state = nsTextFrame::PaintTextParams::PaintText;
   }
 
+  imgDrawingParams imgParams(aBuilder->GetImageDecodeFlags());
   f->PaintText(params, mVisIStartEdge, mVisIEndEdge, ToReferenceFrame(),
-               f->IsSelected(), aOpacity);
+               f->IsSelected(), imgParams, aOpacity);
 }
 
 // This could go to nsDisplayListInvalidation.h, but

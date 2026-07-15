@@ -49,8 +49,14 @@ internal fun iPProtectionReducer(
             }
         }
 
-        // We can short-circuit the account-state if the service is ready.
-        val newAccountStatus = if (action.info.serviceState == ServiceState.Ready) {
+        // Apart from the first enrollment where the user goes through the enrollment process,
+        // we rely on the service state to be the source of truth for entitlement.
+        // UNLESS the user is signed out: we could still intermittently get an EngineState
+        // update with the service being READY, before EngineState updates itself with the new
+        // account status.
+        val newAccountStatus = if (action.info.serviceState == ServiceState.Ready &&
+            state.accountState.status != AccountStatus.Uninitialized
+        ) {
             AccountStatus.EnrolledAndEntitled
         } else {
             state.accountState.status
@@ -98,13 +104,14 @@ internal fun iPProtectionReducer(
                         state.copy(activate = true)
                     }
 
-                    Authorized.Active -> {
+                    Authorized.ConnectionError,
+                    Authorized.Active,
+                    -> {
                         state.copy(activate = false)
                     }
 
                     Authorized.Activating,
                     Authorized.DataLimitReached,
-                    Authorized.ConnectionError,
                     Uninitialized,
                         -> state
                 }
@@ -137,6 +144,23 @@ internal fun iPProtectionReducer(
                     )
                 }
 
+                // It is a bit of an edge case, but if we hit a toggle action while the account
+                // check is still in progress, we do want to move forward with authorization flow.
+                //
+                // An account check can be triggered, that will move the state into either entitled
+                // or needs authorization state. But if the check is taking longer, then the toggle
+                // action should move the state into requesting auth anyway.
+                //
+                // Ideally, we want to have an explicit state transition path for an account check;
+                // for now, that is what we ship with.
+                if (status == AccountStatus.TryAgain) {
+                    return state.copy(
+                        accountState = state.accountState.copy(
+                            status = AccountStatus.RequestingAuthorization,
+                        ),
+                    )
+                }
+
                 if (status == AccountStatus.Authenticated) {
                     throw IllegalStateException("VPN state machine is in a bad state")
                 }
@@ -148,6 +172,21 @@ internal fun iPProtectionReducer(
 
     is IPProtectionAction.ProxyActiveShown -> {
         state.copy(proxyActiveShown = true)
+    }
+
+    is IPProtectionAction.ToggleFailed -> {
+        // Reset `activate` so the next Toggle reads as a fresh edge in observeToggle().
+        state.copy(activate = null)
+    }
+
+    is IPProtectionAction.CheckAccount -> {
+        if (state.accountState.status == AccountStatus.NeedsAuthorization) {
+            // When we "try again" we signal to the IPProtectionHandler to attempt retrieving an access token.
+            // If that request fails, we catch the exception and return back into a `NeedsAuthorization` state.
+            state.copy(accountState = state.accountState.copy(status = AccountStatus.TryAgain))
+        } else {
+            state
+        }
     }
 
     is InternalAction -> internalReducer(state, action)
@@ -173,14 +212,13 @@ internal fun internalReducer(
             AccountStatus.AwaitingAuthentication,
             AccountStatus.AwaitingAuthorization,
             AccountStatus.AwaitingEnrollment,
+            AccountStatus.EnrolledAndEntitled,
                 -> state
 
-            AccountStatus.Uninitialized,
             AccountStatus.WarmingUp,
             AccountStatus.NeedsAuthentication,
             AccountStatus.NeedsAuthorization,
             AccountStatus.Authenticated,
-            AccountStatus.EnrolledAndEntitled,
                 -> {
                 state.copy(
                     accountState = state.accountState.copy(status = action.status),
@@ -194,6 +232,8 @@ internal fun internalReducer(
                     ),
                 )
             }
+
+            AccountStatus.Uninitialized -> state.clearProfileData(action)
         }
     }
 
@@ -244,6 +284,17 @@ internal fun internalReducer(
     }
 
     is InternalAction.FinishingEnrollment -> state.handleFinishingEnrollment(action)
+}
+
+private fun IPProtectionState.clearProfileData(action: InternalAction.AccountManagerStateChanged): IPProtectionState {
+    return copy(
+        remainingDataBytes = -1L,
+        maxDataBytes = -1L,
+        resetDate = null,
+        proxyActiveShown = false,
+        activate = false,
+        accountState = accountState.copy(status = action.status),
+    )
 }
 
 private fun IPProtectionState.handleFinishingEnrollment(action: InternalAction.FinishingEnrollment): IPProtectionState {

@@ -49,7 +49,6 @@ import mozilla.components.feature.qr.isLowLightBoostSupported
 import mozilla.components.support.base.log.logger.Logger
 import mozilla.components.support.ktx.android.content.hasCamera
 import mozilla.components.support.utils.ext.handleBackEvents
-import org.mozilla.fenix.R
 import java.io.File
 import java.io.IOException
 import java.util.Collections
@@ -600,12 +599,19 @@ class LensCameraFragment : Fragment() {
 
     @VisibleForTesting
     internal fun requestGalleryPick() {
-        val bundle = Bundle().apply {
-            putBoolean(RESULT_GALLERY_REQUEST, true)
-        }
         if (isAdded) {
-            setFragmentResult(RESULT_REQUEST_KEY, bundle)
+            setFragmentResult(RESULT_REQUEST_KEY, buildGalleryRequestBundle())
         }
+    }
+
+    @VisibleForTesting
+    internal fun buildGalleryRequestBundle(): Bundle {
+        val key = if (cameraMode.value == CameraMode.QR) {
+            RESULT_QR_GALLERY_REQUEST
+        } else {
+            RESULT_GALLERY_REQUEST
+        }
+        return Bundle().apply { putBoolean(key, true) }
     }
 
     @VisibleForTesting
@@ -749,6 +755,7 @@ class LensCameraFragment : Fragment() {
         const val RESULT_REQUEST_KEY = "lens_camera_fragment_result_key"
         const val RESULT_IMAGE_URI = "lens_camera_image_uri"
         const val RESULT_GALLERY_REQUEST = "lens_camera_gallery_request"
+        const val RESULT_QR_GALLERY_REQUEST = "lens_camera_qr_gallery_request"
         const val RESULT_QR_STRING = "lens_camera_qr_string"
 
         private const val STATE_CAMERA_MODE = "camera_mode"

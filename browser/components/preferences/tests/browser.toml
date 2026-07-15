@@ -9,6 +9,7 @@ prefs = [
 ]
 support-files = [
   "head.js",
+  "head-common.js",
   "addons/pl-dictionary.xpi",
   "addons/set_homepage.xpi",
   "addons/set_newtab.xpi",
@@ -62,6 +63,8 @@ run-if = ["os == 'mac'"]
 ["browser_no_id_collision_between_categories_and_mainPane.js"]
 
 ["browser_open_migration_wizard.js"]
+
+["browser_sessionRestoreNewTab.js"]
 
 ["browser_spotlight.js"]
 

@@ -31,12 +31,15 @@ import org.mozilla.fenix.home.bookmarks.Bookmark
 import org.mozilla.fenix.home.pocket.PocketImpression
 import org.mozilla.fenix.home.pocket.PocketRecommendedStoriesCategory
 import org.mozilla.fenix.home.pocket.PocketRecommendedStoriesSelectedCategory
+import org.mozilla.fenix.home.pocket.controller.StoriesImpressionSource
 import org.mozilla.fenix.home.recentsyncedtabs.RecentSyncedTab
 import org.mozilla.fenix.home.recentsyncedtabs.RecentSyncedTabState
 import org.mozilla.fenix.home.recenttabs.RecentTab
 import org.mozilla.fenix.home.recentvisits.RecentlyVisitedItem
 import org.mozilla.fenix.home.sports.MatchCard
 import org.mozilla.fenix.home.sports.SportCardErrorState
+import org.mozilla.fenix.home.topsites.AddShortcutEntryPoint
+import org.mozilla.fenix.home.topsites.AddShortcutSource
 import org.mozilla.fenix.library.history.PendingDeletionHistory
 import org.mozilla.fenix.messaging.MessagingState
 import org.mozilla.fenix.wallpapers.Wallpaper
@@ -64,6 +67,11 @@ sealed class AppAction : Action {
      * Updates whether the first frame of the homescreen has been [drawn].
      */
     data class UpdateFirstFrameDrawn(val drawn: Boolean) : AppAction()
+
+    /**
+     * Updates whether the fox peek animation should play on the next homepage view.
+     */
+    data class UpdateShowFoxPeekAnimation(val ready: Boolean) : AppAction()
     data class AddNonFatalCrash(val crash: NativeCodeCrash) : AppAction()
     data class RemoveNonFatalCrash(val crash: NativeCodeCrash) : AppAction()
     object RemoveAllNonFatalCrashes : AppAction()
@@ -438,8 +446,33 @@ sealed class AppAction : Action {
     sealed class ShortcutAction : AppAction() {
         /**
          * [ShortcutAction] dispatched when a shortcut is added.
+         *
+         * @property source The [AddShortcutSource] of how the shortcut was added.
+         * @property entryPoint The [AddShortcutEntryPoint] from where the add flow was started from.
          */
-        data object ShortcutAdded : ShortcutAction()
+        data class ShortcutAdded(
+            val source: AddShortcutSource,
+            val entryPoint: AddShortcutEntryPoint,
+        ) : ShortcutAction()
+
+        /**
+         * [ShortcutAction] dispatched when the popular-list bottom sheet for adding a shortcut is shown.
+         *
+         * @property entryPoint The [AddShortcutEntryPoint] from where the add flow was started from.
+         */
+        data class AddShortcutSheetShown(
+            val entryPoint: AddShortcutEntryPoint,
+        ) : ShortcutAction()
+
+        /**
+         * [ShortcutAction] dispatched when the manual add website dialog is shown.
+         */
+        data object AddWebsiteDialogShown : ShortcutAction()
+
+        /**
+         * [ShortcutAction] dispatched when a frecent top site is promoted to a pinned shortcut.
+         */
+        data object FrecencyTopSitePromoted : ShortcutAction()
     }
 
     /**
@@ -593,10 +626,12 @@ sealed class AppAction : Action {
          *
          * @property recommendation The [ContentRecommendation] that was clicked.
          * @property position The position (0-index) of the [ContentRecommendation].
+         * @property source The surface where the clicked recommendation was shown.
          */
         data class ContentRecommendationClicked(
             val recommendation: ContentRecommendation,
             val position: Int,
+            val source: StoriesImpressionSource,
         ) : ContentRecommendationsAction()
 
         /**
@@ -616,9 +651,12 @@ sealed class AppAction : Action {
          *
          * @property impressions A list of [PocketImpression]s detailing the story shown and
          * their respective position.
+         * @property source The surface where the stories were shown.
          */
-        data class PocketStoriesShown(val impressions: List<PocketImpression>) :
-            ContentRecommendationsAction()
+        data class PocketStoriesShown(
+            val impressions: List<PocketImpression>,
+            val source: StoriesImpressionSource,
+        ) : ContentRecommendationsAction()
 
         /**
          * Cleans all in-memory data about Pocket stories and categories.
@@ -817,18 +855,33 @@ sealed class AppAction : Action {
     }
 
     /**
-     * Updates the total count of trackers blocked for the privacy report.
-     *
-     * @property count The new count of trackers blocked.
+     * [AppAction]s related to the the trackers blocked state.
      */
-    data class UpdateTrackersBlockedCount(val count: Int) : AppAction()
+    sealed class BlockedTrackersAction : AppAction() {
+        /**
+         * Updates the total count of trackers blocked for the privacy report.
+         *
+         * @property count The new count of trackers blocked.
+         */
+        data class UpdateTrackersBlockedCount(val count: Int) : BlockedTrackersAction()
 
-    /**
-     * Updates the details about what trackers have been blocked this week.
-     *
-     * @property blockedTrackerCategories The list of trackers blocked this week as a tracker category split.
-     */
-    data class UpdateTrackersBlockedThisWeek(val blockedTrackerCategories: List<TrackersBlockedCategory>) : AppAction()
+        /**
+         * Updates the details about what trackers have been blocked this week.
+         *
+         * @property blockedTrackerCategories The list of trackers blocked this week as a tracker category split.
+         */
+        data class UpdateTrackersBlockedThisWeek(
+            val blockedTrackerCategories: List<TrackersBlockedCategory>,
+        ) : BlockedTrackersAction()
+
+        /**
+         * Updates the earliest date for which we have information about blocked trackers.
+         *
+         * @property date The earliest date for which we have information about blocked trackers as a Unix time stamp.
+         * May be `null` if this information is not available.
+         */
+        data class UpdateEarliestTrackingDate(val date: Long?) : BlockedTrackersAction()
+    }
 
     /**
      * [AppAction]s related to the sports widget.
@@ -929,5 +982,24 @@ sealed class AppAction : Action {
          * @property isOneWeekToWorldCupOverride Whether it's one week to the World Cup.
          */
         data class OneWeekToWorldCupOverrideUpdated(val isOneWeekToWorldCupOverride: Boolean) : SportsWidgetAction()
+    }
+
+    /**
+     * [SnackbarAction]s related to the IP Protection feature.
+     */
+    sealed class IPProtectionSnackbarAction : SnackbarAction() {
+        /**
+         * Dispatched when IP Protection feature experienced a connection error.
+         *
+         * @property title The title to display in the snackbar.
+         */
+        data class ConnectionError(val title: String) : IPProtectionSnackbarAction()
+
+        /**
+         * Dispatched when IP Protection feature experienced a connection error.
+         *
+         * @property title The title to display in the snackbar.
+         */
+        data class DataLimitReached(val title: String) : IPProtectionSnackbarAction()
     }
 }

@@ -282,6 +282,10 @@ allowlist-types = [
     "AnchorPosOffsetResolutionParams",
 ]
 opaque-types = [
+    "mozilla::dom::CustomElementRegistry",
+    "mozilla::dom::UnionMember",
+    "JS::GCHashMap",
+    "JS::StackGCVector",
     "mozilla::StyleThinArc", # https://github.com/rust-lang/rust-bindgen/issues/1557
     "mozilla::gfx::.*Point",
     "mozilla::gfx::.*Rect",
@@ -375,7 +379,7 @@ cbindgen-types = [
     { gecko = "StyleBaselineSource", servo = "crate::values::specified::BaselineSource" },
     { gecko = "StyleCustomIdent", servo = "crate::values::CustomIdent" },
     { gecko = "StyleComputedFontStretchRange", servo = "crate::font_face::ComputedFontStretchRange" },
-    { gecko = "StyleComputedFontStyleDescriptor", servo = "crate::font_face::ComputedFontStyleDescriptor" },
+    { gecko = "StyleComputedFontStyleRange", servo = "crate::font_face::ComputedFontStyleRange" },
     { gecko = "StyleComputedFontWeightRange", servo = "crate::font_face::ComputedFontWeightRange" },
     { gecko = "StyleComputedTimingFunction", servo = "crate::values::computed::easing::TimingFunction" },
     { gecko = "StyleDominantBaseline", servo = "crate::values::specified::DominantBaseline" },
@@ -475,6 +479,7 @@ cbindgen-types = [
     { gecko = "StylePositionOrAuto", servo = "crate::values::computed::PositionOrAuto" },
     { gecko = "StyleGenericPositionOrAuto", servo = "crate::values::generics::position::PositionOrAuto" },
     { gecko = "StyleBackgroundSize", servo = "crate::values::computed::BackgroundSize" },
+    { gecko = "StyleBackgroundClip", servo = "crate::values::computed::BackgroundClip" },
     { gecko = "StyleGenericBackgroundSize", servo = "crate::values::generics::background::BackgroundSize" },
     { gecko = "StyleBorderImageRepeat", servo = "crate::values::specified::border::BorderImageRepeat" },
     { gecko = "StyleBorderImageRepeatKeyword", servo = "crate::values::specified::border::BorderImageRepeatKeyword" },
@@ -540,6 +545,7 @@ cbindgen-types = [
     { gecko = "StyleGenericShapeCommand", servo = "crate::values::generics::basic_shape::ShapeCommand" },
     { gecko = "StyleArcSlice", servo = "style_traits::arc_slice::ArcSlice" },
     { gecko = "StyleForgottenArcSlicePtr", servo = "style_traits::arc_slice::ForgottenArcSlicePtr" },
+    { gecko = "StyleOwnedArray", servo = "style_traits::owned_array::OwnedArray" },
     { gecko = "StyleOwnedSlice", servo = "style_traits::owned_slice::OwnedSlice" },
     { gecko = "StyleMozContextProperties", servo = "crate::values::specified::svg::MozContextProperties" },
     { gecko = "StyleQuotes", servo = "crate::values::specified::list::Quotes" },
@@ -606,6 +612,7 @@ cbindgen-types = [
     { gecko = "StylePageSize", servo = "crate::values::computed::page::PageSize" },
     { gecko = "StyleDProperty", servo = "crate::values::specified::svg::DProperty" },
     { gecko = "StyleVectorEffect", servo = "crate::values::specified::svg::VectorEffect" },
+    { gecko = "StyleImageDecoding", servo = "crate::values::computed::ImageDecoding" },
     { gecko = "StyleImageRendering", servo = "crate::values::computed::ImageRendering" },
     { gecko = "StylePrintColorAdjust", servo = "crate::values::computed::PrintColorAdjust" },
     { gecko = "StyleForcedColorAdjust", servo = "crate::values::computed::ForcedColorAdjust" },

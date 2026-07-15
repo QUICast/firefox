@@ -14,13 +14,13 @@ add_task(async function () {
   const provider = new UrlbarTestUtils.TestProvider({
     results: [
       new UrlbarResult({
-        type: UrlbarUtils.RESULT_TYPE.URL,
-        source: UrlbarUtils.RESULT_SOURCE.OTHER_LOCAL,
+        type: UrlbarShared.RESULT_TYPE.URL,
+        source: UrlbarShared.RESULT_SOURCE.OTHER_LOCAL,
         payload: {
           url: TEST_URL,
           helpUrl: "https://example.com/help",
           helpL10n: {
-            id: "urlbar-result-menu-tip-get-help",
+            id: "urlbar-result-menu-tip-get-help2",
           },
         },
       }),
@@ -62,8 +62,8 @@ add_task(async function () {
     EventUtils.synthesizeKey("VK_RETURN");
     await Promise.all([onEngagementDeferred]);
 
-    assertEngagementTelemetry([{ engagement_type: "enter" }]);
-    assertAbandonmentTelemetry([]);
+    await assertEngagementTelemetry([{ engagement_type: "enter" }]);
+    await assertAbandonmentTelemetry([]);
 
     Assert.ok(recordReentered, "`record()` was re-entered");
     Assert.equal(engagementSpy.callCount, 1, "`onEngagement` was invoked once");

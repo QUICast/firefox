@@ -4,12 +4,12 @@
 
 #include "DcompSurfaceImage.h"
 
-#include "mozilla/ipc/FileDescriptor.h"
 #include "mozilla/gfx/gfxVars.h"
+#include "mozilla/ipc/FileDescriptor.h"
 #include "mozilla/layers/CompositorTypes.h"
+#include "mozilla/layers/KnowsCompositor.h"
 #include "mozilla/layers/LayersSurfaces.h"
 #include "mozilla/layers/TextureForwarder.h"
-#include "mozilla/layers/KnowsCompositor.h"
 #include "mozilla/webrender/RenderDcompSurfaceTextureHost.h"
 #include "mozilla/webrender/WebRenderAPI.h"
 
@@ -149,11 +149,16 @@ void DcompSurfaceHandleHost::PushResourceUpdates(
   auto method = aOp == TextureHost::ADD_IMAGE
                     ? &wr::TransactionBuilder::AddExternalImage
                     : &wr::TransactionBuilder::UpdateExternalImage;
-  wr::ImageDescriptor descriptor(mSize, GetFormat());
+  auto format = wr::SurfaceFormatToImageFormat(GetFormat());
+  if (NS_WARN_IF(!format)) {
+    return;
+  }
+  wr::ImageDescriptor descriptor(mSize, *format,
+                                 wr::ToOpacityType(GetFormat()));
   // Prefer TextureExternal unless the backend requires TextureRect.
   TextureHost::NativeTexturePolicy policy =
-      TextureHost::BackendNativeTexturePolicy(aResources.GetBackendType(),
-                                              mSize);
+      TextureHost::BackendNativeTexturePolicy(
+          aResources.GetCapabilities().mBackendType, mSize);
   auto imageType = policy == TextureHost::NativeTexturePolicy::REQUIRE
                        ? wr::ExternalImageType::TextureHandle(
                              wr::ImageBufferKind::TextureRect)

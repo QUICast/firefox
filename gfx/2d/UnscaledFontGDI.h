@@ -5,8 +5,9 @@
 #ifndef MOZILLA_GFX_UNSCALEDFONTGDI_H_
 #define MOZILLA_GFX_UNSCALEDFONTGDI_H_
 
-#include "2D.h"
 #include <windows.h>
+
+#include "2D.h"
 
 namespace mozilla {
 namespace gfx {

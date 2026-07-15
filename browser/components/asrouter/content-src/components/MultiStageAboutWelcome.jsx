@@ -19,6 +19,7 @@ export const MultiStageAboutWelcome = props => {
   let { defaultScreens } = props;
   const didFilter = useRef(false);
   const [didMount, setDidMount] = useState(false);
+  const [contentToggleChecked, setContentToggleChecked] = useState(true);
   const [screens, setScreens] = useState(defaultScreens);
 
   const [index, setScreenIndex] = useState(props.startScreen);
@@ -55,8 +56,10 @@ export const MultiStageAboutWelcome = props => {
       // Use existing screen for the filtered screen to carry over any modification
       // e.g. if AW_LANGUAGE_MISMATCH exists, use it from existing screens
       setScreens(
-        filteredScreens.map(
-          filtered => screens.find(s => s.id === filtered.id) ?? filtered
+        filteredScreens.map(filtered =>
+          filtered.id === LANGUAGE_MISMATCH_SCREEN_ID
+            ? (screens.find(s => s.id === filtered.id) ?? filtered)
+            : filtered
         )
       );
       // Mark the initial filter pass complete and allow the first paint.
@@ -97,6 +100,17 @@ export const MultiStageAboutWelcome = props => {
             screen_id: screen.id,
             screen_initials: screenInitials,
           });
+
+          // Impression actions should be fired before recording the
+          // impression, so the check that ensures that actions run only once
+          // has an accurate count of how many impressions have actually occured
+          if (screen.content?.impression_action) {
+            MultiStageUtils.handleImpressionAction(
+              screen.content.impression_action,
+              messageId,
+              screen.id
+            );
+          }
 
           window.AWAddScreenImpression?.(screen);
         }
@@ -219,6 +233,11 @@ export const MultiStageAboutWelcome = props => {
   // structured like this: { screenId: { textareaId: { value, isValid } } }
   const [textInputs, setTextInputs] = useState({});
 
+  // Track whether each screen has had at least one successful pin, keyed by
+  // screen id. This is a boolean (there is no "unpin"), used to gate a
+  // primary button with `disabled: "hasPinnedSite"`.
+  const [pinnedSites, setPinnedSites] = useState({});
+
   // Whether animated backgrounds/illustrations are paused for this session.
   // Defaults to paused when the user has prefers-reduced-motion: reduce set,
   // so we never autoplay motion for those users. The toggle stays consistent
@@ -334,6 +353,13 @@ export const MultiStageAboutWelcome = props => {
             });
           };
 
+          const setPinnedSite = () => {
+            setPinnedSites(prevState => ({
+              ...prevState,
+              [currentScreen.id]: true,
+            }));
+          };
+
           const setTextInput = (value, inputId) => {
             setTextInputs(prevState => {
               const currentScreenInputs = prevState[currentScreen.id] || {};
@@ -379,6 +405,10 @@ export const MultiStageAboutWelcome = props => {
               setActiveSingleSelectSelection={setActiveSingleSelectSelection}
               textInputs={textInputs[currentScreen.id]}
               setTextInput={setTextInput}
+              pinnedSites={pinnedSites[currentScreen.id]}
+              setPinnedSite={setPinnedSite}
+              contentToggleChecked={contentToggleChecked}
+              setContentToggleChecked={setContentToggleChecked}
               negotiatedLanguage={negotiatedLanguage}
               langPackInstallPhase={langPackInstallPhase}
               forceHideStepsIndicator={currentScreen.force_hide_steps_indicator}
@@ -650,17 +680,6 @@ export class WelcomeScreen extends React.PureComponent {
     return MultiStageUtils.handleUserAction({ type, data });
   }
 
-  logTelemetry({ value, event, source, props }) {
-    MultiStageUtils.sendActionTelemetry(props.messageId, source, event.name);
-
-    // Send additional telemetry if a messaging surface like feature callout is
-    // dismissed via the dismiss button. Other causes of dismissal will be
-    // handled separately by the messaging surface's own code.
-    if (value === "dismiss_button" && !event.name) {
-      MultiStageUtils.sendDismissTelemetry(props.messageId, source);
-    }
-  }
-
   async handleMigrationIfNeeded(action, props) {
     const hasMigrate = a =>
       a.type === "SHOW_MIGRATION_WIZARD" ||
@@ -754,10 +773,24 @@ export class WelcomeScreen extends React.PureComponent {
       return actionResult;
     }
 
-    // Send telemetry before waiting on actions
-    this.logTelemetry({ value, event, source, props });
-
     action = JSON.parse(JSON.stringify(action));
+
+    const context = {};
+    if (action.collectContentToggleState) {
+      context.contentToggleState = props.contentToggleChecked;
+    }
+    MultiStageUtils.sendActionTelemetry(
+      props.messageId,
+      source,
+      event.name,
+      context
+    );
+    if (
+      (value === "dismiss_button" && !event.name) ||
+      action.sendDismissTelemetry
+    ) {
+      MultiStageUtils.sendDismissTelemetry(props.messageId, source);
+    }
 
     if (action.collectSelect) {
       this.setMultiSelectActions(action);
@@ -876,7 +909,7 @@ export class WelcomeScreen extends React.PureComponent {
 
       const multiSelectId = `tile-${tileIndex}`;
 
-      const activeSelections = props.activeMultiSelect[multiSelectId] || [];
+      const activeSelections = props.activeMultiSelect?.[multiSelectId] || [];
 
       for (const checkbox of tile.data) {
         let checkboxAction;
@@ -906,7 +939,7 @@ export class WelcomeScreen extends React.PureComponent {
     // Prepend the collected multi-select actions to the CTA's actions array
     action.data.actions.unshift(...multiSelectActions);
 
-    for (const value of Object.values(props.activeMultiSelect)) {
+    for (const value of Object.values(props.activeMultiSelect || {})) {
       // Send telemetry with selected checkbox ids
       MultiStageUtils.sendActionTelemetry(
         props.messageId,
@@ -1002,6 +1035,10 @@ export class WelcomeScreen extends React.PureComponent {
         }
         textInputs={this.props.textInputs}
         setTextInput={this.props.setTextInput}
+        pinnedSites={this.props.pinnedSites}
+        setPinnedSite={this.props.setPinnedSite}
+        contentToggleChecked={this.props.contentToggleChecked}
+        setContentToggleChecked={this.props.setContentToggleChecked}
         totalNumberOfScreens={this.props.totalNumberOfScreens}
         appAndSystemLocaleInfo={this.props.appAndSystemLocaleInfo}
         negotiatedLanguage={this.props.negotiatedLanguage}

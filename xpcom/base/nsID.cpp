@@ -7,11 +7,11 @@
 #include <limits.h>
 
 #include "MainThreadUtils.h"
+#include "ScopedNSSTypes.h"
 #include "mozilla/Assertions.h"
 #include "mozilla/RandomNum.h"
 #include "mozilla/Sprintf.h"
 #include "nss.h"
-#include "ScopedNSSTypes.h"
 
 [[nodiscard]] static bool GenerateRandomBytesFromNSS(void* aBuffer,
                                                      size_t aLength) {

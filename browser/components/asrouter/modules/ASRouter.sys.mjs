@@ -522,8 +522,12 @@ export const MessageLoaderUtils = {
           for (const branchMessage of branchMessages) {
             // If you want a message to record reach events, opt in by setting
             // recordReach to true. Reach events only get recorded when the
-            // message's trigger fires, so the message must have a trigger.
-            if (!branchMessage?.recordReach || !branchMessage?.trigger) {
+            // message's trigger fires, so the message must have at least one
+            // trigger.
+            if (
+              !branchMessage?.recordReach ||
+              !lazy.ASRouterTargeting.getMessageTriggers(branchMessage).length
+            ) {
               continue;
             }
             let reachId = `${meta.slug}:${branch.slug}:${branchMessage.id}`;
@@ -1071,19 +1075,21 @@ export class _ASRouter {
       // Some messages have triggers that require us to initalise trigger listeners
       const unseenListeners = new Set(lazy.ASRouterTriggerListeners.keys());
       for (const message of newState.messages) {
-        const { trigger } = message;
-        if (
-          trigger &&
-          lazy.ASRouterTriggerListeners.has(trigger.id) &&
-          !this._shouldSkipForAutomation(message)
-        ) {
-          lazy.ASRouterTriggerListeners.get(trigger.id).init(
-            this._triggerHandler,
-            trigger.params,
-            trigger.patterns,
-            trigger.regexPatterns
-          );
-          unseenListeners.delete(trigger.id);
+        if (this._shouldSkipForAutomation(message)) {
+          continue;
+        }
+        for (const trigger of lazy.ASRouterTargeting.getMessageTriggers(
+          message
+        )) {
+          if (trigger && lazy.ASRouterTriggerListeners.has(trigger.id)) {
+            lazy.ASRouterTriggerListeners.get(trigger.id).init(
+              this._triggerHandler,
+              trigger.params,
+              trigger.patterns,
+              trigger.regexPatterns
+            );
+            unseenListeners.delete(trigger.id);
+          }
         }
       }
       // We don't need these listeners, but they may have previously been
@@ -1595,10 +1601,44 @@ export class _ASRouter {
     ];
   }
 
-  routeCFRMessage(message, browser, trigger, force = false) {
-    if (!message) {
+  /**
+   * Whether a special message action is allowed to fire automatically from an
+   * "action_only" template message (no UI). MULTI_ACTION is allowed only when
+   * every nested action is itself allowlisted and the list is non-empty.
+   *
+   * @param {object} action - The special message action to validate.
+   * @returns {boolean}
+   */
+  _isAllowedActionOnlyMessageAction(action) {
+    const ALLOWED_ACTION_MESSAGE_ACTIONS = [
+      "CONFIRM_LAUNCH_ON_LOGIN",
+      // This pinning action is ONLY to be used in cases where an OS level
+      // prompt will ask a user's consent to pin.
+      "PIN_FIREFOX_TO_TASKBAR",
+    ];
+    if (!action) {
+      return false;
+    }
+    if (action.type === "MULTI_ACTION") {
+      const actions = action.data?.actions;
+      return (
+        Array.isArray(actions) &&
+        !!actions.length &&
+        actions.every(nested =>
+          ALLOWED_ACTION_MESSAGE_ACTIONS.includes(nested?.type)
+        )
+      );
+    }
+    return ALLOWED_ACTION_MESSAGE_ACTIONS.includes(action.type);
+  }
+
+  routeCFRMessage(originalMessage, browser, trigger, force = false) {
+    if (!originalMessage) {
       return { message: {} };
     }
+    const message = force
+      ? MessageLoaderUtils._delocalizeValues(originalMessage)
+      : originalMessage;
 
     switch (message.template) {
       case "cfr_doorhanger":
@@ -1658,6 +1698,29 @@ export class _ASRouter {
       case "update_action":
         lazy.MomentsPageHub.executeAction(message);
         break;
+      case "action_only": {
+        const { action } = message.content ?? {};
+        if (!this._isAllowedActionOnlyMessageAction(action)) {
+          break;
+        }
+        // Record the impression before the async action resolves so it's
+        // captured even if the action fails. We intentionally do not block the
+        // message. Whether it can run again is governed by its frequency caps.
+
+        // Send impression telemetry
+        this.dispatchCFRAction({
+          type: "ACTION_ONLY_TELEMETRY",
+          data: {
+            action: "action_only_user_event",
+            message_id: message.id,
+            event: "IMPRESSION",
+          },
+        });
+        // Add local impression record, used for enforcing frequency caps.
+        this.dispatchCFRAction({ type: "IMPRESSION", data: message });
+        lazy.SpecialMessageActions.handleAction(action, browser);
+        break;
+      }
       case "infobar":
         lazy.InfoBar.showInfoBarMessage(
           browser,
@@ -2089,16 +2152,22 @@ export class _ASRouter {
           lazy.ASRouterPreferences.console.debug(m.id, " filtered by template");
           return false;
         }
-        if (triggerId && !m.trigger) {
-          lazy.ASRouterPreferences.console.debug(m.id, " filtered by trigger");
-          return false;
-        }
-        if (triggerId && m.trigger.id !== triggerId) {
-          lazy.ASRouterPreferences.console.debug(
-            m.id,
-            " filtered by triggerId"
-          );
-          return false;
+        if (triggerId) {
+          const triggers = lazy.ASRouterTargeting.getMessageTriggers(m);
+          if (!triggers.length) {
+            lazy.ASRouterPreferences.console.debug(
+              m.id,
+              " filtered by trigger"
+            );
+            return false;
+          }
+          if (!triggers.some(t => t.id === triggerId)) {
+            lazy.ASRouterPreferences.console.debug(
+              m.id,
+              " filtered by triggerId"
+            );
+            return false;
+          }
         }
         // Show message after checking it's  profile scope.
         if (!this.hasValidProfileScope(m)) {
@@ -2599,9 +2668,17 @@ export class _ASRouter {
       return;
     }
     await this.loadMessagesFromAllProviders([experimentProvider]);
+
+    if (lazy.ASRouterTriggerListeners.get("nimbusUpdate")?.initialized) {
+      const browser =
+        Services.wm.getMostRecentBrowserWindow()?.gBrowser?.selectedBrowser;
+
+      await this.sendTriggerMessage({ browser, id: "nimbusUpdate" }, true);
+    }
   }
 
   async forcePBWindow(browser, msg) {
+    const delocalizedMsg = MessageLoaderUtils._delocalizeValues(msg);
     const privateBrowserOpener = await new Promise(
       (
         resolveOnContentBrowserCreated // wrap this in a promise to give back the right browser
@@ -2623,7 +2700,7 @@ export class _ASRouter {
       // setTimeout is necessary to make sure the private browsing window has a chance to open before the message is sent
       privateBrowserOpener.browsingContext.currentWindowGlobal
         .getActor("AboutPrivateBrowsing")
-        .sendAsyncMessage("ShowDevToolsMessage", msg);
+        .sendAsyncMessage("ShowDevToolsMessage", delocalizedMsg);
     }, 200);
 
     return privateBrowserOpener;

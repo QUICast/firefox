@@ -32,6 +32,7 @@
 #include "mozilla/PresShell.h"
 #include "mozilla/ProfilerLabels.h"
 #include "mozilla/ServoBindings.h"
+#include "mozilla/StaticPrefs_dom.h"
 #include "mozilla/StaticPrefs_layout.h"
 #include "mozilla/TextControlElement.h"
 #include "mozilla/TextControlState.h"
@@ -77,6 +78,7 @@
 #include "nsCCUncollectableMarker.h"
 #include "nsCOMArray.h"
 #include "nsChildContentList.h"
+#include "nsClassHashtable.h"
 #include "nsContentCreatorFunctions.h"
 #include "nsContentUtils.h"
 #include "nsCycleCollectionParticipant.h"
@@ -213,6 +215,84 @@ bool nsINode::IsShadowIncludingInclusiveDescendantOf(
   return IsShadowIncludingDescendantOf(aNode);
 }
 
+template Element* nsINode::GetClosestFlatTreeAncestorElementForNonFlatTreeNode<
+    TreeKind::Flat>() const;
+template Element* nsINode::GetClosestFlatTreeAncestorElementForNonFlatTreeNode<
+    TreeKind::FlatForSelection>() const;
+
+template <TreeKind aKind, typename Dummy>
+Element* nsINode::GetClosestFlatTreeAncestorElementForNonFlatTreeNode() const {
+  const ShadowRoot* const asShadowRoot = ShadowRoot::FromNode(this);
+  MOZ_ASSERT_IF(aKind == TreeKind::FlatForSelection && asShadowRoot,
+                !asShadowRoot->IsUAWidget());
+  const nsINode* childNode = IsShadowRoot() ? asShadowRoot->GetHost() : this;
+  if (!childNode || childNode->IsRootOfNativeAnonymousSubtree()) [[unlikely]] {
+    return nullptr;
+  }
+  for (nsIContent* parentContent = childNode->GetParent(); parentContent;
+       childNode = parentContent, parentContent = parentContent->GetParent()) {
+    if (parentContent->IsRootOfNativeAnonymousSubtree()) [[unlikely]] {
+      return nullptr;
+    }
+    if (auto* const shadowRoot = ShadowRoot::FromNode(parentContent)) {
+      Element* const host = shadowRoot->GetHost();
+      if (!host) [[unlikely]] {
+        return nullptr;  // Reached unattached UA shadow root
+      }
+      // Okay, check whether the host element is a part of the flattened tree.
+      parentContent = host;
+      continue;
+    }
+    if (!parentContent->IsElement()) {
+      return nullptr;  // Reached a document fragment
+    }
+    if (parentContent->GetShadowRoot<aKind>()) {
+      MOZ_ASSERT(childNode->IsContent());
+      if (HTMLSlotElement* slot = childNode->AsContent()->GetAssignedSlot()) {
+        // childNode is assigned to a <slot> so that this may be part of the
+        // flattened tree. However, the host may be not part of the flattened
+        // tree, keep climbing up the flattened tree.
+        parentContent = slot;
+        continue;
+      }
+      // childNode is an unassigned slottable node. So, it's a non-flattened
+      // node.
+      return parentContent->AsElement();
+    }
+    if (auto* const slot = HTMLSlotElement::FromNode(parentContent)) {
+      if (slot->GetContainingShadow<aKind>()) {
+        if (slot->AssignedNodes().IsEmpty()) {
+          // childNode is a fallback content and a part of the flattened tree.
+          continue;
+        }
+        // childNode is a fallback content but replaced with the assigned nodes.
+        // So, this is a non-flattened node.
+        return slot;
+      }
+    }
+  }
+  return nullptr;
+}
+
+template Element*
+nsINode::GetFlatTreeAncestorElementForNonFlatTreeNode<TreeKind::Flat>() const;
+template Element* nsINode::GetFlatTreeAncestorElementForNonFlatTreeNode<
+    TreeKind::FlatForSelection>() const;
+
+template <TreeKind aKind, typename Dummy>
+Element* nsINode::GetFlatTreeAncestorElementForNonFlatTreeNode() const {
+  Element* flattenedAncestorElement = nullptr;
+  for (Element* excluderShadowHostOrSlotElement =
+           GetClosestFlatTreeAncestorElementForNonFlatTreeNode<aKind>();
+       excluderShadowHostOrSlotElement;
+       excluderShadowHostOrSlotElement =
+           excluderShadowHostOrSlotElement
+               ->GetClosestFlatTreeAncestorElementForNonFlatTreeNode<aKind>()) {
+    flattenedAncestorElement = excluderShadowHostOrSlotElement;
+  }
+  return flattenedAncestorElement;
+}
+
 nsINode::nsSlots::nsSlots() : mWeakReference(nullptr) {}
 
 nsINode::nsSlots::~nsSlots() {
@@ -291,94 +371,52 @@ class ChildIndexCache {
   static nsIContent* GetChildAt(const nsINode* aParent, uint32_t aIndex) {
     MOZ_ASSERT(aParent->GetChildCount() > aIndex,
                "Caller should have checked bounds");
-    if (aParent == sLastInvalidatedParent) {
-      sLastInvalidatedParent = nullptr;
-    }
-    auto& entry =
-        sCache.LookupOrInsertWith(aParent, [&] { return MakeEntry(aParent); });
-    if (aIndex < entry.mChildren.Length()) {
-      return entry.mChildren[aIndex];
-    }
-    PopulateTo(entry, aParent, aIndex);
-    return entry.mChildren[aIndex];
+    Entry* entry = GetOrCreateEntry(aParent);
+    return entry->GetChildAt(aParent, aIndex);
   }
 
-  static uint32_t ComputeIndexOf(const nsINode* aParent,
-                                 const nsIContent* aChild) {
-    MOZ_ASSERT(aChild->GetParentNode() == aParent,
-               "Child is not actually a child of parent");
-    if (aParent == sLastInvalidatedParent) {
-      sLastInvalidatedParent = nullptr;
-    }
-    auto& entry =
-        sCache.LookupOrInsertWith(aParent, [&] { return MakeEntry(aParent); });
-
-    // Only use the hash map if the parent has enough children to make it
-    // worthwhile, otherwise scanning the array is likely faster and doesn't use
-    // extra memory.
-    const bool useHashMap = aParent->GetChildCount() >= kHashMapThreshold;
-
-    if (useHashMap) {
-      // First check if the child is already in the cache.
-      if (auto result = entry.mIndexMap.MaybeGet(aChild)) {
-        return *result;
-      }
-    }
-
-    // Scan the already-populated array portion, building hashmap entries as
-    // we go for children that haven't been indexed yet.
-    // If the hashmap is not used (child count below hashmap threshold), this is
-    // the main O(n) lookup loop.
-    for (auto index :
-         IntegerRange(entry.mIndexMap.Count(), entry.mChildren.Length())) {
-      if (useHashMap) {
-        entry.mIndexMap.InsertOrUpdate(entry.mChildren[index], index);
-      }
-      if (entry.mChildren[index] == aChild) {
-        return index;
-      }
-    }
-
-    // Extend the child array frontier, continuing to build the hashmap.
-    nsIContent* current = entry.mChildren.IsEmpty()
-                              ? aParent->GetFirstChild()
-                              : entry.mChildren.LastElement()->GetNextSibling();
-    while (current) {
-      const uint32_t index = entry.mChildren.Length();
-      entry.mChildren.AppendElement(current);
-      if (useHashMap) {
-        entry.mIndexMap.InsertOrUpdate(current, index);
-      }
-      if (current == aChild) {
-        return index;
-      }
-      current = current->GetNextSibling();
-    }
-    MOZ_ASSERT_UNREACHABLE("Child is not actually a child of parent");
-    return 0;
+  static Maybe<uint32_t> ComputeIndexOf(const nsINode* aParent,
+                                        const nsIContent* aChild) {
+    Entry* entry = GetOrCreateEntry(aParent);
+    return entry->ComputeIndexOf(aParent, aChild);
   }
 
-  static void Invalidate(const nsINode* aParent) {
+  // Invalidates the cache for a child-list mutation. |aPivot| is the child at
+  // (or, for an insertion, immediately after) the mutation point: every cached
+  // index from |aPivot|'s onward becomes stale, while the elements before it
+  // stay valid. The actual truncation is deferred to the next lookup
+  // (TruncateStaleElements), so a run of mutations with no lookup in between
+  // only lowers a watermark.
+  static void Invalidate(const nsINode* aParent, const nsIContent* aPivot) {
     MOZ_ASSERT(aParent);
     if (aParent->GetChildCount() < kThreshold) {
       return;
     }
     if (aParent->GetChildCount() == kThreshold) {
+      if (aParent == sLastAccessedParent) {
+        ForgetMemoizedEntry();
+      }
       sCache.Remove(aParent);
-      sLastInvalidatedParent = nullptr;
-      return;
-    }
-    if (aParent == sLastInvalidatedParent) {
       return;
     }
 
-    auto entry = sCache.Lookup(aParent);
-    if (entry) {
-      entry.Data().mChildren.ClearAndRetainStorage();
-      entry.Data().mIndexMap.Clear();
+    // Removing every child of a parent calls Invalidate once per child with no
+    // lookup in between, so reuse the memoized entry to avoid a hash lookup
+    // each time.
+    if (aParent != sLastAccessedParent) {
+      sLastAccessedParent = aParent;
+      sLastAccessedEntry = sCache.Get(aParent);
     }
 
-    sLastInvalidatedParent = aParent;
+    if (!sLastAccessedEntry) {
+      // There is one distinct situation where `sLastAccessedParent` is non-null
+      // and `sLastAccessedEntry` is null:
+      // If the parent has more than `kThreshold` children, but `GetChildAt()`
+      // or `ComputeIndexOf()` has never been called.
+      return;
+    }
+
+    sLastAccessedEntry->Invalidate(aPivot);
   }
 
 #ifdef DEBUG
@@ -386,53 +424,174 @@ class ChildIndexCache {
     return sCache.Contains(aParent);
   }
 
-  static const nsINode* LastInvalidatedParent() {
-    return sLastInvalidatedParent;
-  }
+  static const nsINode* LastAccessedParent() { return sLastAccessedParent; }
 #endif
 
  private:
   struct Entry {
-    nsTArray<nsIContent*> mChildren;
-    nsTHashMap<const nsIContent*, uint32_t> mIndexMap;
-  };
+    explicit Entry(uint32_t aChildCount) { mChildren.SetCapacity(aChildCount); }
 
-  static void PopulateTo(Entry& aEntry, const nsINode* aParent,
-                         uint32_t aIndex) {
-    if (aEntry.mChildren.Capacity() < aParent->GetChildCount()) {
-      aEntry.mChildren.SetCapacity(aParent->GetChildCount());
-    }
-    nsIContent* current =
-        aEntry.mChildren.IsEmpty()
-            ? aParent->GetFirstChild()
-            : aEntry.mChildren.LastElement()->GetNextSibling();
-    while (current) {
-      aEntry.mChildren.AppendElement(current);
-      if (aEntry.mChildren.Length() - 1 == aIndex) {
+    void Invalidate(const nsIContent* aPivot) {
+      if (!aPivot) {
+        mValidLength = 0;
         return;
       }
-      current = current->GetNextSibling();
+      if (auto index = mIndexMap.MaybeGet(aPivot)) {
+        mValidLength = std::min(mValidLength, *index);
+      } else {
+        // If the pivot element isn't in the map yet, we know that all
+        // elements which _are_ in the map are still valid (and when the
+        // map is empty, Count() is 0, correctly invalidating everything).
+        mValidLength = std::min(mValidLength, mIndexMap.Count());
+      }
     }
-  }
 
-  static Entry MakeEntry(const nsINode* aParent) {
-    Entry entry;
-    entry.mChildren.SetCapacity(aParent->GetChildCount());
+    nsIContent* GetChildAt(const nsINode* aParent, uint32_t aIndex) {
+      TruncateStaleElements();
+      PopulateTo(aParent, aIndex);
+      return mChildren[aIndex];
+    }
+
+    Maybe<uint32_t> ComputeIndexOf(const nsINode* aParent,
+                                   const nsIContent* aChild) {
+      TruncateStaleElements();
+
+      // Only grow the hash map if the parent has enough children to make it
+      // worthwhile, otherwise scanning the array is likely faster and doesn't
+      // use extra memory.
+      const bool useHashMap = aParent->GetChildCount() >= kHashMapThreshold;
+
+      if (auto result = mIndexMap.MaybeGet(aChild)) {
+        return result;
+      }
+
+      // Scan the already-populated array portion past the map prefix, building
+      // hashmap entries as we go for children that haven't been indexed yet.
+      // If the hashmap is not being grown, this is the main O(n) lookup loop.
+      for (auto index : IntegerRange(mIndexMap.Count(), mChildren.Length())) {
+        if (useHashMap) {
+          mIndexMap.InsertOrUpdate(mChildren[index], index);
+        }
+        if (mChildren[index] == aChild) {
+          return Some(index);
+        }
+      }
+
+      // Extend the child array frontier, continuing to build the hashmap.
+      nsIContent* current = mChildren.IsEmpty()
+                                ? aParent->GetFirstChild()
+                                : mChildren.LastElement()->GetNextSibling();
+      while (current) {
+        const uint32_t index = mChildren.Length();
+        mChildren.AppendElement(current);
+        mValidLength = mChildren.Length();
+        if (useHashMap) {
+          mIndexMap.InsertOrUpdate(current, index);
+        }
+        if (current == aChild) {
+          return Some(index);
+        }
+        current = current->GetNextSibling();
+      }
+      return Nothing();
+    }
+
+   private:
+    // Drops the stale tail recorded by a previous Invalidate(), if any.
+    void TruncateStaleElements() {
+      if (mValidLength == mChildren.Length()) {
+        return;
+      }
+      if (mValidLength == 0) {
+        mChildren.ClearAndRetainStorage();
+        mIndexMap.ClearAndRetainStorage();
+        return;
+      }
+      for (auto* invalidChild :
+           Span(mChildren).Last(mChildren.Length() - mValidLength)) {
+        mIndexMap.Remove(invalidChild);
+      }
+      mChildren.TruncateLength(mValidLength);
+    }
+
+    // Forward population only grows the array; the hash map is left for
+    // ComputeIndexOf to fill lazily (its fill-loop covers any array tail grown
+    // here).
+    void PopulateTo(const nsINode* aParent, uint32_t aIndex) {
+      if (aIndex < mChildren.Length()) {
+        return;
+      }
+      if (mChildren.Capacity() < aParent->GetChildCount()) {
+        mChildren.SetCapacity(aParent->GetChildCount());
+      }
+      nsIContent* current = mChildren.IsEmpty()
+                                ? aParent->GetFirstChild()
+                                : mChildren.LastElement()->GetNextSibling();
+      while (current) {
+        mChildren.AppendElement(current);
+        if (mChildren.Length() - 1 == aIndex) {
+          break;
+        }
+        current = current->GetNextSibling();
+      }
+      mValidLength = mChildren.Length();
+    }
+    // The array of children, lazily populated.
+    // Note that if an invalidation is pending (between `Invalidate()` and
+    // `TruncateStaleElements()`), the valid portion of the array is [0,
+    // mValidLength). The remaining elements are stale and may contain dangling
+    // pointers.
+    nsTArray<nsIContent*> mChildren;
+    nsTHashMap<const nsIContent*, uint32_t> mIndexMap;
+    // Number of leading entries in mChildren (and, when the hash map is used,
+    // mIndexMap) that are still known valid. Invalidate() only lowers this;
+    // TruncateStaleElements() drops the now-stale tail [mValidLength, end)
+    // lazily at the next lookup. Equal to mChildren.Length() outside of pending
+    // invalidation.
+    uint32_t mValidLength = 0;
+  };
+
+  // Returns aParent's (heap-allocated, stable) cache entry, creating it if
+  // needed, and memoizes it so a subsequent same-parent access -- another
+  // lookup or an Invalidate -- reuses the pointer without touching sCache.
+  static Entry* GetOrCreateEntry(const nsINode* aParent) {
+    if (aParent == sLastAccessedParent && sLastAccessedEntry) {
+      return sLastAccessedEntry;
+    }
+    Entry* entry = sCache.GetOrInsertNew(aParent, aParent->GetChildCount());
+    sLastAccessedParent = aParent;
+    sLastAccessedEntry = entry;
     return entry;
   }
 
-  static nsTHashMap<const nsINode*, Entry> sCache;
-  static const nsINode* sLastInvalidatedParent;
+  // Drops the memoized entry. The parent and entry pointer are a unit and must
+  // always be cleared together so a freed entry can never be dereferenced.
+  static void ForgetMemoizedEntry() {
+    sLastAccessedParent = nullptr;
+    sLastAccessedEntry = nullptr;
+  }
+
+  static nsClassHashtable<nsPtrHashKey<const nsINode>, Entry> sCache;
+  // Memoizes the most recently accessed entry (by a lookup or an Invalidate) so
+  // a run of operations on the same parent -- e.g. removing all its children,
+  // or repeatedly querying one parent -- avoids a per-call sCache lookup. The
+  // entry pointer is stable across rehashing because the entries are
+  // heap-allocated; it is dropped only when this parent's entry is removed (see
+  // Invalidate).
+  static const nsINode* sLastAccessedParent;
+  static Entry* sLastAccessedEntry;
 };
 
-nsTHashMap<const nsINode*, ChildIndexCache::Entry> ChildIndexCache::sCache;
-const nsINode* ChildIndexCache::sLastInvalidatedParent = nullptr;
+nsClassHashtable<nsPtrHashKey<const nsINode>, ChildIndexCache::Entry>
+    ChildIndexCache::sCache;
+const nsINode* ChildIndexCache::sLastAccessedParent = nullptr;
+ChildIndexCache::Entry* ChildIndexCache::sLastAccessedEntry = nullptr;
 
 nsINode::~nsINode() {
   MOZ_ASSERT(!ChildIndexCache::Contains(this),
              "Node still in ChildIndexCache at destruction?");
-  MOZ_ASSERT(ChildIndexCache::LastInvalidatedParent() != this,
-             "ChildIndexCache should have cleaned last invalidated parent");
+  MOZ_ASSERT(ChildIndexCache::LastAccessedParent() != this,
+             "ChildIndexCache still memoizing a node being destroyed?");
   MOZ_ASSERT(!HasSlots(), "LastRelease was not called?");
   MOZ_ASSERT(mSubtreeRoot == this, "Didn't restore state properly?");
 }
@@ -548,26 +707,59 @@ class IsItemInRangeComparator {
         mEndOffset(aEndOffset),
         mCache(aCache) {
     MOZ_ASSERT(aStartOffset <= aEndOffset);
+    MOZ_ASSERT(aStartOffset <= aNode.Length());
+    MOZ_ASSERT(aEndOffset <= aNode.Length());
+  }
+
+  [[nodiscard]] bool Collapsed() const { return mStartOffset == mEndOffset; }
+
+  const ConstRawRangeBoundary& StartRef() const {
+    if (!mStartRef) {
+      const_cast<IsItemInRangeComparator*>(this)->mStartRef.emplace(
+          &mNode, mStartOffset, RangeBoundarySetBy::Offset, TreeKind::DOM);
+      MOZ_ASSERT(mStartRef->IsSetAndValid());
+    }
+    return mStartRef.ref();
+  }
+  const ConstRawRangeBoundary& EndRef() const {
+    if (!mEndRef) {
+      const_cast<IsItemInRangeComparator*>(this)->mEndRef.emplace(
+          &mNode, mEndOffset, RangeBoundarySetBy::Offset, TreeKind::DOM);
+      MOZ_ASSERT(mEndRef->IsSetAndValid());
+    }
+    return mEndRef.ref();
   }
 
   int operator()(const AbstractRange* const aRange) const {
-    auto ComparePoints = [](const nsINode* aNode1, const uint32_t aOffset1,
-                            const nsINode* aNode2, const uint32_t aOffset2,
-                            nsContentUtils::NodeIndexCache* aCache) {
-      return nsContentUtils::ComparePointsWithIndices<TreeKind::Flat>(
-          aNode1, aOffset1, aNode2, aOffset2, aCache);
-    };
+    auto ComparePoints =
+        [](const ConstRawRangeBoundary& aRef1, RangeBoundaryFor aFor1,
+           const ConstRawRangeBoundary& aRef2, RangeBoundaryFor aFor2,
+           nsContentUtils::NodeIndexCache* aCache) {
+          return nsContentUtils::ComparePoints<TreeKind::FlatForSelection>(
+              aRef1.AsRangeBoundaryInFlatTreeOrNonFlattenedNode(aFor1),
+              aRef2.AsRangeBoundaryInFlatTreeOrNonFlattenedNode(aFor2), aCache);
+        };
 
     Maybe<int32_t> cmp = ComparePoints(
-        &mNode, mEndOffset, aRange->GetMayCrossShadowBoundaryStartContainer(),
-        aRange->MayCrossShadowBoundaryStartOffset(), mCache);
+        EndRef(),
+        Collapsed() ? RangeBoundaryFor::Collapsed : RangeBoundaryFor::End,
+        aRange->MayCrossShadowBoundaryStartRef().AsConstRaw(),
+        aRange->AreNormalRangeAndCrossShadowBoundaryRangeCollapsed()
+            ? RangeBoundaryFor::Collapsed
+            : RangeBoundaryFor::Start,
+        mCache);
     // nsContentUtils::ComparePoints would return Nothing when nodes
     // are disconnected, ComparePoints_Deprecated used to return 1
     // for that case. Hence valueOr(1) to keep the legacy result.
     if (cmp.valueOr(1) == 1) {
-      cmp = ComparePoints(&mNode, mStartOffset,
-                          aRange->GetMayCrossShadowBoundaryEndContainer(),
-                          aRange->MayCrossShadowBoundaryEndOffset(), mCache);
+      cmp = ComparePoints(
+          StartRef(),
+          Collapsed() ? RangeBoundaryFor::Collapsed : RangeBoundaryFor::Start,
+          aRange->MayCrossShadowBoundaryEndRef().AsConstRaw(),
+          aRange->AreNormalRangeAndCrossShadowBoundaryRangeCollapsed()
+              ? RangeBoundaryFor::Collapsed
+              : RangeBoundaryFor::End,
+          mCache);
       // Same reason as above.
       if (cmp.valueOr(1) == -1) {
         return 0;
@@ -582,11 +774,15 @@ class IsItemInRangeComparator {
   const uint32_t mStartOffset;
   const uint32_t mEndOffset;
   nsContentUtils::NodeIndexCache* mCache;
+  Maybe<ConstRawRangeBoundary> mStartRef;
+  Maybe<ConstRawRangeBoundary> mEndRef;
 };
 
 bool nsINode::IsSelected(const uint32_t aStartOffset, const uint32_t aEndOffset,
                          SelectionNodeCache* aCache) const {
   MOZ_ASSERT(aStartOffset <= aEndOffset);
+  MOZ_ASSERT(aStartOffset <= Length());
+  MOZ_ASSERT(aEndOffset <= Length());
   const nsINode* ancestorForCache =
       GetClosestCommonInclusiveAncestorForRangeInSelection(this);
   NS_ASSERTION(ancestorForCache || !IsMaybeSelected(),
@@ -632,7 +828,14 @@ bool nsINode::IsSelected(const uint32_t aStartOffset, const uint32_t aEndOffset,
   }
 
   nsContentUtils::NodeIndexCache cache;
-  IsItemInRangeComparator comparator{*this, aStartOffset, aEndOffset, &cache};
+  const IsItemInRangeComparator comparator{*this, aStartOffset, aEndOffset,
+                                           &cache};
+  const RangeBoundaryFor comparatorStartBoundaryFor =
+      comparator.Collapsed() ? RangeBoundaryFor::Collapsed
+                             : RangeBoundaryFor::Start;
+  const RangeBoundaryFor comparatorEndBoundaryFor =
+      comparator.Collapsed() ? RangeBoundaryFor::Collapsed
+                             : RangeBoundaryFor::End;
   for (Selection* selection : ancestorSelections) {
     // Binary search the sorted ranges in this selection.
     // (Selection::GetRangeAt returns its ranges ordered).
@@ -662,10 +865,17 @@ bool nsINode::IsSelected(const uint32_t aStartOffset, const uint32_t aEndOffset,
         }
 
         auto ComparePoints = [](const ConstRawRangeBoundary& aBoundary1,
+                                RangeBoundaryFor aFor1,
                                 const RangeBoundary& aBoundary2,
+                                RangeBoundaryFor aFor2,
                                 nsContentUtils::NodeIndexCache* aCache) {
-          return nsContentUtils::ComparePoints<TreeKind::Flat>(
-              aBoundary1, aBoundary2, aCache);
+          MOZ_ASSERT(aBoundary1.GetTreeKind() == TreeKind::DOM);
+          MOZ_ASSERT(aBoundary2.GetTreeKind() == TreeKind::DOM);
+          return nsContentUtils::ComparePoints<TreeKind::FlatForSelection>(
+              aBoundary1.AsRangeBoundaryInFlatTreeOrNonFlattenedNode(aFor1),
+              aBoundary2.AsRaw().AsRangeBoundaryInFlatTreeOrNonFlattenedNode(
+                  aFor2),
+              aCache);
         };
 
         const AbstractRange* middlePlus1;
@@ -673,18 +883,22 @@ bool nsINode::IsSelected(const uint32_t aStartOffset, const uint32_t aEndOffset,
         // if node end > start of middle+1, result = 1
         if (middle + 1 < high &&
             (middlePlus1 = selection->GetAbstractRangeAt(middle + 1)) &&
-            ComparePoints(ConstRawRangeBoundary(this, aEndOffset,
-                                                RangeBoundarySetBy::Offset),
-                          middlePlus1->StartRef(), &cache)
+            ComparePoints(comparator.EndRef(), comparatorEndBoundaryFor,
+                          middlePlus1->StartRef(),
+                          middlePlus1->Collapsed() ? RangeBoundaryFor::Collapsed
+                                                   : RangeBoundaryFor::Start,
+                          &cache)
                     .valueOr(1) > 0) {
           result = 1;
           // if node start < end of middle - 1, result = -1
         } else if (middle >= 1 &&
                    (middleMinus1 = selection->GetAbstractRangeAt(middle - 1)) &&
                    ComparePoints(
-                       ConstRawRangeBoundary(this, aStartOffset,
-                                             RangeBoundarySetBy::Offset),
-                       middleMinus1->EndRef(), &cache)
+                       comparator.StartRef(), comparatorStartBoundaryFor,
+                       middleMinus1->EndRef(),
+                       middleMinus1->Collapsed() ? RangeBoundaryFor::Collapsed
+                                                 : RangeBoundaryFor::End,
+                       &cache)
                            .valueOr(1) < 0) {
           result = -1;
         } else {
@@ -833,17 +1047,21 @@ nsIContent* nsINode::GetSelectionRootContent(
 
   if (nsPresContext* presContext = aPresShell->GetPresContext()) {
     if (nsContentUtils::GetHTMLEditor(presContext)) {
-      // When there is an HTMLEditor, selection root should be one of focused
-      // editing host, <body> or root of the (sub)tree which this node belong.
-
-      // If this node is in design mode or this node is not editable, selection
-      // root should be the <body> if this node is not in any subtrees and there
-      // is a <body> or the root of the shadow DOM if this node is in a shadow
-      // or the document element.
-      // XXX If this node is not connected, it seems that this should return
-      // nullptr because this node is not selectable.
-      if (!IsInComposedDoc() || IsInDesignMode() ||
-          !HasFlag(NODE_IS_EDITABLE)) {
+      // If there is an HTMLEditor, this node may be in an editing host. If
+      // so, even if this node is not editable, the selection root should be
+      // the closest editing host.
+      if (IsContent() && IsInComposedDoc() && !IsInDesignMode()) {
+        if (nsIContent* const editableContent =
+                AsContent()->GetInclusiveEditableAncestor()) {
+          return editableContent->GetEditingHost();
+        }
+      }
+      // If there is an HTMLEditor and this node is in the design mode, we
+      // should return the <body>. Otherwise, if this is not connected to the
+      // document, return the subtree.
+      else if (IsInDesignMode() || !IsInComposedDoc()) {
+        // XXX If this node is not connected, it seems that this should return
+        // nullptr because this node is not selectable.
         Element* const bodyOrDocumentElement = [&]() -> Element* {
           if (Element* const bodyElement = OwnerDoc()->GetBodyElement()) {
             return bodyElement;
@@ -856,13 +1074,8 @@ nsIContent* nsINode::GetSelectionRootContent(
                    ? bodyOrDocumentElement
                    : GetRootForContentSubtree(AsContent());
       }
-      // If this node is editable but not in the design mode, this is always an
-      // editable node in an editing host of contenteditable.  In this case,
-      // let's use the editing host element as selection root.
-      MOZ_ASSERT(IsEditable());
-      MOZ_ASSERT(!IsInDesignMode());
-      MOZ_ASSERT(IsContent());
-      return AsContent()->GetEditingHost();
+      // This node is not managed by HTMLEditor. So, let's fallback to the
+      // normal path.
     }
   }
 
@@ -887,21 +1100,27 @@ nsIContent* nsINode::GetSelectionRootContent(
   // This node might be in another subtree, if so, we should find this subtree's
   // root.  Otherwise, we can return the content simply.
   NS_ENSURE_TRUE(content, nullptr);
-  if (!nsContentUtils::IsInSameAnonymousTree(this, content)) {
-    content = GetRootForContentSubtree(AsContent());
-    // Fixup for ShadowRoot because the ShadowRoot itself does not have a frame.
-    // Use the host as the root.
-    if (ShadowRoot* shadowRoot = ShadowRoot::FromNode(content)) {
-      content = shadowRoot->GetHost();
-      if (content && bool(aAllowCrossShadowBoundary)) {
-        content = content->GetSelectionRootContent(
-            aPresShell, aIgnoreOwnIndependentSelection,
-            aAllowCrossShadowBoundary);
-      }
-    }
+  if (nsContentUtils::IsInSameAnonymousTree(this, content)) {
+    return content;
   }
-
-  return content;
+  content = GetRootForContentSubtree(AsContent());
+  // Fixup for ShadowRoot because the ShadowRoot itself does not have a frame.
+  // Use the host as the root.
+  ShadowRoot* const shadowRoot = ShadowRoot::FromNode(content);
+  if (!shadowRoot) {
+    return content;
+  }
+  Element* const hostElement = shadowRoot->GetHost();
+  // If there is no host element, perhaps, the shadow is a UA shadow and was
+  // detached since content shadow cannot be deatched.
+  if (!hostElement) [[unlikely]] {
+    return content;
+  }
+  return bool(aAllowCrossShadowBoundary)
+             ? hostElement->GetSelectionRootContent(
+                   aPresShell, aIgnoreOwnIndependentSelection,
+                   aAllowCrossShadowBoundary)
+             : hostElement;
 }
 
 nsFrameSelection* nsINode::GetFrameSelection() const {
@@ -1137,7 +1356,11 @@ void nsINode::GetDebugDescription(nsACString& aOutput,
           // So, we want to print this if the previous node is a non-assigned
           // slottable node.
           aOutput.AppendFmt("(has a {}shadow)",
-                            shadowRoot->IsUAShadowRootSlow() ? "UA " : "");
+                            shadowRoot->IsUAWidget() ||
+                                    !shadowRoot->GetHost() ||
+                                    !shadowRoot->GetHost()->CanAttachShadowDOM()
+                                ? "UA "
+                                : "");
         }
       }
       if (element->HasFlag(ELEMENT_HAS_EDIT_CONTEXT)) {
@@ -1147,7 +1370,10 @@ void nsINode::GetDebugDescription(nsACString& aOutput,
       aOutput.AppendLiteral("[designMode=\"on\"]");
     } else if (const ShadowRoot* shadowRoot = ShadowRoot::FromNode(curr)) {
       aOutput.AppendFmt("({}shadow root)",
-                        shadowRoot->IsUAShadowRootSlow() ? "UA " : "");
+                        shadowRoot->IsUAWidget() || !shadowRoot->GetHost() ||
+                                !shadowRoot->GetHost()->CanAttachShadowDOM()
+                            ? "UA "
+                            : "");
     } else if (const CharacterData* const charData =
                    CharacterData::FromNode(curr)) {
       // Don't export the text data in a text control because it may be a
@@ -1163,10 +1389,11 @@ void nsINode::GetDebugDescription(nsACString& aOutput,
           data.Truncate(5);
           data.AppendLiteral("...");
         }
+        data.ReplaceSubstring(u"\\", u"\\\\");
         data.ReplaceSubstring(u"\n", u"\\n");
         data.ReplaceSubstring(u"\"", u"\\\"");
         data.ReplaceSubstring(u"\u00A0", u"&nbsp;");
-        aOutput.Append("(\""_ns + NS_ConvertUTF16toUTF8(data) + ")\""_ns);
+        aOutput.Append("(\""_ns + NS_ConvertUTF16toUTF8(data) + "\")"_ns);
       }
     }
 
@@ -2005,6 +2232,7 @@ static IndexCacheSlot sIndexCache[CACHE_NUM_SLOTS];
 static inline void AddChildAndIndexToCache(const nsINode* aParent,
                                            const nsINode* aChild,
                                            uint32_t aChildIndex) {
+  MOZ_ASSERT(NS_IsMainThread());
   uint32_t index = CACHE_GET_INDEX(aParent);
   sIndexCache[index].mParent = aParent;
   sIndexCache[index].mChild = aChild;
@@ -2014,6 +2242,8 @@ static inline void AddChildAndIndexToCache(const nsINode* aParent,
 static inline void GetChildAndIndexFromCache(const nsINode* aParent,
                                              const nsINode** aChild,
                                              Maybe<uint32_t>* aChildIndex) {
+  MOZ_ASSERT(NS_IsMainThread());
+
   uint32_t index = CACHE_GET_INDEX(aParent);
   if (sIndexCache[index].mParent == aParent) {
     *aChild = sIndexCache[index].mChild;
@@ -2025,6 +2255,7 @@ static inline void GetChildAndIndexFromCache(const nsINode* aParent,
 }
 
 static inline void RemoveFromCache(const nsINode* aParent) {
+  MOZ_ASSERT(NS_IsMainThread());
   uint32_t index = CACHE_GET_INDEX(aParent);
   if (sIndexCache[index].mParent == aParent) {
     sIndexCache[index] = {nullptr, nullptr, UINT32_MAX};
@@ -2056,7 +2287,7 @@ void nsINode::InsertChildToChildList(nsIContent* aKid,
   MOZ_ASSERT(aNextSibling);
 
   RemoveFromCache(this);
-  ChildIndexCache::Invalidate(this);
+  ChildIndexCache::Invalidate(this, aNextSibling);
 
   nsIContent* previousSibling = aNextSibling->mPreviousOrLastSibling;
   aNextSibling->mPreviousOrLastSibling = aKid;
@@ -2078,7 +2309,7 @@ void nsINode::DisconnectChild(nsIContent* aKid) {
   MOZ_ASSERT(GetChildCount() > 0);
 
   RemoveFromCache(this);
-  ChildIndexCache::Invalidate(this);
+  ChildIndexCache::Invalidate(this, aKid);
 
   nsIContent* previousSibling = aKid->GetPreviousSibling();
   nsCOMPtr<nsIContent> ref = aKid;
@@ -2118,21 +2349,6 @@ nsIContent* nsINode::GetChildAt_Deprecated(uint32_t aIndex) const {
   return child;
 }
 
-nsINode* nsINode::GetChildAtInFlatTree(uint32_t aIndex) const {
-  if (const auto* slot = HTMLSlotElement::FromNode(this)) {
-    const auto& assignedNodes = slot->AssignedNodes();
-    if (!assignedNodes.IsEmpty()) {
-      if (aIndex >= assignedNodes.Length()) {
-        return nullptr;
-      }
-      return assignedNodes[aIndex];
-    }
-  } else if (auto* shadowRoot = GetShadowRoot()) {
-    return shadowRoot->GetChildAtInFlatTree(aIndex);
-  }
-  return GetChildAt_Deprecated(aIndex);
-}
-
 int32_t nsINode::ComputeIndexOf_Deprecated(
     const nsINode* aPossibleChild) const {
   Maybe<uint32_t> maybeIndex = ComputeIndexOf(aPossibleChild);
@@ -2166,12 +2382,13 @@ Maybe<uint32_t> nsINode::ComputeIndexOf(const nsINode* aPossibleChild) const {
     return Nothing();
   }
   const nsIContent* contentChild = nsIContent::FromNode(aPossibleChild);
+  const bool isMainThread = NS_IsMainThread();
   if (contentChild && GetChildCount() >= ChildIndexCache::kThreshold &&
-      NS_IsMainThread()) {
-    return Some(ChildIndexCache::ComputeIndexOf(this, contentChild));
+      isMainThread) {
+    return ChildIndexCache::ComputeIndexOf(this, contentChild);
   }
 
-  if (MaybeCachesComputedIndex()) {
+  if (isMainThread && MaybeCachesComputedIndex()) {
     const nsINode* child;
     Maybe<uint32_t> maybeChildIndex;
     GetChildAndIndexFromCache(this, &child, &maybeChildIndex);
@@ -2212,7 +2429,7 @@ Maybe<uint32_t> nsINode::ComputeIndexOf(const nsINode* aPossibleChild) const {
   while (current) {
     MOZ_ASSERT(current->GetParentNode() == this);
     if (current == aPossibleChild) {
-      if (MaybeCachesComputedIndex()) {
+      if (isMainThread && MaybeCachesComputedIndex()) {
         AddChildAndIndexToCache(this, current, index);
       }
       return Some(index);
@@ -2243,20 +2460,6 @@ Maybe<uint32_t> nsINode::ComputeIndexInParentContent() const {
     return Nothing();
   }
   return parent->ComputeIndexOf(this);
-}
-
-bool nsINode::MaybeParentCachesComputedIndex() const {
-  nsINode* parent = GetParentNode();
-  return parent && parent->MaybeCachesComputedIndex();
-}
-
-uint32_t nsINode::GetFlatTreeChildCount() const {
-  return FlattenedChildIterator::GetLength(this);
-}
-
-Maybe<uint32_t> nsINode::ComputeFlatTreeIndexOf(
-    const nsINode* aPossibleChild) const {
-  return FlattenedChildIterator::GetIndexOf(this, aPossibleChild);
 }
 
 static already_AddRefed<nsINode> GetNodeFromNodeOrString(
@@ -3370,7 +3573,7 @@ void nsINode::BindObject(nsISupports* aObject, UnbindCallback aDtor) {
 
 void nsINode::UnbindObject(nsISupports* aObject) {
   if (auto* slots = GetExistingSlots()) {
-    slots->mBoundObjects.RemoveElement(aObject);
+    slots->mBoundObjects.UnorderedRemoveElement(aObject);
   }
 }
 
@@ -4134,10 +4337,11 @@ already_AddRefed<nsINode> nsINode::CloneAndAdopt(
           init.mMode = originalShadowRoot->Mode();
           RefPtr<ShadowRoot> newShadowRoot =
               clone->AsElement()->AttachShadowWithoutNameChecks(
-                  init, false,
+                  init, Nothing(),
                   originalShadowRoot->HasCustomSlotDispatch()
                       ? Element::CustomSlotDispatch::Yes
-                      : Element::CustomSlotDispatch::No);
+                      : Element::CustomSlotDispatch::No,
+                  false);
           newShadowRoot->CloneInternalDataFrom(originalShadowRoot);
           for (nsIContent* origChild = originalShadowRoot->GetFirstChild();
                origChild; origChild = origChild->GetNextSibling()) {
@@ -4172,6 +4376,11 @@ already_AddRefed<nsINode> nsINode::CloneAndAdopt(
       init.mDelegatesFocus = originalShadowRoot->DelegatesFocus();
       init.mSlotAssignment = originalShadowRoot->SlotAssignment();
       init.mClonable = true;
+      if (StaticPrefs::dom_scoped_custom_element_registries_enabled() &&
+          originalShadowRoot->HasCustomElementRegistry()) {
+        init.mCustomElementRegistry.Construct(
+            originalShadowRoot->GetCustomElementRegistry());
+      }
 
       RefPtr<ShadowRoot> newShadowRoot =
           clone->AsElement()->AttachShadow(init, aError);
@@ -4179,6 +4388,9 @@ already_AddRefed<nsINode> nsINode::CloneAndAdopt(
         return nullptr;
       }
       newShadowRoot->SetIsDeclarative(originalShadowRoot->IsDeclarative());
+      if (originalShadowRoot->IsAvailableToElementInternals()) {
+        newShadowRoot->SetAvailableToElementInternals();
+      }
       nsAtom* referenceTarget = originalShadowRoot->ReferenceTarget();
       newShadowRoot->SetReferenceTarget(referenceTarget);
 
@@ -4349,21 +4561,33 @@ void nsINode::NotifyDevToolsOfRemovalsOfChildren() {
 
 ShadowRoot* nsINode::GetShadowRootForSelection() const {
   ShadowRoot* shadowRoot = GetShadowRoot();
-  if (!shadowRoot) {
+  return shadowRoot && !shadowRoot->IsUAWidget() ? shadowRoot : nullptr;
+}
+
+HTMLSlotElement* nsINode::GetAsHTMLSlotElementIfFilled() {
+  return const_cast<HTMLSlotElement*>(
+      static_cast<const nsINode*>(this)->GetAsHTMLSlotElementIfFilled());
+}
+
+const HTMLSlotElement* nsINode::GetAsHTMLSlotElementIfFilled() const {
+  const HTMLSlotElement* slot = HTMLSlotElement::FromNode(this);
+  return !slot || slot->AssignedNodes().IsEmpty() ? nullptr : slot;
+}
+
+HTMLSlotElement* nsINode::GetAsHTMLSlotElementIfFilledForSelection() {
+  return const_cast<HTMLSlotElement*>(
+      static_cast<const nsINode*>(this)
+          ->GetAsHTMLSlotElementIfFilledForSelection());
+}
+
+const HTMLSlotElement* nsINode::GetAsHTMLSlotElementIfFilledForSelection()
+    const {
+  const HTMLSlotElement* const slot = GetAsHTMLSlotElementIfFilled();
+  if (!slot || slot->AssignedNodes().IsEmpty()) {
     return nullptr;
   }
-
-  // ie. <details> and <video>
-  if (shadowRoot->IsUAWidget()) {
-    return nullptr;
-  }
-
-  // ie. <use> element
-  if (IsElement() && !AsElement()->CanAttachShadowDOM()) {
-    return nullptr;
-  }
-
-  return shadowRoot;
+  const ShadowRoot* const shadowRoot = slot->GetContainingShadow();
+  return shadowRoot && !shadowRoot->IsUAWidget() ? slot : nullptr;
 }
 
 void nsINode::QueueAncestorRevealingAlgorithm() {

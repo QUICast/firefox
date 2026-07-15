@@ -22,6 +22,7 @@
 #include "OrientedImage.h"
 #include "SourceBuffer.h"
 #include "SurfaceCache.h"
+#include "WindowRenderer.h"
 #include "gfx2DGlue.h"
 #include "gfxContext.h"
 #include "gfxPlatform.h"
@@ -29,10 +30,9 @@
 #include "mozilla/RefPtr.h"
 #include "mozilla/SizeOfState.h"
 #include "mozilla/StaticPrefs_image.h"
-#include "mozilla/glean/ImageDecodersMetrics.h"
 #include "mozilla/TimeStamp.h"
-
 #include "mozilla/gfx/2D.h"
+#include "mozilla/glean/ImageDecodersMetrics.h"
 #include "nsComponentManagerUtils.h"
 #include "nsError.h"
 #include "nsIConsoleService.h"
@@ -44,7 +44,6 @@
 #include "nsProperties.h"
 #include "prenv.h"
 #include "prsystem.h"
-#include "WindowRenderer.h"
 
 namespace mozilla {
 
@@ -1681,10 +1680,12 @@ void RasterImage::NotifyDecodeComplete(
     }
 
     if (mAnimationState && LoadHasBeenDecoded()) {
-      // We've finished a full decode of all animation frames and our
-      // AnimationState has been notified about them all, so let it know not to
-      // expect anymore.
-      mAnimationState->NotifyDecodeComplete();
+      // If we've successfully finished a full decode of all animation frames
+      // then let our animation state know it is complete and to not expect
+      // anymore frames.
+      if (aStatus.mFinished && !aStatus.mHadError) {
+        mAnimationState->NotifyDecodeComplete();
+      }
 
       IntRect rect = mAnimationState->UpdateState(this, mSize.ToUnknownSize());
 

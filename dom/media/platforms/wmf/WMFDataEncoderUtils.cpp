@@ -33,7 +33,7 @@ GUID CodecToSubtype(CodecType aCodec) {
 }
 
 static bool CanUseWMFHwEncoder(CodecType aCodec) {
-  if (!gfx::gfxVars::IsInitialized()) {
+  if (!gfx::gfxVars::IsInitialized() || !XRE_IsGPUProcess()) {
     return false;
   }
 
@@ -70,8 +70,11 @@ EncodeSupportSet CanCreateWMFEncoder(const EncoderConfig& aConfig) {
                     EnumValueToString(aConfig.mCodec));
       }
     }
-    if (aConfig.mHardwarePreference != HardwarePreference::RequireHardware) {
-      // Try SW encoder if not disallowed by the caller.
+    // Try SW encoder if not disallowed by the caller, only for H264. We
+    // otherwise prefer to use SW encoders from ffvpx. We also want to avoid SW
+    // encoding in the GPU process.
+    if (aConfig.mHardwarePreference != HardwarePreference::RequireHardware &&
+        aConfig.mCodec == CodecType::H264 && !XRE_IsGPUProcess()) {
       auto swEnc =
           MakeRefPtr<MFTEncoder>(MFTEncoder::HWPreference::SoftwareOnly);
       if (SUCCEEDED(swEnc->Create(CodecToSubtype(aConfig.mCodec), aConfig.mSize,

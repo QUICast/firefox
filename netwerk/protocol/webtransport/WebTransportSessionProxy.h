@@ -6,6 +6,8 @@
 #define mozilla_net_WebTransportProxy_h
 
 #include <functional>
+
+#include "mozilla/Mutex.h"
 #include "nsIChannelEventSink.h"
 #include "nsIInterfaceRequestor.h"
 #include "nsIRedirectResultListener.h"

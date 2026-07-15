@@ -3,7 +3,9 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 #include "mozilla/ContentClassifierEngine.h"
+#include "ContentClassifierFeatureUtils.h"
 #include "ContentClassifierService.h"
+#include "mozilla/extensions/WebExtensionPolicy.h"
 #include "nsIEffectiveTLDService.h"
 #include "nsNetUtil.h"
 #include "mozilla/Components.h"
@@ -11,20 +13,25 @@
 
 namespace mozilla {
 
+namespace {
+
+bool IsNonRecommendedAddonFromLoadInfo(nsILoadInfo* aLoadInfo) {
+  MOZ_ASSERT(aLoadInfo);
+  extensions::WebExtensionPolicy* policy =
+      ContentClassifierFeatureUtils::GetAddonPolicyFromLoadInfo(aLoadInfo);
+  return policy && !policy->HasRecommendedState();
+}
+
+}  // namespace
+
 ContentClassifierEngineResult ContentClassifierEngine::CheckNetworkRequest(
-    const ContentClassifierRequest& aRequest) {
+    const ContentClassifierRequest& aRequest, bool aPreviouslyMatched) {
   if (!mEngine || !sInitializedETLDService) {
     return ContentClassifierEngineResult(NS_ERROR_NOT_INITIALIZED, mFeature);
   }
 
   if (!aRequest.mValid) {
     return ContentClassifierEngineResult(NS_ERROR_INVALID_ARG, mFeature);
-  }
-
-  // We perform no classification on third-party resources for webcompat.
-  // This early-return saves CPU cycles.
-  if (!aRequest.mThirdParty) {
-    return ContentClassifierEngineResult(NS_OK, mFeature);
   }
 
   bool matched = false;
@@ -34,7 +41,8 @@ ContentClassifierEngineResult ContentClassifierEngine::CheckNetworkRequest(
   nsresult rv = content_classifier_engine_check_network_request_preparsed(
       mEngine, &aRequest.mUrl, &aRequest.mSchemelessSite,
       &aRequest.mSourceSchemelessSite, &aRequest.mRequestType,
-      aRequest.mThirdParty, &matched, &important, &exception);
+      aRequest.mThirdParty, aPreviouslyMatched, &matched, &important,
+      &exception);
   return ContentClassifierEngineResult(matched, !exception.IsEmpty(), important,
                                        rv, mFeature);
 }
@@ -63,10 +71,12 @@ ContentClassifierRequest::ContentClassifierRequest(nsIChannel* aChannel)
   rv = aChannel->GetLoadInfo(getter_AddRefs(loadInfo));
   if (NS_FAILED(rv)) return;
 
+  // Best-effort: some principals (extension, null, system) have no usable
+  // base domain. Leave mSourceSchemelessSite empty rather than invalidating
+  // the whole request.
   nsCOMPtr<nsIPrincipal> loadingPrincipal = loadInfo->GetLoadingPrincipal();
   if (loadingPrincipal) {
-    rv = loadingPrincipal->GetBaseDomain(mSourceSchemelessSite);
-    if (NS_FAILED(rv)) return;
+    (void)loadingPrincipal->GetBaseDomain(mSourceSchemelessSite);
   }
 
   ExtContentPolicyType contentPolicyType =
@@ -126,6 +136,8 @@ ContentClassifierRequest::ContentClassifierRequest(nsIChannel* aChannel)
   }
 
   mPrivateBrowsing = NS_UsePrivateBrowsing(aChannel);
+
+  mIsNonRecommendedAddon = IsNonRecommendedAddonFromLoadInfo(loadInfo);
 
   mValid = true;
 }

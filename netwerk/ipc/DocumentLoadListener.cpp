@@ -4,16 +4,15 @@
 
 #include "DocumentLoadListener.h"
 
-#include "imgLoader.h"
 #include "NeckoCommon.h"
-#include "nsLoadGroup.h"
+#include "imgLoader.h"
 #include "mozilla/AntiTrackingUtils.h"
 #include "mozilla/AppShutdown.h"
+#include "mozilla/Components.h"
 #include "mozilla/DebugOnly.h"
 #include "mozilla/DynamicFpiNavigationHeuristic.h"
-#include "mozilla/Components.h"
+#include "mozilla/ExtensionPolicyService.h"
 #include "mozilla/LoadInfo.h"
-#include "mozilla/ipc/PBackgroundSharedTypes.h"
 #include "mozilla/NullPrincipal.h"
 #include "mozilla/RefPtr.h"
 #include "mozilla/ResultVariant.h"
@@ -28,22 +27,29 @@
 #include "mozilla/dom/ClientChannelHelper.h"
 #include "mozilla/dom/ContentParent.h"
 #include "mozilla/dom/ContentProcessManager.h"
+#include "mozilla/dom/Element.h"
+#include "mozilla/dom/ParentProcessChannelHandle.h"
 #include "mozilla/dom/ProcessIsolation.h"
+#include "mozilla/dom/ReferrerInfo.h"
+#include "mozilla/dom/RemoteWebProgressRequest.h"
 #include "mozilla/dom/SessionHistoryEntry.h"
 #include "mozilla/dom/WindowGlobalParent.h"
 #include "mozilla/dom/ipc/IdType.h"
+#include "mozilla/dom/nsHTTPSOnlyUtils.h"
+#include "mozilla/intl/Localization.h"
+#include "mozilla/ipc/PBackgroundSharedTypes.h"
+#include "mozilla/net/ChannelClassifierUtils.h"
 #include "mozilla/net/CookieJarSettings.h"
 #include "mozilla/net/HttpChannelParent.h"
 #include "mozilla/net/RedirectChannelRegistrar.h"
-#include "nsContentSecurityUtils.h"
 #include "nsContentSecurityManager.h"
+#include "nsContentSecurityUtils.h"
+#include "nsDOMNavigationTiming.h"
+#include "nsDSURIContentListener.h"
+#include "nsDocLoader.h"  // for FormatStatusMessage
 #include "nsDocShell.h"
 #include "nsDocShellLoadState.h"
 #include "nsDocShellLoadTypes.h"
-#include "nsDOMNavigationTiming.h"
-#include "nsDSURIContentListener.h"
-#include "nsObjectLoadingContent.h"
-#include "nsOpenWindowInfo.h"
 #include "nsExternalHelperAppService.h"
 #include "nsHttpChannel.h"
 #include "nsIBrowser.h"
@@ -52,26 +58,20 @@
 #include "nsINetworkInterceptController.h"
 #include "nsIStreamConverterService.h"
 #include "nsIViewSourceChannel.h"
-#include "nsImportModule.h"
 #include "nsIXULRuntime.h"
+#include "nsImportModule.h"
+#include "nsLoadGroup.h"
 #include "nsMimeTypes.h"
+#include "nsObjectLoadingContent.h"
+#include "nsOpenWindowInfo.h"
 #include "nsQueryObject.h"
 #include "nsRedirectHistoryEntry.h"
+#include "nsSHistory.h"
 #include "nsSandboxFlags.h"
 #include "nsScriptSecurityManager.h"
-#include "nsSHistory.h"
 #include "nsStringStream.h"
 #include "nsURILoader.h"
 #include "nsWebNavigationInfo.h"
-#include "mozilla/dom/BrowserParent.h"
-#include "mozilla/dom/Element.h"
-#include "mozilla/dom/nsHTTPSOnlyUtils.h"
-#include "mozilla/dom/ReferrerInfo.h"
-#include "mozilla/dom/RemoteWebProgressRequest.h"
-#include "mozilla/net/ChannelClassifierUtils.h"
-#include "mozilla/ExtensionPolicyService.h"
-#include "mozilla/intl/Localization.h"
-#include "nsDocLoader.h"  // for FormatStatusMessage
 
 #ifdef ANDROID
 #  include "mozilla/widget/nsWindow.h"
@@ -542,9 +542,9 @@ void DocumentLoadListener::AddURIVisit(nsIChannel* aChannel,
          nsILoadInfo::HTTPS_ONLY_UPGRADED_LISTENER_NOT_REGISTERED |
          nsILoadInfo::HTTPS_ONLY_UPGRADED_LISTENER_REGISTERED)));
 
-  nsDocShell::InternalAddURIVisit(uri, previousURI, previousFlags,
-                                  responseStatus, browsingContext, widget,
-                                  mLoadStateLoadType, wasUpgraded);
+  nsDocShell::InternalAddURIVisit(
+      uri, previousURI, previousFlags, responseStatus, browsingContext, widget,
+      mLoadStateLoadType, wasUpgraded, net::ChannelIsPost(aChannel));
 }
 
 CanonicalBrowsingContext* DocumentLoadListener::GetLoadingBrowsingContext()
@@ -1759,6 +1759,8 @@ void DocumentLoadListener::SerializeRedirectData(
   if (mLoadingSessionHistoryInfo) {
     aArgs.loadingSessionHistoryInfo().emplace(*mLoadingSessionHistoryInfo);
   }
+
+  aArgs.channelHandle() = mParentProcessChannelHandle;
 }
 
 static bool IsFirstLoadInWindow(nsIChannel* aChannel) {
@@ -2233,8 +2235,7 @@ DocumentLoadListener::RedirectToRealChannel(
     mChannel->GetStatus(&status);
     bool updateGHistory =
         nsDocShell::ShouldUpdateGlobalHistory(mLoadStateLoadType);
-    if (NS_SUCCEEDED(status) && updateGHistory &&
-        !net::ChannelIsPost(mChannel)) {
+    if (NS_SUCCEEDED(status) && updateGHistory) {
       AddURIVisit(mChannel, aLoadFlags);
     }
   }
@@ -2252,7 +2253,20 @@ DocumentLoadListener::RedirectToRealChannel(
     chan = vsc->GetInnerChannel();
   }
   mRedirectChannelId = nsContentUtils::GenerateLoadIdentifier();
-  MOZ_ALWAYS_SUCCEEDS(registrar->RegisterChannel(chan, mRedirectChannelId));
+
+  // Bind the registered channel to the content process the redirect is
+  // destined for (0 for the parent process), so only that process can link
+  // its parent channel to it.
+  uint64_t ownerContentParentId = 0;
+  if (aDestinationProcess) {
+    if (ContentParent* destCp = *aDestinationProcess) {
+      ownerContentParentId = destCp->ChildID();
+    }
+  } else if (mContentParent) {
+    ownerContentParentId = mContentParent->ChildID();
+  }
+  MOZ_ALWAYS_SUCCEEDS(registrar->RegisterChannel(chan, mRedirectChannelId,
+                                                 ownerContentParentId));
 
   if (aDestinationProcess) {
     RefPtr<ContentParent> cp = *aDestinationProcess;
@@ -2425,10 +2439,9 @@ void DocumentLoadListener::TriggerRedirectToRealChannel(
     // NOTE: Keep this in sync with the similar check in
     // BrowserParent::RecvNewWindowGlobal.
     EnumSet<ValidatePrincipalOptions> validationOptions = {};
-    // FIXME(bug 1699385): Remove allowSystem for blobs
     // FIXME(bug 1698087): chrome://devtools/**/webextension-fallback.html
     // Automation-Only: chrome://reftest/** + blank subframes
-    if (docURI->SchemeIs("blob") || docURI->SchemeIs("chrome") ||
+    if (docURI->SchemeIs("chrome") ||
         (xpc::IsInAutomation() && NS_IsAboutBlank(docURI) &&
          GetParentWindowContext() &&
          GetParentWindowContext()->Manager()->Manager() == contentParent &&
@@ -2494,6 +2507,25 @@ void DocumentLoadListener::TriggerRedirectToRealChannel(
     aDestinationBrowsingContext->Group()->SetUseOriginAgentClusterFromNetwork(
         unsandboxedPrincipal, hasOriginAgentCluster);
   }
+
+  // We should always expect to be loaded within aDestinationBrowsingContext
+  // unless this is an object/embed load.
+  ParentProcessChannelHandle::ExpectedContext expectedContext =
+      AsVariant(ParentProcessChannelHandle::ExpectLoadedWithin{
+          .mBrowsingContextId = aDestinationBrowsingContext->Id()});
+
+  // If this is an object/embed load, and we have not re-targeted
+  // aDestinationBrowsingContext to a different BC than the parent
+  // WindowContext, record the embedding Window ID instead.
+  if (!mIsDocumentLoad && GetParentWindowContext() &&
+      GetParentWindowContext()->BrowsingContext() ==
+          aDestinationBrowsingContext) {
+    expectedContext = AsVariant(ParentProcessChannelHandle::ExpectChildOf{
+        .mParentWindowId = GetParentWindowContext()->InnerWindowId()});
+  }
+
+  mParentProcessChannelHandle =
+      MakeRefPtr<ParentProcessChannelHandle>(expectedContext, mChannel);
 
   // If we didn't have any redirects, then we pass the REDIRECT_INTERNAL flag
   // for this channel switch so that it isn't recorded in session history etc.

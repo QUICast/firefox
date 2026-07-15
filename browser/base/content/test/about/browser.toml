@@ -143,10 +143,10 @@ skip-if = [
 
 ["browser_aboutNewTab_bookmarksToolbarPrefs.js"]
 
-["browser_aboutStopReload.js"]
-
 ["browser_aboutSupport.js"]
 tags = "remote-settings"
+
+["browser_aboutSupport_graphics_media.js"]
 
 ["browser_aboutSupport_newtab_security_state.js"]
 

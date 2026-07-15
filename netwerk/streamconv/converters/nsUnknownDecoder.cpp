@@ -3,29 +3,27 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsUnknownDecoder.h"
-#include "nsIPipe.h"
-#include "nsIInputStream.h"
-#include "nsIOutputStream.h"
-#include "nsMimeTypes.h"
 
+#include <algorithm>
+
+#include "mozilla/StaticPrefs_network.h"
 #include "nsCRT.h"
-
-#include "nsIMIMEService.h"
-
-#include "nsIViewSourceChannel.h"
-#include "nsIHttpChannel.h"
-#include "nsIForcePendingChannel.h"
+#include "nsComponentManagerUtils.h"
 #include "nsIEncodedChannel.h"
+#include "nsIForcePendingChannel.h"
+#include "nsIHttpChannel.h"
+#include "nsIInputStream.h"
+#include "nsIMIMEService.h"
+#include "nsIOutputStream.h"
+#include "nsIPipe.h"
 #include "nsIURI.h"
-#include "nsStringStream.h"
+#include "nsIViewSourceChannel.h"
+#include "nsMimeTypes.h"
 #include "nsNetCID.h"
 #include "nsNetUtil.h"
 #include "nsQueryObject.h"
-#include "nsComponentManagerUtils.h"
 #include "nsServiceManagerUtils.h"
-#include "mozilla/StaticPrefs_network.h"
-
-#include <algorithm>
+#include "nsStringStream.h"
 
 #define MAX_BUFFER_SIZE 512u
 
@@ -175,7 +173,7 @@ nsUnknownDecoder::OnDataAvailable(nsIRequest* request, nsIInputStream* aStream,
     // Determine how much of the stream should be read to fill up the
     // sniffer buffer...
     //
-    if (mBufferLen + aCount >= MAX_BUFFER_SIZE) {
+    if (aCount >= MAX_BUFFER_SIZE - mBufferLen) {
       count = MAX_BUFFER_SIZE - mBufferLen;
     } else {
       count = aCount;
@@ -362,7 +360,7 @@ nsUnknownDecoder::nsSnifferEntry nsUnknownDecoder::sSnifferEntries[] = {
     // some sort...  "Scripts" can include arbitrary data to be passed
     // to an interpreter, so we need to decide whether we can call this
     // text or whether it's data.
-    SNIFFER_ENTRY_WITH_FUNC("#!", &nsUnknownDecoder::LastDitchSniff),
+    SNIFFER_ENTRY_WITH_FUNC("#!", &nsUnknownDecoder::SniffBinary),
 
     // XXXbz should (and can) we also include the various ways that <?xml can
     // appear as UTF-16 and such?  See http://www.w3.org/TR/REC-xml#sec-guessing
@@ -380,6 +378,7 @@ void nsUnknownDecoder::DetermineContentType(nsIRequest* aRequest) {
   }
 
   nsCOMPtr<nsIChannel> channel(do_QueryInterface(aRequest));
+  nsCOMPtr<nsIHttpChannel> httpChannel(do_QueryInterface(aRequest));
   if (channel) {
     nsCOMPtr<nsILoadInfo> loadInfo = channel->LoadInfo();
     if (loadInfo->GetSkipContentSniffing()) {
@@ -388,9 +387,8 @@ void nsUnknownDecoder::DetermineContentType(nsIRequest* aRequest) {
        * but also have sniffing disabled, just determine whether
        * to use text/plain or octetstream and log an error to the Console
        */
-      LastDitchSniff(aRequest);
+      SniffBinary(aRequest);
 
-      nsCOMPtr<nsIHttpChannel> httpChannel(do_QueryInterface(aRequest));
       if (httpChannel) {
         nsAutoCString type;
         httpChannel->GetContentType(type);
@@ -427,6 +425,15 @@ void nsUnknownDecoder::DetermineContentType(nsIRequest* aRequest) {
     if (!decodedData.IsEmpty()) {
       testData = decodedData.get();
       testDataLen = std::min<uint32_t>(decodedData.Length(), MAX_BUFFER_SIZE);
+    }
+  }
+
+  if (httpChannel) {
+    nsAutoCString contentType;
+    httpChannel->GetContentType(contentType);
+    if (contentType.EqualsLiteral("text/plain")) {
+      SniffBinary(aRequest);
+      return;
     }
   }
 
@@ -499,7 +506,7 @@ void nsUnknownDecoder::DetermineContentType(nsIRequest* aRequest) {
     return;
   }
 
-  LastDitchSniff(aRequest);
+  SniffBinary(aRequest);
 #ifdef DEBUG
   MutexAutoLock lock(mMutex);
   NS_ASSERTION(!mContentType.IsEmpty(), "Content type should be known by now.");
@@ -625,7 +632,7 @@ bool nsUnknownDecoder::SniffURI(nsIRequest* aRequest) {
 #define IS_TEXT_CHAR(ch) \
   (((unsigned char)(ch)) > 31 || (9 <= (ch) && (ch) <= 13) || (ch) == 27)
 
-bool nsUnknownDecoder::LastDitchSniff(nsIRequest* aRequest) {
+bool nsUnknownDecoder::SniffBinary(nsIRequest* aRequest) {
   // All we can do now is try to guess whether this is text/plain or
   // application/octet-stream
 
@@ -839,7 +846,7 @@ void nsBinaryDetector::DetermineContentType(nsIRequest* aRequest) {
 
   nsCOMPtr<nsILoadInfo> loadInfo = httpChannel->LoadInfo();
   if (loadInfo->GetSkipContentSniffing()) {
-    LastDitchSniff(aRequest);
+    SniffBinary(aRequest);
     return;
   }
   // It's an HTTP channel.  Check for the text/plain mess
@@ -873,7 +880,7 @@ void nsBinaryDetector::DetermineContentType(nsIRequest* aRequest) {
     return;
   }
 
-  LastDitchSniff(aRequest);
+  SniffBinary(aRequest);
   MutexAutoLock lock(mMutex);
   if (mContentType.EqualsLiteral(APPLICATION_OCTET_STREAM)) {
     // We want to guess at it instead

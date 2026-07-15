@@ -2,9 +2,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "nsID.h"
-
 #include "gtest/gtest.h"
+#include "nsID.h"
 
 static const char* const ids[] = {
     "5C347B10-D55C-11D1-89B7-006008911B81",

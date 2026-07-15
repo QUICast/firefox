@@ -9,6 +9,7 @@ import {
   spread,
 } from "chrome://browser/content/preferences/widgets/setting-element.mjs";
 import { SettingControl } from "chrome://browser/content/preferences/widgets/setting-control.mjs";
+import { SettingGroupManager } from "chrome://browser/content/preferences/config/SettingGroupManager.mjs";
 
 /**
  * @import { SettingElementConfig } from "chrome://browser/content/preferences/widgets/setting-element.mjs"
@@ -112,6 +113,31 @@ export class SettingGroup extends SettingElement {
     return this;
   }
 
+  /**
+   * Unsubscribe callback for the late-registration listener. See
+   * connectedCallback for why.
+   *
+   * @type {(() => void) | null}
+   */
+  #unsubscribeGroupRegister = null;
+
+  connectedCallback() {
+    super.connectedCallback();
+    // This element can render before its config is available. Initialize once
+    // the group registers, which can happen later (bug 2051119).
+    this.#unsubscribeGroupRegister = SettingGroupManager.onRegister(id => {
+      if (id === this.groupId && !this.config) {
+        window.initSettingGroup(id);
+      }
+    });
+  }
+
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    this.#unsubscribeGroupRegister?.();
+    this.#unsubscribeGroupRegister = null;
+  }
+
   willUpdate() {
     if (!this.srdEnabled) {
       this.classList.toggle("subcategory", this.config?.headingLevel == 1);
@@ -119,7 +145,11 @@ export class SettingGroup extends SettingElement {
     // Only set/remove attributes when explicitly defined in config
     // This allows handleVisibilityChange to manage visibility independently
     if (this.config?.hiddenFromSearch !== undefined) {
-      this.toggleAttribute(HiddenAttr.Search, !!this.config.hiddenFromSearch);
+      if (this.config.hiddenFromSearch) {
+        this.setAttribute(HiddenAttr.Search, "true");
+      } else {
+        this.removeAttribute(HiddenAttr.Search);
+      }
     }
     if (this.config?.hidden !== undefined) {
       this.toggleAttribute(HiddenAttr.Self, this.config.hidden);
@@ -254,7 +284,7 @@ export class SettingGroup extends SettingElement {
       (this.srdEnabled || this.inSubPane || this.config.card == "always") &&
       this.config.card != "never"
     ) {
-      return html`<moz-card>${content}</moz-card>`;
+      return html`<moz-card role="presentation">${content}</moz-card>`;
     }
     return content;
   }

@@ -6,6 +6,7 @@
 #define GFX_USER_FONT_SET_H
 
 #include <new>
+
 #include "PLDHashTable.h"
 #include "gfxFontEntry.h"
 #include "gfxFontUtils.h"
@@ -28,7 +29,8 @@
 #include "nscore.h"
 
 // Only needed for function bodies.
-#include <utility>                // for move, forward
+#include <utility>  // for move, forward
+
 #include "MainThreadUtils.h"      // for NS_IsMainThread
 #include "gfxFontFeatures.h"      // for gfxFontFeature
 #include "gfxFontSrcPrincipal.h"  // for gfxFontSrcPrincipal
@@ -183,6 +185,8 @@ class gfxUserFontFamily : public gfxFontFamily {
 
   // Add the given font entry to the end of the family's list.
   void AddFontEntry(gfxFontEntry* aFontEntry) {
+    nsCString entryName = aFontEntry->FamilyName();
+
     mozilla::AutoWriteLock lock(mLock);
     MOZ_ASSERT(!mIsSimpleFamily, "not valid for user-font families");
 
@@ -202,12 +206,11 @@ class gfxUserFontFamily : public gfxFontFamily {
     // an existing entry here.)
     mAvailableFonts.AppendElement(aFontEntry);
 
-    if (aFontEntry->mFamilyName.IsEmpty()) {
-      aFontEntry->mFamilyName = Name();
+    if (entryName.IsEmpty()) {
+      aFontEntry->SetFamilyName(Name());
     } else {
 #ifdef DEBUG
       nsCString thisName = Name();
-      nsCString entryName = aFontEntry->mFamilyName;
       ToLowerCase(thisName);
       ToLowerCase(entryName);
       MOZ_ASSERT(thisName.Equals(entryName));
@@ -446,7 +449,7 @@ class gfxUserFontSet {
             principalHash + int(aKey->mPrivate), aKey->mURI->Hash(),
             HashFeatures(aKey->mFontEntry->mFeatureSettings),
             HashVariations(aKey->mFontEntry->mVariationSettings),
-            mozilla::HashString(aKey->mFontEntry->mFamilyName),
+            mozilla::HashString(aKey->mFontEntry->FamilyName()),
             aKey->mFontEntry->Weight().AsScalar(),
             aKey->mFontEntry->SlantStyle().AsScalar(),
             aKey->mFontEntry->Stretch().AsScalar(),

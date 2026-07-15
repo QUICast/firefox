@@ -9,6 +9,8 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
@@ -25,14 +27,19 @@ import mozilla.components.compose.base.annotation.FlexibleWindowLightDarkPreview
 import org.mozilla.fenix.R
 import org.mozilla.fenix.components.menu.compose.MenuGroup
 import org.mozilla.fenix.components.menu.compose.MenuItem
+import org.mozilla.fenix.home.topsites.store.PopularSite
 import org.mozilla.fenix.theme.FirefoxTheme
 import mozilla.components.ui.icons.R as iconsR
+
+private const val PREVIEW_POPULAR_SITE_COUNT = 8
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun AddShortcutBottomSheet(
+    popularSites: List<PopularSite>,
     onDismiss: () -> Unit,
     onAddWebsiteClicked: () -> Unit,
+    onAddPopularSiteClick: (PopularSite) -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
@@ -49,16 +56,24 @@ internal fun AddShortcutBottomSheet(
         },
     ) {
         AddShortcutBottomSheetContent(
+            popularSites = popularSites,
             onAddWebsiteClicked = onAddWebsiteClicked,
+            onAddPopularSiteClick = onAddPopularSiteClick,
         )
     }
 }
 
 @Composable
 private fun AddShortcutBottomSheetContent(
+    popularSites: List<PopularSite>,
     onAddWebsiteClicked: () -> Unit,
+    onAddPopularSiteClick: (PopularSite) -> Unit,
 ) {
-    Column(modifier = Modifier.padding(horizontal = FirefoxTheme.layout.space.static200)) {
+    Column(
+        modifier = Modifier
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = FirefoxTheme.layout.space.static200),
+    ) {
         Spacer(modifier = Modifier.height(FirefoxTheme.layout.space.static150))
 
         Text(
@@ -79,6 +94,13 @@ private fun AddShortcutBottomSheetContent(
         }
 
         Spacer(modifier = Modifier.height(FirefoxTheme.layout.space.static200))
+
+        PopularSites(
+            sites = popularSites,
+            onClick = onAddPopularSiteClick,
+        )
+
+        Spacer(modifier = Modifier.height(FirefoxTheme.layout.space.static200))
     }
 }
 
@@ -88,7 +110,11 @@ private fun AddShortcutBottomSheetPreview() {
     FirefoxTheme {
         Surface {
             AddShortcutBottomSheetContent(
+                popularSites = List(PREVIEW_POPULAR_SITE_COUNT) {
+                    PopularSite(title = "Mozilla", url = "https://mozilla.com", iconUrl = null)
+                },
                 onAddWebsiteClicked = {},
+                onAddPopularSiteClick = {},
             )
         }
     }

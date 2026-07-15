@@ -380,12 +380,6 @@ class StyleSheet final : public nsICSSLoaderObserver, public nsWrapperCache {
   // subtree. It can be cheaper than walking the whole list of stylesheets.
   bool IsDirectlyAssociatedTo(dom::DocumentOrShadowRoot&) const;
 
-  // True if any of this sheet's ancestors were created through the
-  // Constructable StyleSheets API
-  bool SelfOrAncestorIsConstructed() const {
-    return OutermostSheet().IsConstructed();
-  }
-
   // Ture if the sheet's constructor document matches the given document
   bool ConstructorDocumentMatches(const dom::Document& aDocument) const {
     return mConstructorDocument == &aDocument;
@@ -402,7 +396,7 @@ class StyleSheet final : public nsICSSLoaderObserver, public nsWrapperCache {
   // Remove a document or shadow root from the list of adopters.
   void RemoveAdopter(dom::DocumentOrShadowRoot& aAdopter) {
     // Cannot assert IsConstructed() because this can run after unlink.
-    mAdopters.RemoveElement(&aAdopter);
+    mAdopters.UnorderedRemoveElement(&aAdopter);
   }
 
   const nsTArray<dom::DocumentOrShadowRoot*>& SelfOrAncestorAdopters() const {

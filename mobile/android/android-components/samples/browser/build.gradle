@@ -5,12 +5,11 @@
 import static org.mozilla.conventions.BuildConfigKt.updateExtensionVersion
 
 plugins {
+    id 'com.android.application'
     alias(libs.plugins.dependency.analysis)
-    alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
 }
 
-apply plugin: 'com.android.application'
 
 android {
     compileSdk { version = release(config.compileSdkMajorVersion) { minorApiLevel = config.compileSdkMinorVersion } }
@@ -30,7 +29,7 @@ android {
     buildTypes {
         release {
             minifyEnabled = false
-            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }
 
@@ -47,20 +46,20 @@ android {
         }
     }
 
-    variantFilter { variant ->
-        if (variant.buildType.name == "release") {
-            // This is a sample app that we are not releasing. Save some time and do not build
-            // release versions.
-            setIgnore(true)
-        }
-    }
-
     buildFeatures {
         viewBinding = true
         compose = true
     }
 
     namespace = 'org.mozilla.samples.browser'
+}
+
+androidComponents {
+    beforeVariants(selector().withBuildType("release")) { variantBuilder ->
+        // This is a sample app that we are not releasing. Save some time and do not build
+        // release versions.
+        variantBuilder.enable = false
+    }
 }
 
 tasks.register("updateBorderifyExtensionVersion", Copy) { task ->
@@ -139,6 +138,8 @@ dependencies {
     implementation project(':components:support-utils')
     implementation project(':components:support-webextensions')
     implementation project(':components:ui-autocomplete')
+    implementation project(':components:ui-colors')
+    implementation project(':components:ui-icons')
     implementation project(':components:ui-tabcounter')
     implementation project(':components:ui-widgets')
 
@@ -148,7 +149,7 @@ dependencies {
     implementation libs.androidx.compose.material3
     implementation libs.androidx.compose.ui.tooling
     implementation libs.androidx.constraintlayout
-    implementation libs.androidx.core.ktx
+    implementation libs.androidx.core
     implementation libs.androidx.swiperefreshlayout
     implementation libs.google.material
     implementation libs.mozilla.glean

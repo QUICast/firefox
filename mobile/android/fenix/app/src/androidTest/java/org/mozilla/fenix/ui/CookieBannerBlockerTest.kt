@@ -4,19 +4,17 @@
 
 package org.mozilla.fenix.ui
 
-import androidx.core.net.toUri
 import org.junit.Ignore
 import org.junit.Rule
 import org.junit.Test
 import org.mozilla.fenix.customannotations.SmokeTest
-import org.mozilla.fenix.ext.settings
+import org.mozilla.fenix.ext.components
 import org.mozilla.fenix.helpers.AppAndSystemHelper.runWithCondition
 import org.mozilla.fenix.helpers.FenixTestRule
 import org.mozilla.fenix.helpers.HomeActivityIntentTestRule
 import org.mozilla.fenix.helpers.TestHelper.appContext
 import org.mozilla.fenix.helpers.perf.DetectMemoryLeaksRule
 import org.mozilla.fenix.ui.robots.homeScreen
-import org.mozilla.fenix.ui.robots.navigationToolbar
 import androidx.compose.ui.test.junit4.v2.AndroidComposeTestRule as AndroidComposeTestRuleV2
 
 /**
@@ -30,7 +28,7 @@ class CookieBannerBlockerTest {
     @get:Rule(order = 1)
     val composeTestRule =
         AndroidComposeTestRuleV2(
-            HomeActivityIntentTestRule.withDefaultSettingsOverrides(skipOnboarding = true),
+            HomeActivityIntentTestRule.withDefaultSettingsOverrides(),
         ) { it.activity }
 
     @get:Rule(order = 2)
@@ -40,27 +38,11 @@ class CookieBannerBlockerTest {
     @SmokeTest
     @Test
     fun verifyCookieBannerBlockerSettingsOptionTest() {
-        runWithCondition(appContext.settings().shouldUseCookieBannerPrivateMode) {
+        runWithCondition(appContext.components.settings.shouldUseCookieBannerPrivateMode) {
             homeScreen(composeTestRule) {
             }.openThreeDotMenu {
             }.clickSettingsButton {
                 verifyCookieBannerBlockerButton(enabled = true)
-            }
-        }
-    }
-
-    // TestRail link: https://mozilla.testrail.io/index.php?/cases/view/2419273
-    @SmokeTest
-    @Test
-    fun verifyCFRAfterBlockingTheCookieBanner() {
-        runWithCondition(appContext.settings().shouldUseCookieBannerPrivateMode) {
-            homeScreen(composeTestRule) {
-            }.togglePrivateBrowsingMode()
-
-            navigationToolbar(composeTestRule) {
-            }.enterURLAndEnterToBrowser("materiel.net".toUri()) {
-                verifyCookieBannerExists(exists = false)
-                verifyCookieBannerBlockerCFRExists(exists = true)
             }
         }
     }

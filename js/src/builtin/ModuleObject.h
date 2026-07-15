@@ -67,6 +67,20 @@ using ImportAttributeVector = GCVector<ImportAttribute, 0, SystemAllocPolicy>;
 // https://tc39.es/proposal-source-phase-imports/#sec-modulerequest-record
 enum class ImportPhase : uint8_t { Source, Evaluation, Limit };
 
+// Possible value types of [[ImportName]] field in ImportEntry Records and
+// ExportEntry Records.
+// When the value type is not 'String', the [[ImportName]] field will be null;
+// the value is recorded by importNameValueType_ instead.
+//
+// https://tc39.es/ecma262/#importentry-record
+// https://tc39.es/ecma262/#exportentry-record
+enum class ImportNameValueType : uint8_t {
+  String,
+  Namespace,
+  Source,
+  AllButDefault
+};
+
 class ModuleRequestObject : public NativeObject {
  public:
   enum {
@@ -108,6 +122,8 @@ class ImportEntry {
   const HeapPtr<JSAtom*> importName_;
   const HeapPtr<JSAtom*> localName_;
 
+  const ImportNameValueType importNameValueType_;
+
   // Line number (1-origin).
   const uint32_t lineNumber_;
 
@@ -117,11 +133,21 @@ class ImportEntry {
  public:
   ImportEntry(Handle<ModuleRequestObject*> moduleRequest,
               Handle<JSAtom*> maybeImportName, Handle<JSAtom*> localName,
-              uint32_t lineNumber, JS::ColumnNumberOneOrigin columnNumber);
+              ImportNameValueType importNameValueType, uint32_t lineNumber,
+              JS::ColumnNumberOneOrigin columnNumber);
 
   ModuleRequestObject* moduleRequest() const { return moduleRequest_; }
-  JSAtom* importName() const { return importName_; }
+  JSAtom* importName() const {
+    MOZ_ASSERT_IF(importNameValueType_ != ImportNameValueType::String,
+                  !importName_);
+    return importName_;
+  }
   JSAtom* localName() const { return localName_; }
+  ImportNameValueType importNameValueType() const {
+    MOZ_ASSERT_IF(importName_,
+                  importNameValueType_ == ImportNameValueType::String);
+    return importNameValueType_;
+  }
   uint32_t lineNumber() const { return lineNumber_; }
   JS::ColumnNumberOneOrigin columnNumber() const { return columnNumber_; }
 
@@ -136,6 +162,8 @@ class ExportEntry {
   const HeapPtr<JSAtom*> importName_;
   const HeapPtr<JSAtom*> localName_;
 
+  const ImportNameValueType importNameValueType_;
+
   // Line number (1-origin).
   const uint32_t lineNumber_;
 
@@ -146,11 +174,21 @@ class ExportEntry {
   ExportEntry(Handle<JSAtom*> maybeExportName,
               Handle<ModuleRequestObject*> maybeModuleRequest,
               Handle<JSAtom*> maybeImportName, Handle<JSAtom*> maybeLocalName,
-              uint32_t lineNumber, JS::ColumnNumberOneOrigin columnNumber);
+              ImportNameValueType importNameValueType, uint32_t lineNumber,
+              JS::ColumnNumberOneOrigin columnNumber);
   JSAtom* exportName() const { return exportName_; }
   ModuleRequestObject* moduleRequest() const { return moduleRequest_; }
-  JSAtom* importName() const { return importName_; }
+  JSAtom* importName() const {
+    MOZ_ASSERT_IF(importNameValueType_ != ImportNameValueType::String,
+                  !importName_);
+    return importName_;
+  }
   JSAtom* localName() const { return localName_; }
+  ImportNameValueType importNameValueType() const {
+    MOZ_ASSERT_IF(importName_,
+                  importNameValueType_ == ImportNameValueType::String);
+    return importNameValueType_;
+  }
   uint32_t lineNumber() const { return lineNumber_; }
   JS::ColumnNumberOneOrigin columnNumber() const { return columnNumber_; }
 
@@ -309,13 +347,11 @@ class ModuleNamespaceObject : public ProxyObject {
   static const ProxyHandler proxyHandler;
 };
 
-#ifdef ENABLE_SOURCE_PHASE_IMPORTS
 // https://tc39.es/proposal-source-phase-imports/#sec-properties-of-the-%abstractmodulesource%-intrinsic-object
 class AbstractModuleSourceObject : public NativeObject {
  public:
   static const JSClass class_;
 };
-#endif
 
 // Value types of [[Status]] in a Cyclic Module Record
 // https://tc39.es/ecma262/#table-cyclic-module-fields
@@ -405,10 +441,8 @@ class ModuleObject : public NativeObject {
 #ifdef DEBUG
     PreloadSlot,
 #endif
-#ifdef ENABLE_SOURCE_PHASE_IMPORTS
     // Module Source object for source phase imports. Otherwise `undefined`.
     ModuleSourceSlot,
-#endif
     SlotCount
   };
 
@@ -422,11 +456,9 @@ class ModuleObject : public NativeObject {
       JSContext* cx, MutableHandle<ExportNameVector> exportNames);
 
   // Initialize the slots on this object that are dependent on the script.
-  void initScriptSlots(HandleScript script);
-#ifdef ENABLE_SOURCE_PHASE_IMPORTS
+  [[nodiscard]] bool initScriptSlots(JSContext* cx, HandleScript script);
   void initModuleSourceSlot(HandleObject moduleSource);
   void initScriptSourceObject(ScriptSourceObject* sso);
-#endif
 
   void setInitialEnvironment(
       Handle<ModuleEnvironmentObject*> initialEnvironment);
@@ -448,10 +480,8 @@ class ModuleObject : public NativeObject {
   ModuleEnvironmentObject& initialEnvironment() const;
   ModuleEnvironmentObject* environment() const;
   ModuleNamespaceObject* namespace_();
-#ifdef ENABLE_SOURCE_PHASE_IMPORTS
   JSObject* moduleSource() const;
   bool isSourcePhaseModule() const { return moduleSource() != nullptr; }
-#endif
   ModuleStatus status() const;
   mozilla::Maybe<uint32_t> maybeDfsAncestorIndex() const;
   uint32_t dfsAncestorIndex() const;
@@ -515,14 +545,13 @@ class ModuleObject : public NativeObject {
   static ModuleNamespaceObject* createNamespace(
       JSContext* cx, Handle<ModuleObject*> self,
       MutableHandle<UniquePtr<ExportNameVector>> exports);
+  void clearNamespaceOnFailure();
 
   static bool createEnvironment(JSContext* cx, Handle<ModuleObject*> self);
   static bool createSyntheticEnvironment(JSContext* cx,
                                          Handle<ModuleObject*> self,
                                          JS::HandleVector<Value> values);
-#ifdef ENABLE_SOURCE_PHASE_IMPORTS
   static bool createWasmEnvironment(JSContext* cx, Handle<ModuleObject*> self);
-#endif
 
   void initAsyncSlots(JSContext* cx, bool hasTopLevelAwait,
                       Handle<ListObject*> asyncParentModules);

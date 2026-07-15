@@ -6,7 +6,6 @@
 
 #include "mozilla/Atomics.h"
 #include "mozilla/ChaosMode.h"
-#include "mozilla/glean/NetwerkMetrics.h"
 #include "mozilla/IntegerPrintfMacros.h"
 #include "mozilla/MaybeLeakRefPtr.h"
 #include "mozilla/PodOperations.h"
@@ -17,8 +16,9 @@
 #include "mozilla/ReverseIterator.h"
 #include "mozilla/Services.h"
 #include "mozilla/StaticPrefs_network.h"
-#include "mozilla/Tokenizer.h"
 #include "mozilla/Telemetry.h"
+#include "mozilla/Tokenizer.h"
+#include "mozilla/glean/NetwerkMetrics.h"
 #include "nsASocketHandler.h"
 #include "nsError.h"
 #include "nsIEventTarget.h"
@@ -1781,9 +1781,6 @@ PRStatus nsSocketTransportService::DiscoverMaxCount() {
 void nsSocketTransportService::AnalyzeConnection(nsTArray<SocketInfo>* data,
                                                  SocketContext* context,
                                                  bool aActive) {
-  if (context->mHandler->mOriginAttributes.IsPrivateBrowsing()) {
-    return;
-  }
   PRFileDesc* aFD = context->mFD;
 
   PRFileDesc* idLayer = PR_GetIdentitiesLayer(aFD, PR_NSPR_IO_LAYER);

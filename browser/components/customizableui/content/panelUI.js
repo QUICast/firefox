@@ -51,8 +51,7 @@ const PanelUI = {
   _notifications: null,
   _notificationPanel: null,
 
-  init(shouldSuppress) {
-    this._shouldSuppress = shouldSuppress;
+  init() {
     this._initElements();
 
     this.menuButton.addEventListener("mousedown", this);
@@ -195,6 +194,7 @@ const PanelUI = {
       "appMenu-libraryView"
     ).addEventListener("command", this._onLibraryCommand);
     this.mainView.addEventListener("command", this);
+    this.mainView.addEventListener("click", this);
     this.mainView.addEventListener("ViewShowing", this._onMainViewShow);
     this._eventListenersAdded = true;
   },
@@ -211,6 +211,7 @@ const PanelUI = {
       "appMenu-libraryView"
     ).removeEventListener("command", this._onLibraryCommand);
     this.mainView.removeEventListener("command", this);
+    this.mainView.removeEventListener("click", this);
     this._eventListenersAdded = false;
   },
 
@@ -386,6 +387,13 @@ const PanelUI = {
       case "activate":
         this.updateNotifications();
         break;
+      case "click": {
+        let novaFxaButton = aEvent.target.closest("#appMenu-nova-fxa-label");
+        if (novaFxaButton) {
+          gSync.toggleAccountPanel(novaFxaButton, aEvent);
+        }
+        break;
+      }
       case "command":
         this.onCommand(aEvent);
         break;
@@ -576,6 +584,7 @@ const PanelUI = {
         tempPanel.setAttribute("animate", "false");
       }
       tempPanel.setAttribute("context", "");
+
       document.getElementById("mainPopupSet").appendChild(tempPanel);
 
       let multiView = document.createXULElement("panelmultiview");
@@ -585,6 +594,16 @@ const PanelUI = {
       multiView.appendChild(viewNode);
       tempPanel.appendChild(multiView);
       viewNode.classList.add("cui-widget-panelview", "PanelUI-subView");
+
+      // Set a role and name on the panel.
+      // If the panelview provides either data-panelrole or
+      // data-panelname, use it.
+      tempPanel.role = viewNode.dataset.panelrole || "group";
+      if (viewNode.dataset.panelname) {
+        tempPanel.ariaLabel = viewNode.dataset.panelname;
+      } else {
+        tempPanel.ariaLabelledByElements = [aAnchor];
+      }
 
       let viewShown = false;
       let panelRemover = event => {
@@ -783,6 +802,34 @@ const PanelUI = {
     }
 
     items.appendChild(fragment);
+
+    if (Services.prefs.getBoolPref("browser.nova.enabled", false)) {
+      let switchDeviceButton = items.querySelector("#appMenu_helpSwitchDevice");
+      if (switchDeviceButton) {
+        const HTML_NS = "http://www.w3.org/1999/xhtml";
+        let novaPromo = document.createElementNS(HTML_NS, "moz-promo");
+        novaPromo.id = "appMenu-nova-switch-device-promo";
+        novaPromo.setAttribute("type", "vibrant");
+        novaPromo.setAttribute(
+          "data-l10n-id",
+          "appmenu-nova-switch-device-promo"
+        );
+        novaPromo.setAttribute("data-l10n-attrs", "message");
+
+        let link = document.createElementNS(HTML_NS, "a");
+        link.id = "appMenu-nova-switch-device-link";
+        link.slot = "support-link";
+        link.href = "#";
+        link.setAttribute("data-l10n-id", "appmenu-nova-switch-device-link");
+        link.addEventListener("click", e => {
+          e.preventDefault();
+          openSwitchingDevicesPage();
+        });
+        novaPromo.appendChild(link);
+
+        switchDeviceButton.replaceWith(novaPromo);
+      }
+    }
   },
 
   _onHelpCommand(aEvent) {
@@ -946,7 +993,7 @@ const PanelUI = {
     if (
       (window.fullScreen && FullScreen.navToolboxHidden) ||
       document.fullscreenElement ||
-      this._shouldSuppress()
+      shouldSuppressPopupNotifications()
     ) {
       this._hidePopup();
       return;
@@ -1179,6 +1226,19 @@ const PanelUI = {
       this._panelBannerItem,
       messageIDs[notification.id]
     );
+
+    const isNovaUpdateRestart =
+      notification.id === "update-restart" &&
+      Services.prefs.getBoolPref("browser.nova.enabled", false);
+
+    if (isNovaUpdateRestart) {
+      this._panelBannerItem.setAttribute(
+        "aria-labelledby",
+        "appMenu-update-banner-title appMenu-update-banner-description"
+      );
+    } else {
+      this._panelBannerItem.removeAttribute("aria-labelledby");
+    }
 
     this._panelBannerItem.setAttribute("notificationid", notification.id);
     this._panelBannerItem.hidden = false;

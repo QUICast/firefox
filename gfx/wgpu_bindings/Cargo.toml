@@ -17,7 +17,7 @@ default = []
 [dependencies.wgc]
 package = "wgpu-core"
 git = "https://github.com/gfx-rs/wgpu"
-rev = "e4e2c451d2d4f7585820260a728f7a14eacdf415"
+rev = "48904f8e769a9b1ef146032a4fc94c53a1e02e00"
 features = ["serde", "trace", "strict_asserts", "wgsl", "api_log_info"]
 
 # We want the wgpu-core Metal backend on macOS and iOS.
@@ -25,33 +25,32 @@ features = ["serde", "trace", "strict_asserts", "wgsl", "api_log_info"]
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies.wgc]
 package = "wgpu-core"
 git = "https://github.com/gfx-rs/wgpu"
-rev = "e4e2c451d2d4f7585820260a728f7a14eacdf415"
+rev = "48904f8e769a9b1ef146032a4fc94c53a1e02e00"
 features = ["metal"]
 
 # We want the wgpu-core Direct3D backends on Windows.
 [target.'cfg(windows)'.dependencies.wgc]
 package = "wgpu-core"
 git = "https://github.com/gfx-rs/wgpu"
-rev = "e4e2c451d2d4f7585820260a728f7a14eacdf415"
+rev = "48904f8e769a9b1ef146032a4fc94c53a1e02e00"
 features = ["dx12"]
 
 # We want the wgpu-core Vulkan backend on Linux and Windows.
 [target.'cfg(any(windows, all(unix, not(any(target_os = "macos", target_os = "ios")))))'.dependencies.wgc]
 package = "wgpu-core"
 git = "https://github.com/gfx-rs/wgpu"
-rev = "e4e2c451d2d4f7585820260a728f7a14eacdf415"
+rev = "48904f8e769a9b1ef146032a4fc94c53a1e02e00"
 features = ["vulkan"]
 
 [dependencies.wgt]
 package = "wgpu-types"
 git = "https://github.com/gfx-rs/wgpu"
-rev = "e4e2c451d2d4f7585820260a728f7a14eacdf415"
+rev = "48904f8e769a9b1ef146032a4fc94c53a1e02e00"
 
 [dependencies.wgh]
 package = "wgpu-hal"
 git = "https://github.com/gfx-rs/wgpu"
-rev = "e4e2c451d2d4f7585820260a728f7a14eacdf415"
-features = ["device_lost_panic", "internal_error_panic"]
+rev = "48904f8e769a9b1ef146032a4fc94c53a1e02e00"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", default-features = false, features = [
@@ -80,6 +79,7 @@ bincode = "1"
 log = "0.4"
 parking_lot = "0.12"
 serde = "1"
+serde_json = "1"
 nsstring = { path = "../../xpcom/rust/nsstring" }
 static_prefs = { path = "../../modules/libpref/init/static_prefs" }
 arrayvec = "0.7"

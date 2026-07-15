@@ -4,32 +4,33 @@
 
 #include "mozilla/layers/WebRenderBridgeParent.h"
 
-#include "mozmemory.h"
 #include "CompositableHost.h"
-#include "gfxEnv.h"
-#include "gfxPlatform.h"
-#include "gfxOTSUtils.h"
-#include "GeckoProfiler.h"
 #include "GLContext.h"
 #include "GLContextProvider.h"
 #include "GLLibraryLoader.h"
-#include "nsExceptionHandler.h"
+#include "GeckoProfiler.h"
+#include "gfxEnv.h"
+#include "gfxOTSUtils.h"
+#include "gfxPlatform.h"
 #include "mozilla/CheckedInt.h"
-#include "mozilla/Range.h"
 #include "mozilla/EnumeratedRange.h"
+#include "mozilla/ProfilerMarkerTypes.h"
+#include "mozilla/Range.h"
 #include "mozilla/StaticPrefs_gfx.h"
 #include "mozilla/StaticPrefs_webgl.h"
+#include "mozilla/TimeStamp.h"
 #include "mozilla/UniquePtr.h"
-#include "mozilla/gfx/gfxVars.h"
 #include "mozilla/gfx/GPUParent.h"
+#include "mozilla/gfx/gfxVars.h"
 #include "mozilla/glean/GfxMetrics.h"
-#include "mozilla/layers/AnimationHelper.h"
 #include "mozilla/layers/APZSampler.h"
 #include "mozilla/layers/APZUpdater.h"
+#include "mozilla/layers/AnimationHelper.h"
+#include "mozilla/layers/AsyncImagePipelineManager.h"
 #include "mozilla/layers/Compositor.h"
+#include "mozilla/layers/CompositorAnimationStorage.h"
 #include "mozilla/layers/CompositorBridgeParent.h"
 #include "mozilla/layers/CompositorManagerParent.h"
-#include "mozilla/layers/CompositorAnimationStorage.h"
 #include "mozilla/layers/CompositorThread.h"
 #include "mozilla/layers/CompositorVsyncScheduler.h"
 #include "mozilla/layers/ContentCompositorBridgeParent.h"
@@ -40,15 +41,14 @@
 #include "mozilla/layers/RemoteTextureMap.h"
 #include "mozilla/layers/SharedSurfacesParent.h"
 #include "mozilla/layers/TextureHost.h"
-#include "mozilla/layers/AsyncImagePipelineManager.h"
 #include "mozilla/layers/UiCompositorControllerParent.h"
 #include "mozilla/layers/WebRenderImageHost.h"
 #include "mozilla/layers/WebRenderTextureHost.h"
-#include "mozilla/ProfilerMarkerTypes.h"
-#include "mozilla/TimeStamp.h"
 #include "mozilla/webrender/RenderTextureHostSWGL.h"
 #include "mozilla/webrender/RenderThread.h"
 #include "mozilla/widget/CompositorWidget.h"
+#include "mozmemory.h"
+#include "nsExceptionHandler.h"
 
 #ifdef XP_WIN
 #  include "mozilla/gfx/DeviceManagerDx.h"
@@ -342,7 +342,8 @@ WebRenderBridgeParent::WebRenderBridgeParent(
       mWidget(aWidget),
       mVsyncRate(aVsyncRate),
       mDestroyed(false),
-      mIsFirstPaint(true) {
+      mIsFirstPaint(true),
+      mIsRootWebRenderBridgeParent(!!aWidget) {
   LOG("WebRenderBridgeParent::WebRenderBridgeParent() PipelineId %" PRIx64
       " root %d",
       wr::AsUint64(mPipelineId), IsRootWebRenderBridgeParent());
@@ -366,7 +367,8 @@ WebRenderBridgeParent::WebRenderBridgeParent(
       })),
       mVsyncRate(aVsyncRate),
       mDestroyed(false),
-      mIsFirstPaint(true) {
+      mIsFirstPaint(true),
+      mIsRootWebRenderBridgeParent(false) {
   MOZ_ASSERT(mLateInit->mAsyncImageManager);
   LOG("WebRenderBridgeParent::WebRenderBridgeParent() PipelineId %" PRIx64
       " Id %" PRIx64 " root %d",
@@ -390,7 +392,8 @@ WebRenderBridgeParent::WebRenderBridgeParent(const wr::PipelineId& aPipelineId,
       })),
       mInitError(std::move(aError)),
       mDestroyed(true),
-      mIsFirstPaint(false) {
+      mIsFirstPaint(false),
+      mIsRootWebRenderBridgeParent(false) {
   LOG("WebRenderBridgeParent::WebRenderBridgeParent() PipelineId %" PRIx64 "",
       wr::AsUint64(mPipelineId));
 }
@@ -853,10 +856,10 @@ bool WebRenderBridgeParent::UpdateResources(
   if (scheduleRelease) {
     // When software WR is enabled, shared surfaces are read during rendering
     // rather than copied to the texture cache.
-    wr::Checkpoint when =
-        mLateInit->mApi->GetBackendType() == WebRenderBackend::SOFTWARE
-            ? wr::Checkpoint::FrameRendered
-            : wr::Checkpoint::FrameTexturesUpdated;
+    wr::Checkpoint when = mLateInit->mApi->GetCapabilities().mBackendType ==
+                                  WebRenderBackend::SOFTWARE
+                              ? wr::Checkpoint::FrameRendered
+                              : wr::Checkpoint::FrameTexturesUpdated;
     aUpdates.Notify(when, std::move(scheduleRelease));
   }
 
@@ -898,14 +901,18 @@ bool WebRenderBridgeParent::AddSharedExternalImage(
   // Prefer raw buffers, unless our backend requires native textures.
   IntSize surfaceSize = dSurf->GetSize();
   TextureHost::NativeTexturePolicy policy =
-      TextureHost::BackendNativeTexturePolicy(mLateInit->mApi->GetBackendType(),
-                                              surfaceSize);
+      TextureHost::BackendNativeTexturePolicy(
+          mLateInit->mApi->GetCapabilities().mBackendType, surfaceSize);
   auto imageType =
       policy == TextureHost::NativeTexturePolicy::REQUIRE
           ? wr::ExternalImageType::TextureHandle(wr::ImageBufferKind::Texture2D)
           : wr::ExternalImageType::Buffer();
-  wr::ImageDescriptor descriptor(surfaceSize, dSurf->Stride(),
-                                 dSurf->GetFormat());
+  auto format = wr::SurfaceFormatToImageFormat(dSurf->GetFormat());
+  if (NS_WARN_IF(!format)) {
+    return false;
+  }
+  wr::ImageDescriptor descriptor(surfaceSize, dSurf->Stride(), *format,
+                                 wr::ToOpacityType(dSurf->GetFormat()));
   aResources.AddExternalImage(aKey, descriptor, aExtId, imageType, 0);
   return true;
 }
@@ -966,7 +973,13 @@ bool WebRenderBridgeParent::PushExternalImageForTexture(
   }
 
   IntSize size = dSurf->GetSize();
-  wr::ImageDescriptor descriptor(size, map.mStride, dSurf->GetFormat());
+  auto format = wr::SurfaceFormatToImageFormat(dSurf->GetFormat());
+  if (NS_WARN_IF(!format)) {
+    dSurf->Unmap();
+    return false;
+  }
+  wr::ImageDescriptor descriptor(size, map.mStride, *format,
+                                 wr::ToOpacityType(dSurf->GetFormat()));
   wr::Vec<uint8_t> data;
   data.PushBytes(Range<uint8_t>(map.mData, size.height * map.mStride));
 
@@ -988,6 +1001,12 @@ bool WebRenderBridgeParent::UpdateSharedExternalImage(
   if (!MatchesNamespace(aKey)) {
     MOZ_ASSERT_UNREACHABLE("Stale shared external image key (update)!");
     return true;
+  }
+
+  if (!GetCompositorBridge()->GetCompositorManager()->OwnsExternalImageId(
+          aExtId)) {
+    gfxCriticalNote << "We do not own extId:" << wr::AsUint64(aExtId);
+    return false;
   }
 
   auto key = wr::AsUint64(aKey);
@@ -1024,14 +1043,18 @@ bool WebRenderBridgeParent::UpdateSharedExternalImage(
   // Prefer raw buffers, unless our backend requires native textures.
   IntSize surfaceSize = dSurf->GetSize();
   TextureHost::NativeTexturePolicy policy =
-      TextureHost::BackendNativeTexturePolicy(mLateInit->mApi->GetBackendType(),
-                                              surfaceSize);
+      TextureHost::BackendNativeTexturePolicy(
+          mLateInit->mApi->GetCapabilities().mBackendType, surfaceSize);
   auto imageType =
       policy == TextureHost::NativeTexturePolicy::REQUIRE
           ? wr::ExternalImageType::TextureHandle(wr::ImageBufferKind::Texture2D)
           : wr::ExternalImageType::Buffer();
-  wr::ImageDescriptor descriptor(surfaceSize, dSurf->Stride(),
-                                 dSurf->GetFormat());
+  auto format = wr::SurfaceFormatToImageFormat(dSurf->GetFormat());
+  if (NS_WARN_IF(!format)) {
+    return false;
+  }
+  wr::ImageDescriptor descriptor(surfaceSize, dSurf->Stride(), *format,
+                                 wr::ToOpacityType(dSurf->GetFormat()));
   aResources.UpdateExternalImageWithDirtyRect(
       aKey, descriptor, aExtId, imageType, wr::ToDeviceIntRect(aDirtyRect), 0,
       /* aNormalizedUvs */ false);
@@ -1139,7 +1162,7 @@ void WebRenderBridgeParent::RemoveEpochDataPriorTo(
 }
 
 bool WebRenderBridgeParent::IsRootWebRenderBridgeParent() const {
-  return !!mWidget;
+  return mIsRootWebRenderBridgeParent;
 }
 
 void WebRenderBridgeParent::BeginRecording(const TimeStamp& aRecordingStart) {
@@ -1904,8 +1927,8 @@ void WebRenderBridgeParent::UpdateBoolParameters() {
 
 #if defined(MOZ_WIDGET_ANDROID)
 RefPtr<WebRenderBridgeParent::ScreenPixelsPromise>
-WebRenderBridgeParent::RequestScreenPixels(gfx::IntRect aSourceRect,
-                                           gfx::IntSize aDestSize) {
+WebRenderBridgeParent::RequestScreenPixels(
+    gfx::IntRect aSourceRect, RefPtr<AndroidHardwareBuffer> aHardwareBuffer) {
   if (mDestroyed) {
     return ScreenPixelsPromise::CreateAndReject(NS_ERROR_ABORT, __func__);
   }
@@ -1921,7 +1944,7 @@ WebRenderBridgeParent::RequestScreenPixels(gfx::IntRect aSourceRect,
   }
   mScreenPixelsRequest.emplace(ScreenPixelsRequest{
       .mSourceRect = aSourceRect,
-      .mDestSize = aDestSize,
+      .mHardwareBuffer = std::move(aHardwareBuffer),
       .mPromise = new ScreenPixelsPromise::Private(__func__),
   });
   return mScreenPixelsRequest->mPromise;
@@ -1941,7 +1964,9 @@ void WebRenderBridgeParent::MaybeCaptureScreenPixels() {
   MOZ_ASSERT(cbp && !cbp->IsPaused());
 #  endif
 
-  mLateInit->mApi->RequestScreenPixels(request.mSourceRect, request.mDestSize)
+  mLateInit->mApi
+      ->RequestScreenPixels(request.mSourceRect,
+                            std::move(request.mHardwareBuffer))
       ->ChainTo(request.mPromise.forget(), __func__);
 }
 #endif
@@ -3103,11 +3128,12 @@ TextureFactoryIdentifier WebRenderBridgeParent::GetTextureFactoryIdentifier() {
   const bool supportsD3D11NV12 = false;
 #endif
 
+  const auto& capabilities = mLateInit->mApi->GetCapabilities();
   TextureFactoryIdentifier ident(
-      mLateInit->mApi->GetBackendType(), mLateInit->mApi->GetCompositorType(),
-      XRE_GetProcessType(), mLateInit->mApi->GetMaxTextureSize(),
-      mLateInit->mApi->GetUseANGLE(), mLateInit->mApi->GetUseDComp(),
-      mLateInit->mApi->GetUseLayerCompositor(),
+      capabilities.mBackendType, capabilities.mCompositorType,
+      XRE_GetProcessType(), capabilities.mMaxTextureSize,
+      capabilities.mUseANGLE, capabilities.mUseDComp,
+      capabilities.mUseLayerCompositor,
       mLateInit->mAsyncImageManager->UseCompositorWnd(), false, false, false,
       supportsD3D11NV12, mLateInit->mApi->GetSyncHandle());
   return ident;

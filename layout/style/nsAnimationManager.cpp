@@ -82,9 +82,11 @@ class MOZ_STACK_CLASS ServoCSSAnimationBuilder final {
   bool BuildKeyframes(const Element& aElement, nsPresContext* aPresContext,
                       nsAtom* aName,
                       const StyleComputedTimingFunction& aTimingFunction,
+                      const StyleAnimationComposition aComposition,
                       nsTArray<Keyframe>& aKeyframes) {
     return aPresContext->StyleSet()->GetKeyframesForName(
-        aElement, *mComputedStyle, aName, aTimingFunction, aKeyframes);
+        aElement, *mComputedStyle, aName, aTimingFunction, aComposition,
+        aKeyframes);
   }
   void SetKeyframes(KeyframeEffect& aEffect, nsTArray<Keyframe>&& aKeyframes,
                     const dom::AnimationTimeline* aTimeline,
@@ -231,8 +233,9 @@ static void UpdateOldAnimationPropertiesWithNew(
   // the scroll-timeline object if their scrollers and axes are the same.
   if (aOld.GetTimeline() != aTimeline) {
     // See `UpdateNamedTimelineAnimation` as to why `SetTimeline` isn't used.
-    aOld.SetTimelineNoUpdate(aTimeline, aTimelineName);
-    animationChanged = true;
+    animationChanged =
+        animationChanged || aOld.SetTimelineNoUpdate(aTimeline, aTimelineName,
+                                                     Animation::FromJS::No);
   }
 
   if (aOld.GetTimelineRange() != aTimelineRange) {
@@ -371,6 +374,7 @@ static already_AddRefed<CSSAnimation> BuildAnimation(
   nsTArray<Keyframe> keyframes;
   if (!aBuilder.BuildKeyframes(*aTarget.mElement, aPresContext, animationName,
                                aStyle.GetAnimationTimingFunction(animIdx),
+                               aStyle.GetAnimationComposition(animIdx),
                                keyframes)) {
     return nullptr;
   }
@@ -442,7 +446,7 @@ static already_AddRefed<CSSAnimation> BuildAnimation(
   animation->SetOwningElement(
       OwningElementRef(*aTarget.mElement, aTarget.mPseudoRequest));
 
-  animation->SetTimelineNoUpdate(timeline, timelineName);
+  animation->SetTimelineNoUpdate(timeline, timelineName, Animation::FromJS::No);
   animation->SetEffectNoUpdate(effect);
   animation->SetTimelineRangeNoUpdate(std::move(range));
 
@@ -532,9 +536,19 @@ void nsAnimationManager::RemoveNamedTimelineAnimation(
   RemoveCorrespondingAnimation(aName, aAnimation, mAnimationsWithNamedTimeline);
 }
 
-static void UpdateNamedTimelineAnimation(dom::Document* aDocument,
-                                         CSSAnimation* aAnimation,
-                                         const nsAtom* aTimelineName) {
+/**
+ * Try to update the named timeline associated with this animation.
+ * If such named timeline is not found, and if deferring is allowed,
+ * by passing a Some() aAnimationsWithDeferredUpdate, the animation
+ * is added to the provided hashset, to be updated once a frame.
+ * This follows the spec resolution made in
+ * https://github.com/w3c/csswg-drafts/issues/13963.
+ */
+static void UpdateNamedTimelineAnimation(
+    dom::Document* aDocument, CSSAnimation* aAnimation,
+    const nsAtom* aTimelineName,
+    Maybe<nsTHashSet<RefPtr<mozilla::dom::CSSAnimation>>&>
+        aAnimationsWithDeferredUpdate) {
   if (aTimelineName != aAnimation->GetTimelineName()) {
     return;
   }
@@ -545,10 +559,19 @@ static void UpdateNamedTimelineAnimation(dom::Document* aDocument,
   if (oldTimeline == newTimeline) {
     return;
   }
+  if (aAnimationsWithDeferredUpdate &&
+      (!newTimeline || newTimeline->IsInactiveTimeline())) {
+    // We know this animation is looking for a named animation - but it does not
+    // exist. One may become available later, so defer setting the new timeline
+    // (There may be more incoming changes).
+    aAnimationsWithDeferredUpdate->Insert(aAnimation);
+    return;
+  }
   // No need to call `SetTimeline` and force compositor animation update -
   // timeline changing shouldn't cause change in animation state or playback
   // rate.
-  aAnimation->SetTimelineNoUpdate(newTimeline, aTimelineName);
+  aAnimation->SetTimelineNoUpdate(newTimeline, aTimelineName,
+                                  Animation::FromJS::No);
 }
 
 #ifdef DEBUG
@@ -570,7 +593,8 @@ void nsAnimationManager::UpdateNamedTimelineAnimations(
       continue;
     }
     for (auto& animation : *entries) {
-      UpdateNamedTimelineAnimation(document, animation.get(), name.get());
+      UpdateNamedTimelineAnimation(document, animation.get(), name.get(),
+                                   SomeRef(mAnimationsWithDeferredUpdate));
     }
   }
 #ifdef DEBUG
@@ -583,9 +607,30 @@ void nsAnimationManager::UpdateAllNamedTimelineAnimations() {
   for (auto& entry : mAnimationsWithNamedTimeline) {
     const auto& name = entry.GetKey();
     for (auto& animation : entry.GetData()) {
-      UpdateNamedTimelineAnimation(document, animation.get(), name);
+      UpdateNamedTimelineAnimation(document, animation.get(), name,
+                                   SomeRef(mAnimationsWithDeferredUpdate));
     }
   }
+#ifdef DEBUG
+  CheckNamedTimelineMap(mAnimationsWithNamedTimeline);
+#endif
+}
+
+void nsAnimationManager::UpdateDeferredTimelineChanges() {
+  if (mAnimationsWithDeferredUpdate.IsEmpty()) {
+    return;
+  }
+  auto* document = mPresContext->Document();
+  for (auto* animation : mAnimationsWithDeferredUpdate) {
+    if (!animation->GetTimelineName()) {
+      // May have switched to e.g. a document timeline.
+      // That's ok, just skip it.
+      continue;
+    }
+    UpdateNamedTimelineAnimation(document, animation,
+                                 animation->GetTimelineName(), Nothing{});
+  }
+  mAnimationsWithDeferredUpdate.Clear();
 #ifdef DEBUG
   CheckNamedTimelineMap(mAnimationsWithNamedTimeline);
 #endif

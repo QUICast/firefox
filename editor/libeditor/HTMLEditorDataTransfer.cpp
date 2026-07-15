@@ -282,6 +282,9 @@ nsresult HTMLEditor::InsertHTMLAsAction(const nsAString& aInString,
   if (IsReadonly()) {
     return NS_OK;
   }
+  if (ComputeEditContext()) {
+    return NS_SUCCESS_DOM_NO_OPERATION;
+  }
 
   AutoEditActionDataSetter editActionData(*this, EditAction::eInsertHTML,
                                           aPrincipal);
@@ -1699,7 +1702,7 @@ nsresult HTMLEditor::ParseCFHTML(const nsCString& aCfhtml,
     return NS_ERROR_FAILURE;
   }
   if (!FindIntegerAfterString("EndFragment:", aCfhtml, endFragment) ||
-      startFragment < 0) {
+      endFragment < 0) {
     return NS_ERROR_FAILURE;
   }
 
@@ -4012,8 +4015,8 @@ bool HTMLEditor::HTMLWithContextInserter::FragmentFromPasteCreator::
   return false;
 }
 
-class MOZ_STACK_CLASS HTMLEditor::HTMLWithContextInserter::FragmentParser
-    final {
+class MOZ_STACK_CLASS
+HTMLEditor::HTMLWithContextInserter::FragmentParser final {
  public:
   FragmentParser(const Document& aDocument, SafeToInsertData aSafeToInsertData);
 

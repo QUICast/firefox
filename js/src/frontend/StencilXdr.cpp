@@ -599,9 +599,7 @@ template <XDRMode mode>
   MOZ_TRY(xdr->codeUint32(stencil.specifier.rawDataRef()));
   MOZ_TRY(xdr->codeUint32(stencil.firstUnsupportedAttributeKey.rawDataRef()));
   MOZ_TRY(XDRVectorContent(xdr, stencil.attributes));
-#ifdef ENABLE_SOURCE_PHASE_IMPORTS
-  MOZ_TRY(xdr->codeUint8(reinterpret_cast<uint8_t*>(&stencil.phase)));
-#endif
+  MOZ_TRY(xdr->codeEnumU8(&stencil.phase));
 
   return Ok();
 }
@@ -625,6 +623,7 @@ template <XDRMode mode>
   MOZ_TRY(xdr->codeUint32(stencil.localName.rawDataRef()));
   MOZ_TRY(xdr->codeUint32(stencil.importName.rawDataRef()));
   MOZ_TRY(xdr->codeUint32(stencil.exportName.rawDataRef()));
+  MOZ_TRY(xdr->codeEnumU8(&stencil.importNameValueType));
   MOZ_TRY(xdr->codeUint32(&stencil.lineno));
   MOZ_TRY(xdr->codeUint32(stencil.column.addressOfValueForTranscode()));
 
@@ -782,8 +781,6 @@ static XDRResult CodeMarker(XDRState<mode>* xdr, SectionMarker marker) {
 template <XDRMode mode>
 /* static */ XDRResult StencilXDR::codeCompilationStencil(
     XDRState<mode>* xdr, CompilationStencil& stencil) {
-  MOZ_ASSERT(!stencil.hasAsmJS());
-
   if constexpr (mode == XDR_DECODE) {
     const auto& options = static_cast<XDRStencilDecoder*>(xdr)->options();
     if (options.borrowBuffer) {
@@ -1627,18 +1624,10 @@ template /* static */ XDRResult StencilXDR::codeCompilationStencil(
 
 /* static */ XDRResult StencilXDR::checkCompilationStencil(
     XDRStencilEncoder* encoder, const CompilationStencil& stencil) {
-  if (stencil.hasAsmJS()) {
-    return encoder->fail(JS::TranscodeResult::Failure_AsmJSNotSupported);
-  }
-
   return Ok();
 }
 
 /* static */ XDRResult StencilXDR::checkCompilationStencil(
     const ExtensibleCompilationStencil& stencil) {
-  if (stencil.hasAsmJS()) {
-    return mozilla::Err(JS::TranscodeResult::Failure_AsmJSNotSupported);
-  }
-
   return Ok();
 }

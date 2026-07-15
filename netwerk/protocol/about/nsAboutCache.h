@@ -5,16 +5,14 @@
 #ifndef nsAboutCache_h_
 #define nsAboutCache_h_
 
-#include "nsIAboutModule.h"
-#include "nsICacheStorageVisitor.h"
-#include "nsICacheStorage.h"
-
-#include "nsString.h"
-#include "nsIChannel.h"
-#include "nsIOutputStream.h"
-#include "nsILoadContextInfo.h"
-
 #include "nsCOMPtr.h"
+#include "nsIAboutModule.h"
+#include "nsICacheStorage.h"
+#include "nsICacheStorageVisitor.h"
+#include "nsIChannel.h"
+#include "nsILoadContextInfo.h"
+#include "nsIOutputStream.h"
+#include "nsString.h"
 #include "nsTArray.h"
 
 #define NS_FORWARD_SAFE_NSICHANNEL_SUBSET(_to)                                 \
@@ -111,7 +109,17 @@
   }                                                                            \
   NS_IMETHOD GetCanceled(bool* aCanceled) override {                           \
     return !(_to) ? NS_ERROR_NULL_POINTER : (_to)->GetCanceled(aCanceled);     \
-  };
+  }                                                                            \
+  NS_IMETHOD GetParentProcessChannelHandle(                                    \
+      mozilla::dom::ParentProcessChannelHandle** aValue) override {            \
+    return !(_to) ? NS_ERROR_NULL_POINTER                                      \
+                  : (_to)->GetParentProcessChannelHandle(aValue);              \
+  }                                                                            \
+  NS_IMETHOD SetParentProcessChannelHandle(                                    \
+      mozilla::dom::ParentProcessChannelHandle* aValue) override {             \
+    return !(_to) ? NS_ERROR_NULL_POINTER                                      \
+                  : (_to)->SetParentProcessChannelHandle(aValue);              \
+  }
 
 class nsAboutCache final : public nsIAboutModule {
  public:

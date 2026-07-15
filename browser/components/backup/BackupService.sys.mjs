@@ -46,6 +46,8 @@ const RESTORED_BACKUP_METADATA_PREF_NAME =
 const SANITIZE_ON_SHUTDOWN_PREF_NAME = "privacy.sanitize.sanitizeOnShutdown";
 const BACKUP_ENABLED_ON_PROFILES_PREF_NAME =
   "browser.backup.enabled_on.profiles";
+const SQLITE_ENCRYPTION_ENABLED_PREF_NAME =
+  "security.storage.encryption.sqlite.enabled";
 
 const SCHEMAS = Object.freeze({
   BACKUP_MANIFEST: 1,
@@ -705,6 +707,19 @@ export class BackupService extends EventTarget {
    * @type {EnabledStatus}
    */
   get archiveEnabledStatus() {
+    // Backup is unsupported while SQLite at-rest encryption is on: staged
+    // database copies are written as ciphertext whose keys live only in this
+    // profile's lockstore, so the archive cannot be restored elsewhere.
+    if (
+      Services.prefs.getBoolPref(SQLITE_ENCRYPTION_ENABLED_PREF_NAME, false)
+    ) {
+      return {
+        enabled: false,
+        reason: "Archiving a profile disabled while SQLite encryption is on.",
+        internalReason: "sqlite-encryption",
+      };
+    }
+
     // Check if disabled by Nimbus killswitch.
     const archiveKillswitchTriggered =
       lazy.NimbusFeatures.backupService.getVariable("archiveKillswitch");
@@ -744,6 +759,19 @@ export class BackupService extends EventTarget {
    * @type {EnabledStatus}
    */
   get restoreEnabledStatus() {
+    // Restoring into an instance with SQLite at-rest encryption on would copy
+    // plaintext database files that obfsvfs then rejects fail-closed, leaving a
+    // broken profile, so restore is disabled while encryption is on.
+    if (
+      Services.prefs.getBoolPref(SQLITE_ENCRYPTION_ENABLED_PREF_NAME, false)
+    ) {
+      return {
+        enabled: false,
+        reason: "Restoring a profile disabled while SQLite encryption is on.",
+        internalReason: "sqlite-encryption",
+      };
+    }
+
     // Check if disabled by Nimbus killswitch.
     const restoreKillswitchTriggered =
       lazy.NimbusFeatures.backupService.getVariable("restoreKillswitch");
@@ -1276,6 +1304,27 @@ export class BackupService extends EventTarget {
       );
     }
     return null;
+  }
+
+  /**
+   * Probes whether read access to a backup parent directory is available.
+   *
+   * @param {string} [path=BackupService.DEFAULT_PARENT_DIR_PATH]
+   *   The directory path to probe.
+   * @returns {Promise<boolean>}
+   *   Resolves to true if the directory contents could be listed,
+   *   false otherwise.
+   */
+  async probeDefaultDirAccess(path = BackupService.DEFAULT_PARENT_DIR_PATH) {
+    if (!path) {
+      return false;
+    }
+    try {
+      await IOUtils.getChildren(path);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -1875,6 +1924,11 @@ export class BackupService extends EventTarget {
             location: this.classifyLocationForTelemetry(archiveDestFolderPath),
             size: archiveSizeBytesNearestMebibyte,
           });
+
+          // It's possible that our profile was initially a legacy profile, but somewhere
+          // sometime got converted to a selectable one - lets start tracking its backup state
+          // in the group.
+          BackupService.maybeAddToEnabledListPref();
 
           // we should reset any values that were set for retry error handling
           Services.prefs.clearUserPref(DISABLED_ON_IDLE_RETRY_PREF_NAME);
@@ -4283,11 +4337,7 @@ export class BackupService extends EventTarget {
       // flush the embedded component's persistent data
       this.setEmbeddedComponentPersistentData({});
 
-      if (lazy.SelectableProfileService.currentProfile) {
-        BackupService.addToEnabledListPref(
-          lazy.SelectableProfileService.currentProfile.id
-        );
-      }
+      BackupService.maybeAddToEnabledListPref();
     } else {
       // set user-disabled pref if backup is being disabled
       Services.prefs.setBoolPref(
@@ -4295,11 +4345,7 @@ export class BackupService extends EventTarget {
         true
       );
 
-      if (lazy.SelectableProfileService.currentProfile) {
-        BackupService.removeFromEnabledListPref(
-          lazy.SelectableProfileService.currentProfile.id
-        );
-      }
+      BackupService.maybeRemoveFromEnabledListPref();
     }
   }
 
@@ -5297,30 +5343,48 @@ export class BackupService extends EventTarget {
       // During the first startup, the browser's backup location is often left
       // unconfigured; therefore, it defaults to predefined locations to look
       // for existing backup files.
-      let backupPaths = [];
+      let backupPaths = new Set();
 
       if (this.#_state.backupDirPath) {
-        backupPaths.push(this.#_state.backupDirPath);
+        backupPaths.add(this.#_state.backupDirPath);
       }
 
-      // Filter out null paths (with Boolean) and append the backup dir name
-      backupPaths.push(
-        ...[
-          BackupService.docsDirFolderPath?.path,
-          BackupService.oneDriveFolderPath?.path,
-        ]
-          .filter(Boolean)
-          .map(backupPath =>
-            PathUtils.join(backupPath, BackupService.BACKUP_DIR_NAME)
-          )
-      );
+      for (let dirPath of [
+        BackupService.docsDirFolderPath?.path,
+        BackupService.oneDriveFolderPath?.path,
+      ]) {
+        if (dirPath) {
+          backupPaths.add(
+            PathUtils.join(dirPath, BackupService.BACKUP_DIR_NAME)
+          );
+        }
+      }
 
       let files = [];
+      let anyPathSucceeded = false;
 
       for (let backupPath of backupPaths) {
-        files.push(
-          ...(await IOUtils.getChildren(backupPath, { ignoreAbsent: true }))
-        );
+        try {
+          files.push(
+            ...(await IOUtils.getChildren(backupPath, { ignoreAbsent: true }))
+          );
+          anyPathSucceeded = true;
+        } catch (e) {
+          lazy.logConsole.error(
+            "Could not read backup directory: ",
+            backupPath,
+            e
+          );
+        }
+      }
+
+      if (!anyPathSucceeded && backupPaths.size) {
+        // Since we don't have access to any directory, let's not mistakenly
+        // let the user see a state where they can restore from.
+        this.#_state.backupFileToRestore = null;
+        this.#_state.backupFileInfo = null;
+        this.stateUpdate();
+        return { multipleBackupsFound: false, count: 0 };
       }
 
       // filtering is an O(N) operation, we can return early if there's too many files
@@ -5431,9 +5495,9 @@ export class BackupService extends EventTarget {
    *   in the internal state prior to searching.
    *
    * @param {object} [options] - Configuration options.
-   * @param {boolean} [options.validateFile=false] - Whether to validate each backup file
+   * @param {boolean} [options.validateFile=true] - Whether to validate each backup file
    *   before selecting it.
-   * @param {boolean} [options.multipleFiles=false] - Whether to allow selecting a file
+   * @param {boolean} [options.multipleFiles=true] - Whether to allow selecting a file
    *   when multiple files are found
    * @param {string} [options.source] - If provided, records a
    *   backup_detection_complete telemetry event with this value as the source
@@ -5445,8 +5509,8 @@ export class BackupService extends EventTarget {
    * - {boolean} multipleBackupsFound — Currently always `false`, reserved for future use.
    */
   async findBackupsInWellKnownLocations({
-    validateFile = false,
-    multipleFiles = false,
+    validateFile = true,
+    multipleFiles = true,
     source = null,
   } = {}) {
     this.#_state.backupFileToRestore = null;
@@ -5584,7 +5648,16 @@ export class BackupService extends EventTarget {
     return exists;
   }
 
-  static addToEnabledListPref(profileID) {
+  /**
+   * Adds a profile to the list of profiles with backup enabled. No-op if
+   * there is no current selectable profile. Defaults to the current profile's
+   * ID if none is provided.
+   *
+   * @param {string} [profileID]
+   */
+  static maybeAddToEnabledListPref(
+    profileID = lazy.SelectableProfileService.currentProfile?.id
+  ) {
     if (!lazy.SelectableProfileService.currentProfile) {
       lazy.logConsole.warn(
         "The enabled pref is only to be used for selectable profiles"
@@ -5604,7 +5677,16 @@ export class BackupService extends EventTarget {
     );
   }
 
-  static async removeFromEnabledListPref(profileID) {
+  /**
+   * Removes a profile from the list of profiles with backup enabled. No-op
+   * if there is no current selectable profile. Defaults to the current
+   * profile's ID if none is provided.
+   *
+   * @param {string} [profileID]
+   */
+  static async maybeRemoveFromEnabledListPref(
+    profileID = lazy.SelectableProfileService.currentProfile?.id
+  ) {
     if (!lazy.SelectableProfileService.currentProfile) {
       lazy.logConsole.warn(
         "The enabled pref is only to be used for selectable profiles"

@@ -7,7 +7,6 @@
 #ifndef jsapi_h
 #define jsapi_h
 
-#include "mozilla/FloatingPoint.h"
 #include "mozilla/Maybe.h"
 #include "mozilla/TimeStamp.h"
 #include "mozilla/Variant.h"
@@ -81,17 +80,6 @@ using ScriptVector = JS::GCVector<JSScript*>;
 using StringVector = JS::GCVector<JSString*>;
 
 } /* namespace JS */
-
-/************************************************************************/
-
-static MOZ_ALWAYS_INLINE JS::Value JS_NumberValue(double d) {
-  int32_t i;
-  d = JS::CanonicalizeNaN(d);
-  if (mozilla::NumberIsInt32(d, &i)) {
-    return JS::Int32Value(i);
-  }
-  return JS::DoubleValue(d);
-}
 
 /************************************************************************/
 

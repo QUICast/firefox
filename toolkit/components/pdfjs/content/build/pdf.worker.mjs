@@ -21,8 +21,8 @@
  */
 
 /**
- * pdfjsVersion = 6.0.243
- * pdfjsBuild = b43ef1c74
+ * pdfjsVersion = 6.1.310
+ * pdfjsBuild = accfa9a16
  */
 
 ;// ./src/shared/util.js
@@ -138,11 +138,19 @@ const AnnotationType = {
   TRAPNET: 23,
   WATERMARK: 24,
   THREED: 25,
-  REDACT: 26
+  REDACT: 26,
+  RICHMEDIA: 27
 };
 const AnnotationReplyType = {
   GROUP: "Group",
   REPLY: "R"
+};
+const AnnotationRenditionOperation = {
+  PLAY_OR_RESUME: 0,
+  STOP: 1,
+  PAUSE: 2,
+  RESUME: 3,
+  PLAY: 4
 };
 const AnnotationFlag = {
   INVISIBLE: 0x01,
@@ -517,6 +525,9 @@ class FeatureTest {
   }
   static get isAlphaColorInputSupported() {
     return shadow(this, "isAlphaColorInputSupported", false);
+  }
+  static get isBackdropFilterSupported() {
+    return shadow(this, "isBackdropFilterSupported", typeof CSS !== "undefined" && CSS.supports("backdrop-filter", "blur(1px)"));
   }
 }
 class Util {
@@ -921,11 +932,8 @@ class Dict {
         continue;
       }
       for (const [key, value] of dict.getRawEntries()) {
-        let property = properties.get(key);
-        if (property === undefined) {
-          property = [];
-          properties.set(key, property);
-        } else if (!mergeSubDicts || !(value instanceof Dict)) {
+        const property = properties.getOrInsertComputed(key, makeArr);
+        if (property.length && !(mergeSubDicts && value instanceof Dict)) {
           continue;
         }
         property.push(value);
@@ -1433,7 +1441,7 @@ function escapePDFName(str) {
       if (start < i) {
         buffer.push(str.substring(start, i));
       }
-      buffer.push(`#${char.toString(16)}`);
+      buffer.push(`#${char.toString(16).padStart(2, "0")}`);
       start = i + 1;
     }
   }
@@ -1441,7 +1449,7 @@ function escapePDFName(str) {
     return str;
   }
   if (start < str.length) {
-    buffer.push(str.substring(start, str.length));
+    buffer.push(str.substring(start));
   }
   return buffer.join("");
 }
@@ -1565,7 +1573,7 @@ function encodeToXmlString(str) {
         buffer.push(str.substring(start, i));
       }
       buffer.push(`&#x${char.toString(16).toUpperCase()};`);
-      if (char > 0xd7ff && (char < 0xe000 || char > 0xfffd)) {
+      if (char > 0xffff) {
         i++;
       }
       start = i + 1;
@@ -1575,7 +1583,7 @@ function encodeToXmlString(str) {
     return str;
   }
   if (start < str.length) {
-    buffer.push(str.substring(start, str.length));
+    buffer.push(str.substring(start));
   }
   return buffer.join("");
 }
@@ -2805,19 +2813,10 @@ class Stream extends BaseStream {
     return this.bytes[this.pos++];
   }
   getBytes(length) {
-    const bytes = this.bytes;
     const pos = this.pos;
-    const strEnd = this.end;
-    if (!length) {
-      this.pos = strEnd;
-      return bytes.subarray(pos, strEnd);
-    }
-    let end = pos + length;
-    if (end > strEnd) {
-      end = strEnd;
-    }
-    this.pos = end;
-    return bytes.subarray(pos, end);
+    const endPos = !length ? this.end : Math.min(pos + length, this.end);
+    this.pos = endPos;
+    return this.bytes.subarray(pos, endPos);
   }
   getByteRange(begin, end) {
     if (begin < 0) {
@@ -2967,25 +2966,13 @@ class ChunkedStream extends Stream {
     return this.bytes[this.pos++];
   }
   getBytes(length) {
-    const bytes = this.bytes;
     const pos = this.pos;
-    const strEnd = this.end;
-    if (!length) {
-      if (strEnd > this.progressiveDataLength) {
-        this.ensureRange(pos, strEnd);
-      }
-      this.pos = strEnd;
-      return bytes.subarray(pos, strEnd);
+    const endPos = !length ? this.end : Math.min(pos + length, this.end);
+    if (endPos > this.progressiveDataLength) {
+      this.ensureRange(pos, endPos);
     }
-    let end = pos + length;
-    if (end > strEnd) {
-      end = strEnd;
-    }
-    if (end > this.progressiveDataLength) {
-      this.ensureRange(pos, end);
-    }
-    this.pos = end;
-    return bytes.subarray(pos, end);
+    this.pos = endPos;
+    return this.bytes.subarray(pos, endPos);
   }
   getByteRange(begin, end) {
     if (begin < 0) {
@@ -3041,10 +3028,10 @@ class ChunkedStream extends Stream {
   }
 }
 class ChunkedStreamManager {
-  aborted = false;
+  #aborted = false;
   currRequestId = 0;
   _chunksNeededByRequest = new Map();
-  _loadedStreamCapability = Promise.withResolvers();
+  #loadedStreamCapability = Promise.withResolvers();
   _promisesByRequest = new Map();
   _requestsByChunk = new Map();
   constructor(pdfStream, args) {
@@ -3063,7 +3050,7 @@ class ChunkedStreamManager {
         value,
         done
       } = await rangeReader.read();
-      if (this.aborted) {
+      if (this.#aborted) {
         chunks = null;
         return;
       }
@@ -3087,7 +3074,7 @@ class ChunkedStreamManager {
       const missingChunks = this.stream.getMissingChunks();
       this._requestChunks(missingChunks);
     }
-    return this._loadedStreamCapability.promise;
+    return this.#loadedStreamCapability.promise;
   }
   _requestChunks(chunks) {
     const requestId = this.currRequestId++;
@@ -3105,12 +3092,10 @@ class ChunkedStreamManager {
     this._promisesByRequest.set(requestId, capability);
     const chunksToRequest = [];
     for (const chunk of chunksNeeded) {
-      let requestIds = this._requestsByChunk.get(chunk);
-      if (!requestIds) {
-        requestIds = [];
-        this._requestsByChunk.set(chunk, requestIds);
+      const requestIds = this._requestsByChunk.getOrInsertComputed(chunk, () => {
         chunksToRequest.push(chunk);
-      }
+        return [];
+      });
       requestIds.push(requestId);
     }
     if (chunksToRequest.length > 0) {
@@ -3122,7 +3107,7 @@ class ChunkedStreamManager {
       }
     }
     return capability.promise.catch(reason => {
-      if (this.aborted) {
+      if (this.#aborted) {
         return;
       }
       throw reason;
@@ -3199,7 +3184,7 @@ class ChunkedStreamManager {
       stream.onReceiveData(begin, chunk);
     }
     if (stream.isDataLoaded) {
-      this._loadedStreamCapability.resolve(stream);
+      this.#loadedStreamCapability.resolve(stream);
     }
     const loadedRequests = [];
     for (let curChunk = beginChunk; curChunk < endChunk; ++curChunk) {
@@ -3243,9 +3228,6 @@ class ChunkedStreamManager {
       total: length
     });
   }
-  onError(err) {
-    this._loadedStreamCapability.reject(err);
-  }
   getBeginChunk(begin) {
     return Math.floor(begin / this.chunkSize);
   }
@@ -3253,11 +3235,12 @@ class ChunkedStreamManager {
     return Math.floor((end - 1) / this.chunkSize) + 1;
   }
   abort(reason) {
-    this.aborted = true;
+    this.#aborted = true;
     this.pdfStream?.cancelAllRequests(reason);
     for (const capability of this._promisesByRequest.values()) {
       capability.reject(reason);
     }
+    this.#loadedStreamCapability.reject(reason);
   }
 }
 
@@ -4121,9 +4104,7 @@ class ColorSpaceUtils {
           break;
         case "Pattern":
           baseCS = cs[1] || null;
-          if (baseCS) {
-            baseCS = this.#subParse(baseCS, options);
-          }
+          baseCS &&= this.#subParse(baseCS, options);
           return new PatternCS(baseCS);
         case "I":
         case "Indexed":
@@ -5118,7 +5099,7 @@ class JpegImage {
     this.numComponents = this.components.length;
     return undefined;
   }
-  _getLinearizedBlockData(width, height, isSourcePDF = false) {
+  #getLinearizedBlockData(width, height, isSourcePDF) {
     const scaleX = this.width / width,
       scaleY = this.height / height;
     let component, componentScaleX, componentScaleY, blocksPerScanline;
@@ -5156,9 +5137,6 @@ class JpegImage {
       }
     }
     let transform = this._decodeTransform;
-    if (!isSourcePDF && numComponents === 4 && !transform) {
-      transform = new Int32Array([-256, 255, -256, 255, -256, 255, -256, 255]);
-    }
     if (transform) {
       for (i = 0; i < dataLength;) {
         for (j = 0, k = 0; j < numComponents; j++, i++, k += 2) {
@@ -5187,7 +5165,7 @@ class JpegImage {
   }
   _convertYccToRgb(data) {
     let Y, Cb, Cr;
-    for (let i = 0, length = data.length; i < length; i += 3) {
+    for (let i = 0, ii = data.length; i < ii; i += 3) {
       Y = data[i];
       Cb = data[i + 1];
       Cr = data[i + 2];
@@ -5198,7 +5176,7 @@ class JpegImage {
     return data;
   }
   _convertYccToRgba(data, out) {
-    for (let i = 0, j = 0, length = data.length; i < length; i += 3, j += 4) {
+    for (let i = 0, j = 0, ii = data.length; i < ii; i += 3, j += 4) {
       const Y = data[i];
       const Cb = data[i + 1];
       const Cr = data[i + 2];
@@ -5219,7 +5197,7 @@ class JpegImage {
   }
   _convertYcckToCmyk(data) {
     let Y, Cb, Cr;
-    for (let i = 0, length = data.length; i < length; i += 4) {
+    for (let i = 0, ii = data.length; i < ii; i += 4) {
       Y = data[i];
       Cb = data[i + 1];
       Cr = data[i + 2];
@@ -5248,12 +5226,12 @@ class JpegImage {
     height,
     forceRGBA = false,
     forceRGB = false,
-    isSourcePDF = false
+    isSourcePDF = true
   }) {
     if (this.numComponents > 4) {
       throw new JpegError("Unsupported color mode");
     }
-    const data = this._getLinearizedBlockData(width, height, isSourcePDF);
+    const data = this.#getLinearizedBlockData(width, height, isSourcePDF);
     if (this.numComponents === 1 && (forceRGBA || forceRGB)) {
       const len = data.length * (forceRGBA ? 4 : 3);
       const rgbaData = new Uint8ClampedArray(len);
@@ -5375,8 +5353,7 @@ class JpegStream extends DecodeStream {
       width: this.drawWidth,
       height: this.drawHeight,
       forceRGBA: this.forceRGBA,
-      forceRGB: this.forceRGB,
-      isSourcePDF: true
+      forceRGB: this.forceRGB
     });
     this.buffer = data;
     this.bufferLength = data.length;
@@ -6028,19 +6005,19 @@ class OperatorList {
 }
 class CheckedOperatorList extends OperatorList {
   needsIsolation = false;
+  hasSoftMask = false;
   addOp(fn, args) {
-    if (!this.needsIsolation) {
+    if (!this.needsIsolation || !this.hasSoftMask) {
       if (fn === OPS.beginGroup) {
-        this.needsIsolation = args[0].needsIsolation;
+        this.needsIsolation ||= args[0].needsIsolation;
+        this.hasSoftMask ||= args[0].hasSoftMask;
       } else if (fn === OPS.setGState) {
         for (const [key, val] of args[0]) {
           if (key === "BM" && val !== "source-over") {
             this.needsIsolation = true;
-            break;
-          }
-          if (key === "SMask" && val !== false) {
+          } else if (key === "SMask" && val !== false) {
             this.needsIsolation = true;
-            break;
+            this.hasSoftMask = true;
           }
         }
       }
@@ -6206,10 +6183,7 @@ class RadialAxialShading extends BaseShading {
       bPrev = b;
     }
     colorStops.push([1, Util.makeHexColor(rPrev, gPrev, bPrev)]);
-    let background = "transparent";
-    if (dict.has("Background")) {
-      background = cs.getRgbHex(dict.get("Background"), 0);
-    }
+    const background = dict.has("Background") ? cs.getRgbHex(dict.get("Background"), 0) : "transparent";
     if (!extendStart) {
       colorStops.unshift([0, background]);
       colorStops[1][0] += BaseShading.SMALL_NUMBER;
@@ -9829,9 +9803,7 @@ class CCITTFaxStream extends DecodeStream {
     if (this.eof) {
       return this.buffer;
     }
-    if (!bytes) {
-      bytes = this.stream.isAsync ? (await this.stream.asyncGetBytes()) || this.bytes : this.bytes;
-    }
+    bytes ??= this.stream.isAsync ? (await this.stream.asyncGetBytes()) || this.bytes : this.bytes;
     this.buffer = await JBig2CCITTFaxImage.instance.decode(bytes, this.dict.get("W", "Width"), this.dict.get("H", "Height"), null, this.params);
     this.bufferLength = this.buffer.length;
     this.eof = true;
@@ -10142,16 +10114,23 @@ class Jbig2Stream extends DecodeStream {
   get isImageStream() {
     return true;
   }
+  static stripFileHeader(bytes) {
+    if (bytes.length >= 9 && bytes[0] === 0x97 && bytes[1] === 0x4a && bytes[2] === 0x42 && bytes[3] === 0x32 && bytes[4] === 0x0d && bytes[5] === 0x0a && bytes[6] === 0x1a && bytes[7] === 0x0a) {
+      const headerLength = (bytes[8] & 2) === 0 ? 13 : 9;
+      return bytes.subarray(headerLength);
+    }
+    return bytes;
+  }
   async decodeImage(bytes, length, _decoderOptions) {
     if (this.eof) {
       return this.buffer;
     }
-    bytes ||= this.bytes;
+    bytes = Jbig2Stream.stripFileHeader(bytes || this.bytes);
     let globals = null;
     if (this.params instanceof Dict) {
       const globalsStream = this.params.get("JBIG2Globals");
       if (globalsStream instanceof BaseStream) {
-        globals = globalsStream.getBytes();
+        globals = Jbig2Stream.stripFileHeader(globalsStream.getBytes());
       }
     }
     this.buffer = await JBig2CCITTFaxImage.instance.decode(bytes, this.dict.get("Width"), this.dict.get("Height"), globals);
@@ -17717,9 +17696,7 @@ function type1FontGlyphMapping(properties, builtInEncoding, glyphNames) {
       const glyphName = differences[charCode];
       glyphId = glyphNames.indexOf(glyphName);
       if (glyphId === -1) {
-        if (!glyphsUnicodeMap) {
-          glyphsUnicodeMap = getGlyphsUnicode();
-        }
+        glyphsUnicodeMap ??= getGlyphsUnicode();
         const standardGlyphName = recoverGlyphName(glyphName, glyphsUnicodeMap);
         if (standardGlyphName !== glyphName) {
           glyphId = glyphNames.indexOf(standardGlyphName);
@@ -18616,9 +18593,7 @@ class CFFParser {
       } else if (localSubrIndex) {
         localSubrToUse = localSubrIndex;
       }
-      if (valid) {
-        valid = this.parseCharString(state, charstring, localSubrToUse, globalSubrIndex);
-      }
+      valid &&= this.parseCharString(state, charstring, localSubrToUse, globalSubrIndex);
       if (state.width !== null) {
         const nominalWidth = privateDictToUse.getByName("nominalWidthX");
         widths[i] = nominalWidth + state.width;
@@ -18693,8 +18668,10 @@ class CFFParser {
         }
       }
       if (maxZoneHeight > 0) {
-        const minBlueScale = blueScale < DEFAULT_BLUE_SCALE ? 0.5 / maxZoneHeight : -Infinity;
-        const maxBlueScale = 1 / maxZoneHeight;
+        const PRECISION = 1e5;
+        const lowerBound = 0.5 / maxZoneHeight;
+        const minBlueScale = lowerBound <= DEFAULT_BLUE_SCALE ? Math.ceil(lowerBound * PRECISION) / PRECISION : -Infinity;
+        const maxBlueScale = Math.floor(PRECISION / maxZoneHeight) / PRECISION;
         const clamped = MathClamp(blueScale, minBlueScale, maxBlueScale);
         if (clamped !== blueScale) {
           privateDict.setByName("BlueScale", clamped);
@@ -19629,6 +19606,10 @@ const getNonStdFontMap = getLookupTableFactory(function (t) {
   t["MS-PMincho-Italic"] = "MS PMincho-Italic";
   t.NuptialScript = "Times-Italic";
   t.SegoeUISymbol = "Helvetica";
+  t.TrebuchetMS = "Helvetica";
+  t["TrebuchetMS-Bold"] = "Helvetica-Bold";
+  t["TrebuchetMS-BoldItalic"] = "Helvetica-BoldOblique";
+  t["TrebuchetMS-Italic"] = "Helvetica-Oblique";
 });
 const getSerifFonts = getLookupTableFactory(function (t) {
   t["Adobe Jenson"] = true;
@@ -21123,7 +21104,7 @@ class IdentityToUnicodeMap {
 class CFFFont {
   constructor(file, properties) {
     this.properties = properties;
-    const parser = new CFFParser(file, properties, SEAC_ANALYSIS_ENABLED);
+    const parser = new CFFParser(file, properties, (/* inlined export .SEAC_ANALYSIS_ENABLED */true));
     this.cff = parser.parse();
     this.cff.duplicateFirstGlyph();
     const compiler = new CFFCompiler(this.cff);
@@ -25170,14 +25151,14 @@ class Type1CharString {
         }
         switch (value) {
           case 1:
-            if (!HINTING_ENABLED) {
+            if (true) {
               this.stack = [];
               break;
             }
             error = this.executeCommand(2, COMMAND_MAP.hstem);
             break;
           case 3:
-            if (!HINTING_ENABLED) {
+            if (true) {
               this.stack = [];
               break;
             }
@@ -25262,14 +25243,14 @@ class Type1CharString {
             this.stack = [];
             break;
           case (12 << 8) + 1:
-            if (!HINTING_ENABLED) {
+            if (true) {
               this.stack = [];
               break;
             }
             error = this.executeCommand(2, COMMAND_MAP.vstem);
             break;
           case (12 << 8) + 2:
-            if (!HINTING_ENABLED) {
+            if (true) {
               this.stack = [];
               break;
             }
@@ -25519,7 +25500,7 @@ class Type1Parser {
         privateData
       }
     };
-    let token, length, data, lenIV;
+    let token, length, data;
     let subrsParsed = false;
     let charStringsParsed = false;
     while ((token = this.getToken()) !== null) {
@@ -25549,8 +25530,7 @@ class Type1Parser {
             length = this.readInt();
             this.getToken();
             data = length > 0 ? stream.getBytes(length) : new Uint8Array(0);
-            lenIV = privateData.get("lenIV");
-            const encoded = this.readCharStrings(data, lenIV);
+            const encoded = this.readCharStrings(data, privateData.get("lenIV"));
             this.nextChar();
             token = this.getToken();
             if (token === "noaccess") {
@@ -25576,8 +25556,7 @@ class Type1Parser {
             length = this.readInt();
             this.getToken();
             data = length > 0 ? stream.getBytes(length) : new Uint8Array(0);
-            lenIV = privateData.get("lenIV");
-            const encoded = this.readCharStrings(data, lenIV);
+            const encoded = this.readCharStrings(data, privateData.get("lenIV"));
             this.nextChar();
             token = this.getToken();
             if (token === "noaccess") {
@@ -25591,9 +25570,8 @@ class Type1Parser {
         case "FamilyBlues":
         case "FamilyOtherBlues":
           const blueArray = this.readNumberArray();
-          if (blueArray.length > 0 && blueArray.length % 2 === 0 && HINTING_ENABLED) {
-            privateData.set(token, blueArray);
-          }
+          if (false) // removed by dead control flow
+{}
           break;
         case "StemSnapH":
         case "StemSnapV":
@@ -25624,10 +25602,7 @@ class Type1Parser {
     } of charstrings) {
       const charString = new Type1CharString();
       const error = charString.convert(encoded, subrs, this.seacAnalysisEnabled);
-      let output = charString.output;
-      if (error) {
-        output = [14];
-      }
+      const output = !error ? charString.output : [14];
       const charStringObject = {
         glyphName: glyph,
         charstring: output,
@@ -26035,14 +26010,14 @@ class Type1Font {
       headerBlockLength = pfbHeader[5] << 24 | pfbHeader[4] << 16 | pfbHeader[3] << 8 | pfbHeader[2];
     }
     const headerBlock = getHeaderBlock(file, headerBlockLength);
-    const headerBlockParser = new Type1Parser(headerBlock.stream, false, SEAC_ANALYSIS_ENABLED);
+    const headerBlockParser = new Type1Parser(headerBlock.stream, false, (/* inlined export .SEAC_ANALYSIS_ENABLED */true));
     headerBlockParser.extractFontHeader(properties);
     if (pfbHeaderPresent) {
       pfbHeader = file.getBytes(PFB_HEADER_SIZE);
       eexecBlockLength = pfbHeader[5] << 24 | pfbHeader[4] << 16 | pfbHeader[3] << 8 | pfbHeader[2];
     }
     const eexecBlock = getEexecBlock(file, eexecBlockLength);
-    const eexecBlockParser = new Type1Parser(eexecBlock.stream, true, SEAC_ANALYSIS_ENABLED);
+    const eexecBlockParser = new Type1Parser(eexecBlock.stream, true, (/* inlined export .SEAC_ANALYSIS_ENABLED */true));
     const data = eexecBlockParser.extractFontProgram(properties);
     this.#rawFileLength = headerBlock.length + eexecBlock.length;
     return data;
@@ -26050,7 +26025,7 @@ class Type1Font {
   #parseCidKeyedType1(file, properties) {
     const fileStart = file.pos;
     const length = file.end - fileStart;
-    const parser = new Type1Parser(file, false, SEAC_ANALYSIS_ENABLED);
+    const parser = new Type1Parser(file, false, (/* inlined export .SEAC_ANALYSIS_ENABLED */true));
     const data = parser.extractCidKeyedFontProgram(properties);
     if (!data) {
       file.pos = fileStart;
@@ -27063,7 +27038,7 @@ class Font {
     this.seacMap = properties.seacMap;
   }
   get renderer() {
-    const renderer = FontRendererFactory.create(this, SEAC_ANALYSIS_ENABLED);
+    const renderer = FontRendererFactory.create(this, (/* inlined export .SEAC_ANALYSIS_ENABLED */true));
     return shadow(this, "renderer", renderer);
   }
   #getExportData(props) {
@@ -27280,9 +27255,9 @@ class Font {
           throw new FormatError('TrueType Collection font must contain a "name" table.');
         }
         const [nameTable] = readNameTable(potentialTables.name);
-        for (let j = 0, jj = nameTable.length; j < jj; j++) {
-          for (let k = 0, kk = nameTable[j].length; k < kk; k++) {
-            const nameEntry = nameTable[j][k]?.replaceAll(/\s/g, "");
+        for (const nameArr of nameTable) {
+          for (const entry of nameArr) {
+            const nameEntry = entry?.replaceAll(/\s/g, "");
             if (!nameEntry) {
               continue;
             }
@@ -27534,7 +27509,6 @@ class Font {
           hasShortCmap: false
         };
       }
-      mappings.sort((a, b) => a.charCode - b.charCode);
       const finalMappings = [],
         seenCharCodes = new Set();
       for (const map of mappings) {
@@ -27550,7 +27524,7 @@ class Font {
       return {
         platformId: potentialTable.platformId,
         encodingId: potentialTable.encodingId,
-        mappings: finalMappings,
+        mappings: finalMappings.sort((a, b) => a.charCode - b.charCode),
         hasShortCmap
       };
     }
@@ -28207,7 +28181,7 @@ class Font {
     let parsedCff = null;
     if (!isTrueType) {
       try {
-        parsedCff = new CFFParser(new Stream(tables["CFF "].data), properties, SEAC_ANALYSIS_ENABLED).parse();
+        parsedCff = new CFFParser(new Stream(tables["CFF "].data), properties, (/* inlined export .SEAC_ANALYSIS_ENABLED */true)).parse();
       } catch {
         warn("Failed to parse font " + properties.loadedName);
       }
@@ -28507,14 +28481,14 @@ class Font {
           }
         }
       }
+      if (!properties.isInternalFont && charCodeToGlyphId[0] === undefined && hasGlyph(0)) {
+        charCodeToGlyphId[0] = 0;
+      }
     }
     if (charCodeToGlyphId.length === 0) {
       charCodeToGlyphId[0] = 0;
     }
-    let glyphZeroId = numGlyphsOut - 1;
-    if (!dupFirstEntry) {
-      glyphZeroId = 0;
-    }
+    const glyphZeroId = dupFirstEntry ? numGlyphsOut - 1 : 0;
     if (!properties.cssFontInfo) {
       const newMapping = adjustMapping(charCodeToGlyphId, hasGlyph, glyphZeroId, this.toUnicode);
       this.toFontChar = newMapping.toFontChar;
@@ -28553,10 +28527,7 @@ class Font {
     if (properties.builtInEncoding) {
       adjustType1ToUnicode(properties, properties.builtInEncoding);
     }
-    let glyphZeroId = 1;
-    if (font instanceof CFFFont) {
-      glyphZeroId = font.numGlyphs - 1;
-    }
+    const glyphZeroId = font instanceof CFFFont ? font.numGlyphs - 1 : 1;
     const mapping = font.getGlyphMapping(properties);
     let newMapping = null;
     let newCharCodeToGlyphId = mapping;
@@ -28587,7 +28558,7 @@ class Font {
       return newMapping.nextAvailableFontCharCode++;
     }
     const seacs = font.seacs;
-    if (newMapping && SEAC_ANALYSIS_ENABLED && seacs?.length) {
+    if (newMapping && (/* inlined export .SEAC_ANALYSIS_ENABLED */true) && seacs?.length) {
       const matrix = properties.fontMatrix || FONT_IDENTITY_MATRIX;
       const charset = font.getCharset();
       const seacMap = Object.create(null);
@@ -28850,7 +28821,7 @@ class Font {
     const getCharCode = this.toUnicode instanceof IdentityToUnicodeMap ? unicode => this.toUnicode.charCodeOf(unicode) : unicode => this.toUnicode.charCodeOf(String.fromCodePoint(unicode));
     for (let i = 0, ii = str.length; i < ii; i++) {
       const unicode = str.codePointAt(i);
-      if (unicode > 0xd7ff && (unicode < 0xe000 || unicode > 0xfffd)) {
+      if (unicode > 0xffff) {
         i++;
       }
       if (this.toUnicode) {
@@ -32294,6 +32265,115 @@ function isPDFFunction(v) {
   return fnDict.has("FunctionType");
 }
 
+;// ./src/core/evaluator_utils.js
+
+
+function textSinkWrapper(sink) {
+  const TEXT_CONTENT_CHUNK_SIZE = 100;
+  const resolved = sink ? null : Promise.resolve();
+  return {
+    enqueueInvoked: false,
+    enqueue(chunk, size) {
+      this.enqueueInvoked = true;
+      sink?.enqueue(chunk, size);
+    },
+    get desiredSize() {
+      return sink?.desiredSize ?? TEXT_CONTENT_CHUNK_SIZE;
+    },
+    get ready() {
+      return sink?.ready ?? resolved;
+    }
+  };
+}
+function _parseVisibilityExpression(xref, array, nestingCounter, currentResult) {
+  const MAX_NESTING = 10;
+  if (++nestingCounter > MAX_NESTING) {
+    warn("Visibility expression is too deeply nested");
+    return;
+  }
+  const length = array.length;
+  const operator = xref.fetchIfRef(array[0]);
+  if (length < 2 || !(operator instanceof Name)) {
+    warn("Invalid visibility expression");
+    return;
+  }
+  switch (operator.name) {
+    case "And":
+    case "Or":
+    case "Not":
+      currentResult.push(operator.name);
+      break;
+    default:
+      warn(`Invalid operator ${operator.name} in visibility expression`);
+      return;
+  }
+  for (let i = 1; i < length; i++) {
+    const raw = array[i];
+    const object = xref.fetchIfRef(raw);
+    if (Array.isArray(object)) {
+      const nestedResult = [];
+      currentResult.push(nestedResult);
+      _parseVisibilityExpression(xref, object, nestingCounter, nestedResult);
+    } else if (raw instanceof Ref) {
+      currentResult.push(raw.toString());
+    }
+  }
+}
+function parseMarkedContentProps(xref, contentProperties, resources) {
+  let optionalContent;
+  if (contentProperties instanceof Name) {
+    const properties = resources.get("Properties");
+    optionalContent = properties.get(contentProperties.name);
+  } else if (contentProperties instanceof Dict) {
+    optionalContent = contentProperties;
+  } else {
+    throw new FormatError("Optional content properties malformed.");
+  }
+  const optionalContentType = optionalContent.get("Type")?.name;
+  if (optionalContentType === "OCG") {
+    return {
+      type: optionalContentType,
+      id: optionalContent.objId
+    };
+  } else if (optionalContentType === "OCMD") {
+    const expression = optionalContent.get("VE");
+    if (Array.isArray(expression)) {
+      const result = [];
+      _parseVisibilityExpression(xref, expression, 0, result);
+      if (result.length > 0) {
+        return {
+          type: "OCMD",
+          expression: result
+        };
+      }
+    }
+    const optionalContentGroups = optionalContent.get("OCGs");
+    if (Array.isArray(optionalContentGroups) || optionalContentGroups instanceof Dict) {
+      const groupIds = [];
+      if (Array.isArray(optionalContentGroups)) {
+        for (const ocg of optionalContentGroups) {
+          groupIds.push(ocg.toString());
+        }
+      } else {
+        groupIds.push(optionalContentGroups.objId);
+      }
+      const p = optionalContent.get("P");
+      return {
+        type: optionalContentType,
+        ids: groupIds,
+        policy: p instanceof Name ? p.name : null,
+        expression: null
+      };
+    } else if (optionalContentGroups instanceof Ref) {
+      return {
+        type: optionalContentType,
+        id: optionalContentGroups.toString()
+      };
+    }
+  }
+  return null;
+}
+
 ;// ./src/core/bidi.js
 
 const baseTypes = ["BN", "BN", "BN", "BN", "BN", "BN", "BN", "BN", "BN", "S", "B", "S", "WS", "B", "BN", "BN", "BN", "BN", "BN", "BN", "BN", "BN", "BN", "BN", "BN", "BN", "BN", "BN", "B", "B", "B", "S", "WS", "ON", "ON", "ET", "ET", "ET", "ON", "ON", "ON", "ON", "ON", "ES", "CS", "ES", "CS", "CS", "EN", "EN", "EN", "EN", "EN", "EN", "EN", "EN", "EN", "EN", "CS", "ON", "ON", "ON", "ON", "ON", "ON", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "ON", "ON", "ON", "ON", "ON", "ON", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "ON", "ON", "ON", "ON", "BN", "BN", "BN", "BN", "BN", "BN", "B", "BN", "BN", "BN", "BN", "BN", "BN", "BN", "BN", "BN", "BN", "BN", "BN", "BN", "BN", "BN", "BN", "BN", "BN", "BN", "BN", "BN", "BN", "BN", "BN", "BN", "BN", "CS", "ON", "ET", "ET", "ET", "ET", "ON", "ON", "ON", "ON", "L", "ON", "ON", "BN", "ON", "ON", "ET", "ET", "EN", "EN", "ON", "L", "ON", "ON", "ON", "EN", "L", "ON", "ON", "ON", "ON", "ON", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "ON", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "L", "ON", "L", "L", "L", "L", "L", "L", "L", "L"];
@@ -32995,98 +33075,6 @@ class MurmurHash3_64 {
   }
 }
 
-;// ./src/core/evaluator_utils.js
-
-
-function _parseVisibilityExpression(xref, array, nestingCounter, currentResult) {
-  const MAX_NESTING = 10;
-  if (++nestingCounter > MAX_NESTING) {
-    warn("Visibility expression is too deeply nested");
-    return;
-  }
-  const length = array.length;
-  const operator = xref.fetchIfRef(array[0]);
-  if (length < 2 || !(operator instanceof Name)) {
-    warn("Invalid visibility expression");
-    return;
-  }
-  switch (operator.name) {
-    case "And":
-    case "Or":
-    case "Not":
-      currentResult.push(operator.name);
-      break;
-    default:
-      warn(`Invalid operator ${operator.name} in visibility expression`);
-      return;
-  }
-  for (let i = 1; i < length; i++) {
-    const raw = array[i];
-    const object = xref.fetchIfRef(raw);
-    if (Array.isArray(object)) {
-      const nestedResult = [];
-      currentResult.push(nestedResult);
-      _parseVisibilityExpression(xref, object, nestingCounter, nestedResult);
-    } else if (raw instanceof Ref) {
-      currentResult.push(raw.toString());
-    }
-  }
-}
-function parseMarkedContentProps(xref, contentProperties, resources) {
-  let optionalContent;
-  if (contentProperties instanceof Name) {
-    const properties = resources.get("Properties");
-    optionalContent = properties.get(contentProperties.name);
-  } else if (contentProperties instanceof Dict) {
-    optionalContent = contentProperties;
-  } else {
-    throw new FormatError("Optional content properties malformed.");
-  }
-  const optionalContentType = optionalContent.get("Type")?.name;
-  if (optionalContentType === "OCG") {
-    return {
-      type: optionalContentType,
-      id: optionalContent.objId
-    };
-  } else if (optionalContentType === "OCMD") {
-    const expression = optionalContent.get("VE");
-    if (Array.isArray(expression)) {
-      const result = [];
-      _parseVisibilityExpression(xref, expression, 0, result);
-      if (result.length > 0) {
-        return {
-          type: "OCMD",
-          expression: result
-        };
-      }
-    }
-    const optionalContentGroups = optionalContent.get("OCGs");
-    if (Array.isArray(optionalContentGroups) || optionalContentGroups instanceof Dict) {
-      const groupIds = [];
-      if (Array.isArray(optionalContentGroups)) {
-        for (const ocg of optionalContentGroups) {
-          groupIds.push(ocg.toString());
-        }
-      } else {
-        groupIds.push(optionalContentGroups.objId);
-      }
-      const p = optionalContent.get("P");
-      return {
-        type: optionalContentType,
-        ids: groupIds,
-        policy: p instanceof Name ? p.name : null,
-        expression: null
-      };
-    } else if (optionalContentGroups instanceof Ref) {
-      return {
-        type: optionalContentType,
-        id: optionalContentGroups.toString()
-      };
-    }
-  }
-  return null;
-}
-
 ;// ./src/core/image.js
 
 
@@ -33498,13 +33486,7 @@ class PDFImage {
           bits += 8;
         }
         const remainingBits = bits - bpc;
-        let value = buf >> remainingBits;
-        if (value < 0) {
-          value = 0;
-        } else if (value > max) {
-          value = max;
-        }
-        output[i] = value;
+        output[i] = MathClamp(buf >> remainingBits, 0, max);
         buf &= (1 << remainingBits) - 1;
         bits = remainingBits;
       }
@@ -34270,7 +34252,9 @@ class PartialEvaluator {
         smask,
         isolated: false,
         knockout: false,
-        needsIsolation: false
+        needsIsolation: false,
+        hasSoftMask: false,
+        isGray: false
       };
       const groupSubtype = group.get("S");
       let colorSpace = null;
@@ -34282,6 +34266,7 @@ class PartialEvaluator {
           colorSpace = cs instanceof ColorSpace ? cs : await this._handleColorSpace(cs);
         }
       }
+      groupOptions.isGray = colorSpace?.numComps === 1;
       if (smask?.backdrop) {
         colorSpace ||= ColorSpaceUtils.rgb;
         smask.backdrop = colorSpace.getRgbHex(smask.backdrop, 0);
@@ -34303,6 +34288,7 @@ class PartialEvaluator {
     });
     if (group) {
       groupOptions.needsIsolation = newOpList.needsIsolation || !!smask;
+      groupOptions.hasSoftMask = newOpList.hasSoftMask || !!smask;
       operatorList.addOp(OPS.beginGroup, [groupOptions]);
       operatorList.addOp(OPS.paintFormXObjectBegin, args);
       operatorList.addOpList(newOpList);
@@ -34720,9 +34706,15 @@ class PartialEvaluator {
           }
           break;
         case "TR":
-          const transferMaps = this.handleTransferFunction(value);
-          gStateObj.push([key, transferMaps]);
-          break;
+        case "TR2":
+          {
+            if (key === "TR" && gState.has("TR2")) {
+              break;
+            }
+            const transferMaps = this.handleTransferFunction(value);
+            gStateObj.push(["TR", transferMaps]);
+            break;
+          }
         case "OP":
         case "op":
         case "OPM":
@@ -34730,7 +34722,6 @@ class PartialEvaluator {
         case "BG2":
         case "UCR":
         case "UCR2":
-        case "TR2":
         case "HT":
         case "SM":
         case "SA":
@@ -35585,6 +35576,7 @@ class PartialEvaluator {
         stream = new Stream(bytes, 0, bytes.length, stream.dict);
       }
     }
+    sink ??= textSinkWrapper(null);
     const objId = stream.dict?.objId;
     const seenRefs = new RefSet(prevRefs);
     if (objId) {
@@ -36073,7 +36065,7 @@ class PartialEvaluator {
       if (batch && length < TEXT_CHUNK_BATCH_SIZE) {
         return;
       }
-      sink?.enqueue(textContent, length);
+      sink.enqueue(textContent, length);
       textContent.items = [];
       textContent.styles = Object.create(null);
     }
@@ -36081,7 +36073,7 @@ class PartialEvaluator {
     return new Promise(function promiseBody(resolve, reject) {
       const next = function (promise) {
         enqueueChunk(true);
-        Promise.all([promise, sink?.ready]).then(function () {
+        Promise.all([promise, sink.ready]).then(function () {
           try {
             promiseBody(resolve, reject);
           } catch (ex) {
@@ -36159,9 +36151,7 @@ class PartialEvaluator {
               continue;
             }
             const spaceFactor = (textState.font.vertical ? 1 : -1) * textState.fontSize / 1000;
-            const elements = args[0];
-            for (let i = 0, ii = elements.length; i < ii; i++) {
-              const item = elements[i];
+            for (const item of args[0]) {
               if (typeof item === "string") {
                 showSpacedTextBuffer.push(item);
               } else if (typeof item === "number" && item !== 0) {
@@ -36264,26 +36254,14 @@ class PartialEvaluator {
               }
               const localResources = dict.get("Resources");
               enqueueChunk();
-              const sinkWrapper = {
-                enqueueInvoked: false,
-                enqueue(chunk, size) {
-                  this.enqueueInvoked = true;
-                  sink.enqueue(chunk, size);
-                },
-                get desiredSize() {
-                  return sink.desiredSize ?? 0;
-                },
-                get ready() {
-                  return sink.ready;
-                }
-              };
+              const sinkWrapper = textSinkWrapper(sink);
               self.getTextContent({
                 stream: xobj,
                 task,
                 resources: localResources instanceof Dict ? localResources : resources,
                 stateManager: xObjStateManager,
                 includeMarkedContent,
-                sink: sink && sinkWrapper,
+                sink: sinkWrapper,
                 seenStyles,
                 viewBox,
                 lang,
@@ -36361,10 +36339,7 @@ class PartialEvaluator {
             flushTextContentItem();
             if (includeMarkedContent) {
               markedContentData.level++;
-              let mcid = null;
-              if (args[1] instanceof Dict) {
-                mcid = args[1].get("MCID");
-              }
+              const mcid = args[1] instanceof Dict ? args[1].get("MCID") : null;
               textContent.items.push({
                 type: "beginMarkedContentProps",
                 id: Number.isInteger(mcid) ? `${self.idFactory.getPageObjId()}_mc${mcid}` : null,
@@ -36385,7 +36360,7 @@ class PartialEvaluator {
             }
             break;
         }
-        if (textContent.items.length >= (sink?.desiredSize ?? 1)) {
+        if (textContent.items.length >= sink.desiredSize) {
           stop = true;
           break;
         }
@@ -38165,7 +38140,8 @@ class AppearanceStreamEvaluator extends EvaluatorPreprocessor {
             result = stack.pop() || result;
             break;
           case OPS.setTextMatrix:
-            result.scaleFactor *= Math.hypot(args[0], args[1]);
+            const tm = Util.transform(this.stateManager.state.ctm, args);
+            result.scaleFactor *= Math.hypot(tm[0], tm[1]);
             break;
           case OPS.setFont:
             const [fontName, fontSize] = args;
@@ -38173,7 +38149,7 @@ class AppearanceStreamEvaluator extends EvaluatorPreprocessor {
               result.fontName = fontName.name;
             }
             if (typeof fontSize === "number" && fontSize > 0) {
-              result.fontSize = fontSize * result.scaleFactor;
+              result.fontSize = fontSize;
             }
             break;
           case OPS.setFillColorSpace:
@@ -38203,6 +38179,7 @@ class AppearanceStreamEvaluator extends EvaluatorPreprocessor {
           case OPS.showSpacedText:
           case OPS.nextLineShowText:
           case OPS.nextLineSetSpacingShowText:
+            result.fontSize *= result.scaleFactor;
             breakLoop = true;
             break;
         }
@@ -38354,8 +38331,8 @@ class FakeUnicodeFont {
     if (rotation % 180 !== 0) {
       [w, h] = [h, w];
     }
-    const lineHeight = LINE_FACTOR * fontSize;
-    const lineDescent = LINE_DESCENT_FACTOR * fontSize;
+    const lineHeight = (/* inlined export .LINE_FACTOR */1.35) * fontSize;
+    const lineDescent = (/* inlined export .LINE_DESCENT_FACTOR */0.35) * fontSize;
     return {
       coords: [0, h + lineDescent - lineHeight],
       bbox: [0, 0, w, h],
@@ -38389,13 +38366,10 @@ class FakeUnicodeFont {
     if (rotation % 180 !== 0) {
       [w, h] = [h, w];
     }
-    let hscale = 1;
-    if (maxWidth > w) {
-      hscale = w / maxWidth;
-    }
+    const hscale = maxWidth > w ? w / maxWidth : 1;
     let vscale = 1;
-    const lineHeight = LINE_FACTOR * fontSize;
-    const lineDescent = LINE_DESCENT_FACTOR * fontSize;
+    const lineHeight = (/* inlined export .LINE_FACTOR */1.35) * fontSize;
+    const lineDescent = (/* inlined export .LINE_DESCENT_FACTOR */0.35) * fontSize;
     const maxHeight = lineHeight * lines.length;
     if (maxHeight > h) {
       vscale = h / maxHeight;
@@ -38546,7 +38520,7 @@ class NameOrNumberTree {
         continue;
       }
       for (let i = 0, ii = entries.length; i < ii; i += 2) {
-        map.set(xref.fetchIfRef(entries[i]), isRaw ? entries[i + 1] : xref.fetchIfRef(entries[i + 1]));
+        map.set(isRaw ? entries[i] : xref.fetchIfRef(entries[i]), isRaw ? entries[i + 1] : xref.fetchIfRef(entries[i + 1]));
       }
     }
     return map;
@@ -38638,19 +38612,8 @@ function clearGlobalCaches() {
 
 
 
-function pickPlatformItem(dict) {
-  if (dict instanceof Dict) {
-    for (const key of ["UF", "F", "Unix", "Mac", "DOS"]) {
-      if (dict.has(key)) {
-        return dict.get(key);
-      }
-    }
-  }
-  return null;
-}
 class FileSpec {
-  #contentAvailable = false;
-  constructor(root, skipContent = false) {
+  constructor(root) {
     if (!(root instanceof Dict)) {
       return;
     }
@@ -38661,31 +38624,13 @@ class FileSpec {
     if (root.has("RF")) {
       warn("Related file specifications are not supported");
     }
-    if (!skipContent) {
-      if (root.has("EF")) {
-        this.#contentAvailable = true;
-      } else {
-        warn("Non-embedded file specifications are not supported");
-      }
-    }
   }
   get filename() {
-    const item = pickPlatformItem(this.root);
+    const item = FileSpec.pickPlatformItem(this.root);
     if (item && typeof item === "string") {
       return stringToPDFString(item, true).replaceAll("\\\\", "\\").replaceAll("\\/", "/").replaceAll("\\", "/");
     }
     return "";
-  }
-  get content() {
-    if (!this.#contentAvailable) {
-      return null;
-    }
-    const ef = pickPlatformItem(this.root?.get("EF"));
-    if (ef instanceof BaseStream) {
-      return ef.getBytes();
-    }
-    warn("Embedded file specification points to non-existing/invalid content");
-    return null;
   }
   get description() {
     const desc = this.root?.get("Desc");
@@ -38697,19 +38642,49 @@ class FileSpec {
   get serializable() {
     const {
       filename,
-      content,
       description
     } = this;
     return {
       rawFilename: filename,
       filename: stripPath(filename) || "unnamed",
-      content,
       description
     };
+  }
+  static pickPlatformItem(dict, raw = false) {
+    if (dict instanceof Dict) {
+      for (const key of ["UF", "F", "Unix", "Mac", "DOS"]) {
+        if (dict.has(key)) {
+          return raw ? dict.getRaw(key) : dict.get(key);
+        }
+      }
+    }
+    return null;
+  }
+  static hasEmbeddedFile(fileSpecDict) {
+    return this.pickPlatformItem(fileSpecDict.get("EF")) instanceof BaseStream;
+  }
+  static readContent(dict) {
+    if (!(dict instanceof Dict)) {
+      return null;
+    }
+    const ef = this.pickPlatformItem(dict.get("EF"));
+    if (!(ef instanceof BaseStream)) {
+      warn("Embedded file specification points to non-existing/invalid content");
+      return null;
+    }
+    return this.readStreamContent(ef);
+  }
+  static readStreamContent(stream) {
+    const encrypt = stream.dict?.xref?.encrypt;
+    if (encrypt?.encryptionKey === null) {
+      throw new PasswordException("No password given", PasswordResponses.NEED_PASSWORD);
+    }
+    return stream.getBytes();
   }
 }
 
 ;// ./src/core/xml_parser.js
+
 
 const XMLParserErrorCode = {
   NoError: 0,
@@ -38737,12 +38712,16 @@ function isWhitespaceString(s) {
   return true;
 }
 class XMLParserBase {
+  static get _entityRegex() {
+    return shadow(this, "_entityRegex", /&(?:#x([^;]+)|#([^;]+)|([^;]+));/g);
+  }
   _resolveEntities(s) {
-    return s.replaceAll(/&([^;]+);/g, (all, entity) => {
-      if (entity.substring(0, 2) === "#x") {
-        return String.fromCodePoint(parseInt(entity.substring(2), 16));
-      } else if (entity.substring(0, 1) === "#") {
-        return String.fromCodePoint(parseInt(entity.substring(1), 10));
+    return s.replaceAll(XMLParserBase._entityRegex, (_, hex, dec, entity) => {
+      if (hex) {
+        return String.fromCodePoint(parseInt(hex, 16));
+      }
+      if (dec) {
+        return String.fromCodePoint(parseInt(dec, 10));
       }
       switch (entity) {
         case "lt":
@@ -39223,7 +39202,97 @@ class MetadataParser {
   }
 }
 
+;// ./src/core/sound.js
+
+
+const WAV_HEADER_SIZE = 44;
+function getSoundFormat(dict) {
+  if (!dict || dict.has("CO")) {
+    return null;
+  }
+  const sampleRate = dict.get("R");
+  if (!Number.isInteger(sampleRate) || sampleRate <= 0) {
+    return null;
+  }
+  const channels = dict.get("C") ?? 1;
+  if (!Number.isInteger(channels) || channels < 1 || channels > 2) {
+    return null;
+  }
+  const bitsPerSample = dict.get("B") ?? 8;
+  if (bitsPerSample !== 8 && bitsPerSample !== 16) {
+    return null;
+  }
+  const e = dict.get("E");
+  let encoding = "Raw";
+  if (e !== undefined) {
+    encoding = e instanceof Name ? e.name : null;
+  }
+  if (encoding !== "Raw" && encoding !== "Signed") {
+    return null;
+  }
+  return {
+    channels,
+    sampleRate,
+    bitsPerSample,
+    encoding
+  };
+}
+function soundStreamToWav(stream, samples) {
+  const format = getSoundFormat(stream.dict);
+  if (!format) {
+    return null;
+  }
+  const {
+    channels,
+    sampleRate,
+    bitsPerSample,
+    encoding
+  } = format;
+  const blockAlign = channels * (bitsPerSample >> 3);
+  const dataLength = samples.length - samples.length % blockAlign;
+  if (dataLength === 0) {
+    return null;
+  }
+  const wav = new Uint8Array(WAV_HEADER_SIZE + dataLength);
+  const view = new DataView(wav.buffer);
+  wav.set(stringToBytes("RIFF"), 0);
+  view.setUint32(4, WAV_HEADER_SIZE - 8 + dataLength, true);
+  wav.set(stringToBytes("WAVE"), 8);
+  wav.set(stringToBytes("fmt "), 12);
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, channels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * blockAlign, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, bitsPerSample, true);
+  wav.set(stringToBytes("data"), 36);
+  view.setUint32(40, dataLength, true);
+  if (bitsPerSample === 16) {
+    const signed = encoding === "Signed";
+    for (let i = 0; i < dataLength; i += 2) {
+      let value = samples[i] << 8 | samples[i + 1];
+      if (signed) {
+        if (value >= 0x8000) {
+          value -= 0x10000;
+        }
+      } else {
+        value -= 0x8000;
+      }
+      view.setInt16(WAV_HEADER_SIZE + i, value, true);
+    }
+  } else if (encoding === "Signed") {
+    for (let i = 0; i < dataLength; i++) {
+      wav[WAV_HEADER_SIZE + i] = samples[i] + 128 & 0xff;
+    }
+  } else {
+    wav.set(samples.subarray(0, dataLength), WAV_HEADER_SIZE);
+  }
+  return wav;
+}
+
 ;// ./src/core/struct_tree.js
+
 
 
 
@@ -39239,14 +39308,26 @@ const StructElementType = {
   ELEMENT: 5
 };
 class StructTreeRoot {
+  kidRefToPosition = undefined;
+  parentTree = null;
+  roleMap = new Map();
+  structParentIds = null;
   constructor(xref, rootDict, rootRef) {
     this.xref = xref;
     this.dict = rootDict;
     this.ref = rootRef instanceof Ref ? rootRef : null;
-    this.roleMap = new Map();
-    this.structParentIds = null;
-    this.kidRefToPosition = undefined;
-    this.parentTree = null;
+    const roleMap = rootDict.get("RoleMap");
+    if (roleMap instanceof Dict) {
+      for (const [key, value] of roleMap) {
+        if (value instanceof Name) {
+          this.roleMap.set(key, value.name);
+        }
+      }
+    }
+    const parentTree = rootDict.getRaw("ParentTree");
+    if (parentTree) {
+      this.parentTree = new NumberTree(parentTree, xref);
+    }
   }
   getKidPosition(kidRef) {
     if (this.kidRefToPosition === undefined) {
@@ -39269,14 +39350,6 @@ class StructTreeRoot {
     }
     return this.kidRefToPosition ? this.kidRefToPosition.get(kidRef) ?? NaN : -1;
   }
-  init() {
-    this.readRoleMap();
-    const parentTree = this.dict.get("ParentTree");
-    if (!parentTree) {
-      return;
-    }
-    this.parentTree = new NumberTree(parentTree, this.xref);
-  }
   #addIdToPage(pageRef, id, type) {
     if (!(pageRef instanceof Ref) || id < 0) {
       return;
@@ -39291,17 +39364,6 @@ class StructTreeRoot {
   }
   addAnnotationIdToPage(pageRef, id) {
     this.#addIdToPage(pageRef, id, StructElementType.ANNOTATION);
-  }
-  readRoleMap() {
-    const roleMapDict = this.dict.get("RoleMap");
-    if (!(roleMapDict instanceof Dict)) {
-      return;
-    }
-    for (const [key, value] of roleMapDict) {
-      if (value instanceof Name) {
-        this.roleMap.set(key, value.name);
-      }
-    }
   }
   static async canCreateStructureTree({
     catalogRef,
@@ -39739,27 +39801,11 @@ class StructElementNode {
     }
     for (let af of AFs) {
       af = this.xref.fetchIfRef(af);
-      if (!(af instanceof Dict)) {
+      if (!isDict(af, "Filespec") || !isName(af.get("AFRelationship"), "Supplement")) {
         continue;
       }
-      if (!isName(af.get("Type"), "Filespec")) {
-        continue;
-      }
-      if (!isName(af.get("AFRelationship"), "Supplement")) {
-        continue;
-      }
-      const ef = af.get("EF");
-      if (!(ef instanceof Dict)) {
-        continue;
-      }
-      const fileStream = ef.get("UF") || ef.get("F");
-      if (!(fileStream instanceof BaseStream)) {
-        continue;
-      }
-      if (!isName(fileStream.dict.get("Type"), "EmbeddedFile")) {
-        continue;
-      }
-      if (!isName(fileStream.dict.get("Subtype"), "application/mathml+xml")) {
+      const fileStream = FileSpec.pickPlatformItem(af.get("EF"));
+      if (!(fileStream instanceof BaseStream) || !isDict(fileStream.dict, "EmbeddedFile") || !isName(fileStream.dict.get("Subtype"), "application/mathml+xml")) {
         continue;
       }
       return stringToUTF8String(fileStream.getString());
@@ -40009,11 +40055,18 @@ class StructTreePage {
         obj.alt = stringToPDFString(alt);
       }
       if (obj.role === "Formula") {
-        const {
-          mathML
-        } = node;
-        if (mathML) {
-          obj.mathML = mathML;
+        try {
+          const {
+            mathML
+          } = node;
+          if (mathML) {
+            obj.mathML = mathML;
+          }
+        } catch (ex) {
+          if (ex instanceof MissingDataException) {
+            throw ex;
+          }
+          warn(`Ignoring mathML: "${ex}".`);
         }
       }
       const a = node.dict.get("A");
@@ -40082,6 +40135,7 @@ class StructTreePage {
 
 
 
+
 const isRef = v => v instanceof Ref;
 const isValidExplicitDest = _isValidExplicitDest.bind(null, isRef, isName);
 function fetchDest(dest) {
@@ -40106,6 +40160,9 @@ function fetchRemoteDest(action) {
 }
 class Catalog {
   #actualNumPages = null;
+  #annotationAttachmentIdByRef = new RefSetCache();
+  #annotationAttachmentRefById = new Map();
+  #soundAttachmentIds = new Set();
   #catDict = null;
   builtInCMapCache = new Map();
   fontCache = new RefSetCache();
@@ -40128,6 +40185,23 @@ class Catalog {
   }
   cloneDict() {
     return this.#catDict.clone();
+  }
+  getAttachmentIdForAnnotation(ref, isSound = false) {
+    let id = this.#annotationAttachmentIdByRef.get(ref);
+    if (!id) {
+      const baseId = `attachmentRef:${ref.toString()}`;
+      id = baseId;
+      let i = 1;
+      while (this.#annotationAttachmentRefById.has(id) || this.attachments?.has(id)) {
+        id = `${baseId}-${i++}`;
+      }
+      this.#annotationAttachmentIdByRef.put(ref, id);
+      this.#annotationAttachmentRefById.set(id, ref);
+    }
+    if (isSound) {
+      this.#soundAttachmentIds.add(id);
+    }
+    return id;
   }
   get version() {
     const version = this.#catDict.get("Version");
@@ -40189,14 +40263,10 @@ class Catalog {
     let metadata = null;
     try {
       const stream = this.xref.fetch(streamRef, !this.xref.encrypt?.encryptMetadata);
-      if (stream instanceof BaseStream && stream.dict instanceof Dict) {
-        const type = stream.dict.get("Type");
-        const subtype = stream.dict.get("Subtype");
-        if (isName(type, "Metadata") && isName(subtype, "XML")) {
-          const data = stringToUTF8String(stream.getString());
-          if (data) {
-            metadata = new MetadataParser(data).serializable;
-          }
+      if (stream instanceof BaseStream && isDict(stream.dict, "Metadata") && isName(stream.dict.get("Subtype"), "XML")) {
+        const data = stringToUTF8String(stream.getString());
+        if (data) {
+          metadata = new MetadataParser(data).serializable;
         }
       }
     } catch (ex) {
@@ -40253,14 +40323,9 @@ class Catalog {
     return shadow(this, "structTreeRoot", structTree);
   }
   #readStructTreeRoot() {
-    const rawObj = this.#catDict.getRaw("StructTreeRoot");
-    const obj = this.xref.fetchIfRef(rawObj);
-    if (!(obj instanceof Dict)) {
-      return null;
-    }
-    const root = new StructTreeRoot(this.xref, obj, rawObj);
-    root.init();
-    return root;
+    const rawObj = this.#catDict.getRaw("StructTreeRoot"),
+      obj = this.xref.fetchIfRef(rawObj);
+    return obj instanceof Dict ? new StructTreeRoot(this.xref, obj, rawObj) : null;
   }
   get toplevelPagesDict() {
     const pagesObj = this.#catDict.get("Pages");
@@ -40331,6 +40396,7 @@ class Catalog {
       }
       const outlineItem = {
         action: data.action,
+        attachmentId: data.attachmentId,
         attachment: data.attachment,
         dest: data.dest,
         url: data.url,
@@ -40943,12 +41009,41 @@ class Catalog {
     if (obj instanceof Dict && obj.has("EmbeddedFiles")) {
       const nameTree = new NameTree(obj.getRaw("EmbeddedFiles"), this.xref);
       for (const [key, value] of nameTree.getAll()) {
-        const fs = new FileSpec(value);
-        attachments ??= Object.create(null);
-        attachments[stringToPDFString(key, true)] = fs.serializable;
+        (attachments ??= new Map()).set(stringToPDFString(key, true), new FileSpec(value).serializable);
       }
     }
     return shadow(this, "attachments", attachments);
+  }
+  #attachmentContentByName(id) {
+    const obj = this.#catDict.get("Names");
+    if (obj instanceof Dict && obj.has("EmbeddedFiles")) {
+      const nameTree = new NameTree(obj.getRaw("EmbeddedFiles"), this.xref);
+      for (const [key, value] of nameTree.getAll()) {
+        if (stringToPDFString(key, true) === id) {
+          return FileSpec.readContent(value);
+        }
+      }
+    }
+    return undefined;
+  }
+  attachmentContent(id) {
+    const namedContent = this.#attachmentContentByName(id);
+    if (namedContent !== undefined) {
+      return namedContent;
+    }
+    const ref = this.#annotationAttachmentRefById.get(id);
+    if (ref) {
+      const target = this.xref.fetch(ref);
+      if (target instanceof BaseStream) {
+        const content = FileSpec.readStreamContent(target);
+        if (this.#soundAttachmentIds.has(id)) {
+          return soundStreamToWav(target, content) ?? content;
+        }
+        return content;
+      }
+      return target instanceof Dict ? FileSpec.readContent(target) : null;
+    }
+    return null;
   }
   get rawEmbeddedFiles() {
     const obj = this.#catDict.get("Names");
@@ -41181,6 +41276,19 @@ class Catalog {
         }
       }
       if (!Array.isArray(kids)) {
+        let type = currentNode.getRaw("Type");
+        if (type instanceof Ref) {
+          try {
+            type = await xref.fetchAsync(type);
+          } catch (ex) {
+            addPageError(ex);
+            break;
+          }
+        }
+        if (isName(type, "Page") || !currentNode.has("Kids")) {
+          addPageDict(currentNode, null);
+          break;
+        }
         addPageError(new FormatError("Page dictionary kids object is not an array."));
         break;
       }
@@ -41456,10 +41564,7 @@ class Catalog {
         case "GoToR":
           const urlDict = action.get("F");
           if (urlDict instanceof Dict) {
-            const fs = new FileSpec(urlDict, true);
-            ({
-              rawFilename: url
-            } = fs.serializable);
+            url = new FileSpec(urlDict).filename;
           } else if (typeof urlDict === "string") {
             url = urlDict;
           } else {
@@ -41476,16 +41581,17 @@ class Catalog {
           break;
         case "GoToE":
           const target = action.get("T");
-          let attachment;
-          if (docAttachments && target instanceof Dict) {
+          let id = null;
+          if (target instanceof Dict) {
             const relationship = target.get("R");
             const name = target.get("N");
             if (isName(relationship, "C") && typeof name === "string") {
-              attachment = docAttachments[stringToPDFString(name, true)];
+              id = stringToPDFString(name, true);
             }
           }
-          if (attachment) {
-            resultObj.attachment = attachment;
+          if (docAttachments && id) {
+            resultObj.attachmentId = id;
+            resultObj.attachment = docAttachments.get(id);
             const attachmentDest = fetchRemoteDest(action);
             if (attachmentDest) {
               resultObj.attachmentDest = attachmentDest;
@@ -41726,8 +41832,7 @@ async function createImage(bitmap, xref, {
   const colorCounter = new Set();
   let hasAlpha = false;
   let useFlate = true;
-  for (let i = 0, ii = buf32.length; i < ii; i++) {
-    const v = buf32[i];
+  for (const v of buf32) {
     if ((isLE ? v >>> 24 : v & 0xff) !== 0xff) {
       hasAlpha = true;
       break;
@@ -42250,9 +42355,7 @@ class FontFinder {
       this.addPdfFont(pdfFont);
     }
     for (const pdfFont of this.fonts.values()) {
-      if (!pdfFont.regular) {
-        pdfFont.regular = pdfFont.italic || pdfFont.bold || pdfFont.bolditalic;
-      }
+      pdfFont.regular ||= pdfFont.italic || pdfFont.bold || pdfFont.bolditalic;
     }
     if (!reallyMissingFonts || reallyMissingFonts.size === 0) {
       return;
@@ -42282,9 +42385,7 @@ class FontFinder {
         property += "italic";
       }
     }
-    if (!property) {
-      property = "regular";
-    }
+    property ||= "regular";
     font[property] = pdfFont;
   }
   getDefault() {
@@ -43158,9 +43259,7 @@ class XFAObject {
       proto = ids.get(id);
     } else {
       proto = searchNode(ids.get($root), this, somExpression, true, false);
-      if (proto) {
-        proto = proto[0];
-      }
+      proto &&= proto[0];
     }
     if (!proto) {
       warn(`XFA - Invalid prototype reference: ${ref}.`);
@@ -46499,7 +46598,7 @@ class Field extends XFAObject {
       }
     }
     if (!this.ui.imageEdit && ui.children?.[0] && this.h) {
-      borderDims = borderDims || getBorderDims(this.ui[$getExtra]());
+      borderDims ||= getBorderDims(this.ui[$getExtra]());
       let captionHeight = 0;
       if (this.caption && ["top", "bottom"].includes(this.caption.placement)) {
         captionHeight = this.caption.reserve;
@@ -52519,9 +52618,7 @@ class XFAFactory {
         attributes
       } = html;
       if (attributes) {
-        if (attributes.class) {
-          attributes.class = attributes.class.filter(attr => !attr.startsWith("xfa"));
-        }
+        attributes.class &&= attributes.class.filter(attr => !attr.startsWith("xfa"));
         attributes.dir = "auto";
       }
       return {
@@ -52554,10 +52651,12 @@ class XFAFactory {
 
 
 
+
 class AnnotationFactory {
   static createGlobals(pdfManager) {
     return Promise.all([pdfManager.ensureCatalog("acroForm"), pdfManager.ensureDoc("xfaDatasets"), pdfManager.ensureCatalog("structTreeRoot"), pdfManager.ensureCatalog("baseUrl"), pdfManager.ensureCatalog("attachments"), pdfManager.ensureCatalog("globalColorSpaceCache")]).then(([acroForm, xfaDatasets, structTreeRoot, baseUrl, attachments, globalColorSpaceCache]) => ({
       pdfManager,
+      catalog: pdfManager.pdfDocument.catalog,
       acroForm: acroForm instanceof Dict ? acroForm : Dict.empty,
       xfaDatasets,
       structTreeRoot,
@@ -52655,6 +52754,12 @@ class AnnotationFactory {
         return new StampAnnotation(parameters);
       case "FileAttachment":
         return new FileAttachmentAnnotation(parameters);
+      case "RichMedia":
+        return new RichMediaAnnotation(parameters);
+      case "Screen":
+        return new ScreenAnnotation(parameters);
+      case "Sound":
+        return new SoundAnnotation(parameters);
       default:
         if (!collectFields) {
           if (!subtype) {
@@ -52675,8 +52780,7 @@ class AnnotationFactory {
       const pageRef = annotDict.getRaw("P");
       if (pageRef instanceof Ref) {
         try {
-          const pageIndex = await pdfManager.ensureCatalog("getPageIndex", [pageRef]);
-          return pageIndex;
+          return await pdfManager.ensureCatalog("getPageIndex", [pageRef]);
         } catch (ex) {
           info(`_getPageIndex -- not a valid page reference: "${ex}".`);
         }
@@ -52918,6 +53022,7 @@ function getTransformMatrix(rect, bbox, matrix) {
   return [xRatio, 0, 0, yRatio, rect[0] - minX * xRatio, rect[1] - minY * yRatio];
 }
 class Annotation {
+  appearance = null;
   _oc = undefined;
   constructor(params) {
     const {
@@ -53001,6 +53106,13 @@ class Annotation {
     this._isOffscreenCanvasSupported = params.evaluatorOptions.isOffscreenCanvasSupported;
     this._fallbackFontDict = null;
     this._needAppearances = false;
+  }
+  _getOperatorListNoAppearance() {
+    return {
+      opList: new OperatorList(),
+      separateForm: false,
+      separateCanvas: false
+    };
   }
   _hasFlag(flags, flag) {
     return !!(flags & flag);
@@ -53174,7 +53286,6 @@ class Annotation {
     }
   }
   setAppearance(dict) {
-    this.appearance = null;
     const appearanceStates = dict.get("AP");
     if (!(appearanceStates instanceof Dict)) {
       return;
@@ -53188,7 +53299,7 @@ class Annotation {
       return;
     }
     const as = dict.get("AS");
-    if (!(as instanceof Name) || !normalAppearanceState.has(as.name)) {
+    if (!(as instanceof Name)) {
       return;
     }
     const appearance = normalAppearanceState.get(as.name);
@@ -53201,6 +53312,9 @@ class Annotation {
       try {
         this._oc = parseMarkedContentProps(xref, dict.get("OC"), null);
       } catch (ex) {
+        if (ex instanceof MissingDataException) {
+          throw ex;
+        }
         warn(`#setOptionalContent: ${ex}`);
       }
     }
@@ -53212,6 +53326,9 @@ class Annotation {
     }
     return resources;
   }
+  get _ownCanvasRequiresForms() {
+    return false;
+  }
   async getOperatorList(evaluator, task, intent, annotationStorage) {
     const {
       hasOwnCanvas,
@@ -53219,28 +53336,20 @@ class Annotation {
       rect
     } = this.data;
     let appearance = this.appearance;
-    const isUsingOwnCanvas = !!(hasOwnCanvas && intent & RenderingIntentFlag.DISPLAY);
+    const isUsingOwnCanvas = !!(hasOwnCanvas && intent & RenderingIntentFlag.DISPLAY && (!this._ownCanvasRequiresForms || intent & RenderingIntentFlag.ANNOTATIONS_FORMS));
     if (isUsingOwnCanvas && (this.width === 0 || this.height === 0)) {
       this.data.hasOwnCanvas = false;
-      return {
-        opList: new OperatorList(),
-        separateForm: false,
-        separateCanvas: false
-      };
+      return this._getOperatorListNoAppearance();
     }
     if (!appearance) {
       if (!isUsingOwnCanvas) {
-        return {
-          opList: new OperatorList(),
-          separateForm: false,
-          separateCanvas: false
-        };
+        return this._getOperatorListNoAppearance();
       }
       appearance = new StringStream("", new Dict());
     }
     const appearanceDict = appearance.dict;
     const resources = await this.loadResources(RESOURCES_KEYS_OPERATOR_LIST, appearance);
-    const bbox = lookupRect(appearanceDict.getArray("BBox"), [0, 0, 1, 1]);
+    const bbox = lookupRect(appearanceDict.getArray("BBox"), [0, 0, this.width, this.height]);
     const matrix = lookupMatrix(appearanceDict.getArray("Matrix"), IDENTITY_MATRIX);
     const transform = getTransformMatrix(rect, bbox, matrix);
     const opList = new OperatorList();
@@ -53283,6 +53392,8 @@ class Annotation {
     const resources = await this.loadResources(RESOURCES_KEYS_TEXT_CONTENT, this.appearance);
     const text = [];
     const buffer = [];
+    let firstPositionX = Infinity;
+    let firstPositionY = Infinity;
     let firstPosition = null;
     const sink = {
       desiredSize: Math.Infinity,
@@ -53292,7 +53403,8 @@ class Annotation {
           if (item.str === undefined) {
             continue;
           }
-          firstPosition ||= item.transform.slice(-2);
+          firstPositionX = Math.min(firstPositionX, item.transform[4]);
+          firstPositionY = Math.min(firstPositionY, item.transform[5]);
           buffer.push(item.str);
           if (item.hasEOL) {
             text.push(buffer.join("").trimEnd());
@@ -53311,6 +53423,9 @@ class Annotation {
       viewBox
     });
     this.reset();
+    if (firstPositionX !== Infinity) {
+      firstPosition = [firstPositionX, firstPositionY];
+    }
     if (buffer.length) {
       text.push(buffer.join("").trimEnd());
     }
@@ -53387,6 +53502,15 @@ class Annotation {
       }
     }
     return fieldName.join(".");
+  }
+  _getAttachmentId(fsDict, fsRef, annotationGlobals, isSound = false) {
+    if (!(fsDict instanceof Dict)) {
+      return undefined;
+    }
+    if (!(fsRef instanceof Ref)) {
+      fsRef = FileSpec.pickPlatformItem(fsDict.get("EF"), true);
+    }
+    return fsRef instanceof Ref ? annotationGlobals.catalog.getAttachmentIdForAnnotation(fsRef, isSound) : undefined;
   }
   get width() {
     return this.data.rect[2] - this.data.rect[0];
@@ -53774,11 +53898,9 @@ class WidgetAnnotation extends Annotation {
   }
   async getOperatorList(evaluator, task, intent, annotationStorage) {
     if (intent & RenderingIntentFlag.ANNOTATIONS_FORMS && !(this instanceof SignatureWidgetAnnotation) && !this.data.noHTML && !this.data.hasOwnCanvas) {
-      return {
-        opList: new OperatorList(),
-        separateForm: true,
-        separateCanvas: false
-      };
+      const list = this._getOperatorListNoAppearance();
+      list.separateForm = true;
+      return list;
     }
     if (!this._hasText) {
       return super.getOperatorList(evaluator, task, intent, annotationStorage);
@@ -54057,7 +54179,7 @@ class WidgetAnnotation extends Annotation {
       return this._getMultilineAppearance(defaultAppearance, encodedLines, font, fontSize, totalWidth, totalHeight, alignment, defaultHPadding, defaultVPadding, descent, lineHeight, annotationStorage);
     }
     if (this.data.comb) {
-      return this._getCombAppearance(defaultAppearance, font, encodedLines[0], fontSize, totalWidth, totalHeight, defaultHPadding, defaultVPadding, descent, lineHeight, alignment, bidi(lines[0]).dir === "rtl", annotationStorage);
+      return this._getCombAppearance(defaultAppearance, font, encodedLines[0], fontSize, totalWidth, totalHeight, alignment, bidi(lines[0]).dir === "rtl", annotationStorage);
     }
     const bottomPadding = defaultVPadding + descent;
     if (alignment === 0 || alignment > 2) {
@@ -54091,13 +54213,13 @@ class WidgetAnnotation extends Annotation {
     let {
       fontSize
     } = this.data.defaultAppearanceData;
-    let lineHeight = (fontSize || 12) * LINE_FACTOR,
+    let lineHeight = (fontSize || 12) * (/* inlined export .LINE_FACTOR */1.35),
       numberOfLines = Math.round(height / lineHeight);
     if (!fontSize) {
       const roundWithTwoDigits = x => Math.floor(x * 100) / 100;
       if (lineCount === -1) {
         const textWidth = this._getTextWidth(text, font);
-        fontSize = roundWithTwoDigits(Math.min(height / LINE_FACTOR, width / textWidth));
+        fontSize = roundWithTwoDigits(Math.min(height / (/* inlined export .LINE_FACTOR */1.35), width / textWidth));
         numberOfLines = 1;
       } else {
         const lines = text.split(/\r\n?|\n/);
@@ -54126,7 +54248,7 @@ class WidgetAnnotation extends Annotation {
         numberOfLines = Math.max(numberOfLines, lineCount);
         while (true) {
           lineHeight = height / numberOfLines;
-          fontSize = roundWithTwoDigits(lineHeight / LINE_FACTOR);
+          fontSize = roundWithTwoDigits(lineHeight / (/* inlined export .LINE_FACTOR */1.35));
           if (isTooBig(fontSize)) {
             numberOfLines++;
             continue;
@@ -54291,26 +54413,40 @@ class TextWidgetAnnotation extends WidgetAnnotation {
   get hasTextContent() {
     return !!this.appearance && !this._needAppearances;
   }
-  _getCombAppearance(defaultAppearance, font, text, fontSize, width, height, hPadding, vPadding, descent, lineHeight, alignment, isRTL, annotationStorage) {
+  _getCombAppearance(defaultAppearance, font, text, fontSize, width, height, alignment, isRTL, annotationStorage) {
     const combWidth = width / this.data.maxLen;
     const colors = this.getBorderAndBackgroundAppearances(annotationStorage);
-    const buf = [];
-    const positions = font.getCharPositions(text);
-    for (const [start, end] of positions) {
-      buf.push(`(${escapeString(text.substring(start, end))}) Tj`);
-    }
+    const cells = font.getCharPositions(text).map(([start, end]) => {
+      const glyph = text.substring(start, end);
+      return {
+        glyph,
+        width: this._getTextWidth(glyph, font) * fontSize
+      };
+    });
     if (isRTL) {
-      buf.reverse();
+      cells.reverse();
     }
-    const textWidth = combWidth * positions.length;
-    let hShift = hPadding;
+    const textWidth = combWidth * cells.length;
+    let hShift = 0;
     if (alignment === 1) {
       hShift += Math.floor((width - textWidth) / (2 * combWidth)) * combWidth;
     } else if (alignment === 2) {
       hShift += width - textWidth;
     }
-    const renderedComb = buf.join(` ${numberToString(combWidth)} 0 Td `);
-    return `/Tx BMC q ${colors}BT ` + defaultAppearance + ` 1 0 0 1 ${numberToString(hShift)} ${numberToString(vPadding + descent)} Tm ${renderedComb}` + " ET Q EMC";
+    const buf = [];
+    let previousWidth = 0;
+    for (let i = 0, ii = cells.length; i < ii; i++) {
+      const {
+        glyph,
+        width: glyphWidth
+      } = cells[i];
+      const shift = i === 0 ? (combWidth - glyphWidth) / 2 : combWidth + (previousWidth - glyphWidth) / 2;
+      buf.push(`${numberToString(shift)} 0 Td (${escapeString(glyph)}) Tj`);
+      previousWidth = glyphWidth;
+    }
+    const renderedComb = buf.join(" ");
+    const vShift = (height - (font.capHeight || font.ascent || 1) * fontSize) / 2;
+    return `/Tx BMC q ${colors}BT ` + defaultAppearance + ` 1 0 0 1 ${numberToString(hShift)} ${numberToString(vShift)} Tm ${renderedComb}` + " ET Q EMC";
   }
   _getMultilineAppearance(defaultAppearance, lines, font, fontSize, width, height, alignment, hPadding, vPadding, descent, lineHeight, annotationStorage) {
     const buf = [];
@@ -54379,7 +54515,7 @@ class TextWidgetAnnotation extends WidgetAnnotation {
       }
     }
     if (startChunk < line.length) {
-      chunks.push(line.substring(startChunk, line.length));
+      chunks.push(line.substring(startChunk));
     }
     return chunks;
   }
@@ -54433,21 +54569,55 @@ class ButtonWidgetAnnotation extends WidgetAnnotation {
     this.data.radioButton = isRadio && !isPushButton;
     this.data.pushButton = isPushButton;
     this.data.isTooltipOnly = false;
+    this.data.hasOwnCanvas = true;
+    this.data.noHTML = false;
     if (this.data.checkBox) {
       this._processCheckBox(params);
     } else if (this.data.radioButton) {
       this._processRadioButton(params);
     } else if (this.data.pushButton) {
-      this.data.hasOwnCanvas = true;
-      this.data.noHTML = false;
       this._processPushButton(params);
     } else {
       warn("Invalid field flags for button widget annotation");
     }
   }
+  get _ownCanvasRequiresForms() {
+    return this.data.checkBox || this.data.radioButton;
+  }
+  #getOperatorListForAppearance(evaluator, task, intent, annotationStorage, rotation, appearance) {
+    if (!appearance) {
+      return this._getOperatorListNoAppearance();
+    }
+    const savedAppearance = this.appearance;
+    const savedMatrix = lookupMatrix(appearance.dict.getArray("Matrix"), IDENTITY_MATRIX);
+    if (rotation) {
+      appearance.dict.set("Matrix", this.getRotationMatrix(annotationStorage));
+    }
+    this.appearance = appearance;
+    const operatorList = super.getOperatorList(evaluator, task, intent, annotationStorage);
+    this.appearance = savedAppearance;
+    appearance.dict.set("Matrix", savedMatrix);
+    return operatorList;
+  }
   async getOperatorList(evaluator, task, intent, annotationStorage) {
     if (this.data.pushButton) {
       return super.getOperatorList(evaluator, task, intent, false, annotationStorage);
+    }
+    if (intent & RenderingIntentFlag.DISPLAY && intent & RenderingIntentFlag.ANNOTATIONS_FORMS && (this.data.checkBox || this.data.radioButton)) {
+      const setCanvasName = (operatorList, name) => {
+        const index = operatorList.fnArray.indexOf(OPS.beginAnnotation);
+        if (index !== -1) {
+          operatorList.argsArray[index].push(name);
+        }
+      };
+      const checked = await this.#getOperatorListForAppearance(evaluator, task, intent, annotationStorage, null, this.checkedAppearance);
+      setCanvasName(checked.opList, "checked");
+      const unchecked = await this.#getOperatorListForAppearance(evaluator, task, intent, annotationStorage, null, this.uncheckedAppearance);
+      setCanvasName(unchecked.opList, "unchecked");
+      checked.opList.addOpList(unchecked.opList);
+      checked.separateForm ||= unchecked.separateForm;
+      checked.separateCanvas ||= unchecked.separateCanvas;
+      return checked;
     }
     let value = null;
     let rotation = null;
@@ -54459,27 +54629,8 @@ class ButtonWidgetAnnotation extends WidgetAnnotation {
     if (value === null && this.appearance) {
       return super.getOperatorList(evaluator, task, intent, annotationStorage);
     }
-    if (value === null || value === undefined) {
-      value = this.data.checkBox ? this.data.fieldValue === this.data.exportValue : this.data.fieldValue === this.data.buttonValue;
-    }
-    const appearance = value ? this.checkedAppearance : this.uncheckedAppearance;
-    if (appearance) {
-      const savedAppearance = this.appearance;
-      const savedMatrix = lookupMatrix(appearance.dict.getArray("Matrix"), IDENTITY_MATRIX);
-      if (rotation) {
-        appearance.dict.set("Matrix", this.getRotationMatrix(annotationStorage));
-      }
-      this.appearance = appearance;
-      const operatorList = super.getOperatorList(evaluator, task, intent, annotationStorage);
-      this.appearance = savedAppearance;
-      appearance.dict.set("Matrix", savedMatrix);
-      return operatorList;
-    }
-    return {
-      opList: new OperatorList(),
-      separateForm: false,
-      separateCanvas: false
-    };
+    value ??= this.data.checkBox ? this.data.fieldValue === this.data.exportValue : this.data.fieldValue === this.data.buttonValue;
+    return this.#getOperatorListForAppearance(evaluator, task, intent, annotationStorage, rotation, value ? this.checkedAppearance : this.uncheckedAppearance);
   }
   async save(evaluator, task, annotationStorage, changes) {
     if (this.data.checkBox) {
@@ -54522,7 +54673,7 @@ class ButtonWidgetAnnotation extends WidgetAnnotation {
       path: this.data.fieldName,
       value: value ? this.data.exportValue : ""
     };
-    const name = Name.get(value ? this.data.exportValue : "Off");
+    const name = Name.get(value ? this._onStateName : "Off");
     this.setValue(dict, name, evaluator.xref, changes);
     dict.set("AS", name);
     dict.set("M", `D:${getModificationDate()}`);
@@ -54571,7 +54722,7 @@ class ButtonWidgetAnnotation extends WidgetAnnotation {
       path: this.data.fieldName,
       value: value ? this.data.buttonValue : ""
     };
-    const name = Name.get(value ? this.data.buttonValue : "Off");
+    const name = Name.get(value ? this._onStateName : "Off");
     if (value) {
       this.setValue(dict, name, evaluator.xref, changes);
     }
@@ -54632,21 +54783,101 @@ class ButtonWidgetAnnotation extends WidgetAnnotation {
     this.checkedAppearance = new StringStream(appearance, appearanceStreamDict);
     this._streams.push(this.checkedAppearance);
   }
+  _getOnStateName(dict) {
+    const appearanceStates = dict.get("AP");
+    if (!(appearanceStates instanceof Dict)) {
+      return null;
+    }
+    const normalAppearance = appearanceStates.get("N");
+    if (!(normalAppearance instanceof Dict)) {
+      return null;
+    }
+    for (const key of normalAppearance.getKeys()) {
+      if (key !== "Off") {
+        return key;
+      }
+    }
+    return null;
+  }
+  _getExportValueForOptIndex(index, opt, xref) {
+    if (Number.isInteger(index) && index >= 0 && index < opt.length) {
+      const value = this._decodeFormValue(xref.fetchIfRef(opt[index]));
+      if (typeof value === "string") {
+        return value;
+      }
+    }
+    return null;
+  }
+  _getOptInfo(dict, onState, opt, xref) {
+    if (!Array.isArray(opt)) {
+      return null;
+    }
+    const stateToIndex = new Map();
+    let currentIndex = null;
+    const fieldParent = dict.get("Parent");
+    const kids = fieldParent instanceof Dict ? fieldParent.get("Kids") : null;
+    if (Array.isArray(kids)) {
+      for (let i = 0, ii = Math.min(kids.length, opt.length); i < ii; i++) {
+        const kid = kids[i];
+        if (kid instanceof Ref && isRefsEqual(kid, this.ref)) {
+          currentIndex = i;
+        }
+        const kidDict = xref.fetchIfRef(kid);
+        if (!(kidDict instanceof Dict)) {
+          continue;
+        }
+        if (kidDict === dict) {
+          currentIndex = i;
+        }
+        const kidOnState = this._getOnStateName(kidDict);
+        if (typeof kidOnState === "string" && !stateToIndex.has(kidOnState)) {
+          stateToIndex.set(kidOnState, i);
+        }
+      }
+    } else if (opt.length === 1 && typeof onState === "string") {
+      currentIndex = 0;
+      stateToIndex.set(onState, 0);
+    }
+    return {
+      currentIndex,
+      opt,
+      stateToIndex
+    };
+  }
+  _getExportValue(state, optInfo, xref) {
+    if (!optInfo || typeof state !== "string" || state === "Off") {
+      return state;
+    }
+    if (state === this._onStateName) {
+      const exportValue = this._getExportValueForOptIndex(optInfo.currentIndex, optInfo.opt, xref);
+      if (exportValue !== null) {
+        return exportValue;
+      }
+    }
+    if (optInfo.stateToIndex.has(state)) {
+      const exportValue = this._getExportValueForOptIndex(optInfo.stateToIndex.get(state), optInfo.opt, xref);
+      if (exportValue !== null) {
+        return exportValue;
+      }
+    }
+    const index = parseInt(state, 10);
+    if (Number.isInteger(index) && String(index) === state) {
+      return this._getExportValueForOptIndex(index, optInfo.opt, xref) || state;
+    }
+    return state;
+  }
   _processCheckBox(params) {
     const customAppearance = params.dict.get("AP");
-    if (!(customAppearance instanceof Dict)) {
-      return;
-    }
-    const normalAppearance = customAppearance.get("N");
+    let normalAppearance = customAppearance instanceof Dict ? customAppearance.get("N") : null;
     if (!(normalAppearance instanceof Dict)) {
-      return;
+      normalAppearance = null;
     }
     const asValue = this._decodeFormValue(params.dict.get("AS"));
     if (typeof asValue === "string") {
       this.data.fieldValue = asValue;
     }
     const yes = this.data.fieldValue !== null && this.data.fieldValue !== "Off" ? this.data.fieldValue : "Yes";
-    const exportValues = [...normalAppearance.getKeys()];
+    const exportValues = normalAppearance ? [...normalAppearance.getKeys()] : [];
     if (exportValues.length === 0) {
       exportValues.push("Off", yes);
     } else if (exportValues.length === 1) {
@@ -54663,13 +54894,22 @@ class ButtonWidgetAnnotation extends WidgetAnnotation {
       exportValues.length = 0;
       exportValues.push("Off", otherYes);
     }
-    if (!exportValues.includes(this.data.fieldValue)) {
+    const onState = exportValues[1];
+    this._onStateName = onState;
+    const opt = getInheritableProperty({
+      dict: params.dict,
+      key: "Opt"
+    });
+    const optInfo = this._getOptInfo(params.dict, onState, opt, params.xref);
+    this.data.exportValue = this._getExportValue(onState, optInfo, params.xref);
+    if (!exportValues.includes(this.data.fieldValue) && this.data.fieldValue !== this.data.exportValue) {
       this.data.fieldValue = "Off";
     }
-    this.data.exportValue = exportValues[1];
-    const checkedAppearance = normalAppearance.get(this.data.exportValue);
+    this.data.fieldValue = this._getExportValue(this.data.fieldValue, optInfo, params.xref);
+    this.data.defaultFieldValue = this._getExportValue(this.data.defaultFieldValue, optInfo, params.xref);
+    const checkedAppearance = normalAppearance?.get(onState);
     this.checkedAppearance = checkedAppearance instanceof BaseStream ? checkedAppearance : null;
-    const uncheckedAppearance = normalAppearance.get("Off");
+    const uncheckedAppearance = normalAppearance?.get("Off");
     this.uncheckedAppearance = uncheckedAppearance instanceof BaseStream ? uncheckedAppearance : null;
     if (this.checkedAppearance) {
       this._streams.push(this.checkedAppearance);
@@ -54702,13 +54942,23 @@ class ButtonWidgetAnnotation extends WidgetAnnotation {
     if (!(normalAppearance instanceof Dict)) {
       return;
     }
+    let onState = null;
     for (const key of normalAppearance.getKeys()) {
       if (key !== "Off") {
-        this.data.buttonValue = key;
+        onState = key;
         break;
       }
     }
-    const checkedAppearance = normalAppearance.get(this.data.buttonValue);
+    this._onStateName = onState;
+    const opt = getInheritableProperty({
+      dict: params.dict,
+      key: "Opt"
+    });
+    const optInfo = this._getOptInfo(params.dict, onState, opt, params.xref);
+    this.data.buttonValue = this._getExportValue(onState, optInfo, params.xref);
+    this.data.fieldValue = this._getExportValue(this.data.fieldValue, optInfo, params.xref);
+    this.data.defaultFieldValue = this._getExportValue(this.data.defaultFieldValue, optInfo, params.xref);
+    const checkedAppearance = normalAppearance.get(onState);
     this.checkedAppearance = checkedAppearance instanceof BaseStream ? checkedAppearance : null;
     const uncheckedAppearance = normalAppearance.get("Off");
     this.uncheckedAppearance = uncheckedAppearance instanceof BaseStream ? uncheckedAppearance : null;
@@ -54931,7 +55181,7 @@ class ChoiceWidgetAnnotation extends WidgetAnnotation {
     } else {
       defaultAppearance = this._defaultAppearance;
     }
-    const lineHeight = fontSize * LINE_FACTOR;
+    const lineHeight = fontSize * (/* inlined export .LINE_FACTOR */1.35);
     const vPadding = (lineHeight - fontSize) / 2;
     const numberOfVisibleLines = Math.floor(totalHeight / lineHeight);
     let firstIndex = 0;
@@ -55240,13 +55490,10 @@ class FreeTextAnnotation extends MarkupAnnotation {
       }
       totalWidth = Math.max(totalWidth, lineWidth);
     }
-    let hscale = 1;
-    if (totalWidth > w) {
-      hscale = w / totalWidth;
-    }
+    const hscale = totalWidth > w ? w / totalWidth : 1;
     let vscale = 1;
-    const lineHeight = LINE_FACTOR * fontSize;
-    const lineAscent = (LINE_FACTOR - LINE_DESCENT_FACTOR) * fontSize;
+    const lineHeight = (/* inlined export .LINE_FACTOR */1.35) * fontSize;
+    const lineAscent = ((/* inlined export .LINE_FACTOR */1.35) - (/* inlined export .LINE_DESCENT_FACTOR */0.35)) * fontSize;
     const totalHeight = lineHeight * lines.length;
     if (totalHeight > h) {
       vscale = h / totalHeight;
@@ -55439,9 +55686,7 @@ class PolylineAnnotation extends MarkupAnnotation {
       const strokeColor = getPdfColorArray(this.color, [0, 0, 0]);
       const strokeAlpha = dict.get("CA");
       let fillColor = getRgbColor(dict.getArray("IC"), null);
-      if (fillColor) {
-        fillColor = getPdfColorArray(fillColor);
-      }
+      fillColor &&= getPdfColorArray(fillColor);
       let operator;
       if (fillColor) {
         if (this.color) {
@@ -55498,15 +55743,15 @@ class InkAnnotation extends MarkupAnnotation {
     if (!Array.isArray(rawInkLists)) {
       return;
     }
-    for (let i = 0, ii = rawInkLists.length; i < ii; ++i) {
-      if (!Array.isArray(rawInkLists[i])) {
+    for (const rawInkList of rawInkLists) {
+      if (!Array.isArray(rawInkList)) {
         continue;
       }
-      const inkList = new Float32Array(rawInkLists[i].length);
+      const inkList = new Float32Array(rawInkList.length);
       this.data.inkLists.push(inkList);
-      for (let j = 0, jj = rawInkLists[i].length; j < jj; j += 2) {
-        const x = xref.fetchIfRef(rawInkLists[i][j]),
-          y = xref.fetchIfRef(rawInkLists[i][j + 1]);
+      for (let j = 0, jj = rawInkList.length; j < jj; j += 2) {
+        const x = xref.fetchIfRef(rawInkList[j]),
+          y = xref.fetchIfRef(rawInkList[j + 1]);
         if (typeof x === "number" && typeof y === "number") {
           inkList[j] = x;
           inkList[j + 1] = y;
@@ -55694,11 +55939,7 @@ class HighlightAnnotation extends MarkupAnnotation {
     this.data.opacity = dict.get("CA") || 1;
     const quadPoints = this.data.quadPoints = getQuadPoints(dict, null);
     if (quadPoints) {
-      const resources = this.appearance?.dict.get("Resources");
-      if (!this.appearance || !resources?.has("ExtGState")) {
-        if (this.appearance) {
-          warn("HighlightAnnotation - ignoring built-in appearance stream.");
-        }
+      if (!this.appearance) {
         const fillColor = getPdfColorArray(this.color, [1, 1, 0]);
         const fillAlpha = dict.get("CA");
         this._setDefaultAppearance({
@@ -56022,16 +56263,283 @@ class FileAttachmentAnnotation extends MarkupAnnotation {
   constructor(params) {
     super(params);
     const {
+      annotationGlobals,
       dict
     } = params;
-    const file = new FileSpec(dict.get("FS"));
+    const fsDict = dict.get("FS");
     this.data.hasOwnCanvas = this.data.noRotate;
     this.data.noHTML = false;
-    this.data.file = file.serializable;
+    this.data.fileId = this._getAttachmentId(fsDict, dict.getRaw("FS"), annotationGlobals);
+    this.data.file = new FileSpec(fsDict).serializable;
     const name = dict.get("Name");
     this.data.name = name instanceof Name ? stringToPDFString(name.name) : "PushPin";
     const fillAlpha = dict.get("ca");
     this.data.fillAlpha = typeof fillAlpha === "number" && fillAlpha >= 0 && fillAlpha <= 1 ? fillAlpha : null;
+  }
+}
+class MediaAnnotation extends Annotation {
+  static #MEDIA_MIME_TYPE_RE = /^(?:video|audio)\//;
+  constructor(params) {
+    super(params);
+    this.data.noHTML = true;
+  }
+  _setMediaData({
+    assetRef,
+    assetDict,
+    filename,
+    contentType,
+    wrapSound = false
+  }, annotationGlobals) {
+    this.data.noHTML = false;
+    this.data.richMedia = {
+      fileId: this._getAttachmentId(assetDict, assetRef, annotationGlobals, wrapSound),
+      filename,
+      contentType
+    };
+  }
+  static _getContentType(assetDict, filename, contentType = null) {
+    if (typeof contentType === "string" && MediaAnnotation.#MEDIA_MIME_TYPE_RE.test(contentType)) {
+      return contentType;
+    }
+    const stream = FileSpec.pickPlatformItem(assetDict.get("EF"));
+    const subtype = stream instanceof BaseStream ? stream.dict?.get("Subtype") : null;
+    if (subtype instanceof Name && MediaAnnotation.#MEDIA_MIME_TYPE_RE.test(subtype.name)) {
+      return subtype.name;
+    }
+    const ext = filename.split(".").at(-1)?.toLowerCase();
+    switch (ext) {
+      case "mp4":
+      case "m4v":
+        return "video/mp4";
+      case "webm":
+        return "video/webm";
+      case "ogv":
+        return "video/ogg";
+      case "mov":
+        return "video/quicktime";
+      case "mp3":
+        return "audio/mpeg";
+      case "m4a":
+        return "audio/mp4";
+      case "wav":
+        return "audio/wav";
+      case "oga":
+      case "ogg":
+        return "audio/ogg";
+      default:
+        return null;
+    }
+  }
+}
+class RichMediaAnnotation extends MediaAnnotation {
+  constructor(params) {
+    super(params);
+    const {
+      dict,
+      xref,
+      annotationGlobals
+    } = params;
+    const content = dict.get("RichMediaContent");
+    if (!(content instanceof Dict)) {
+      return;
+    }
+    const asset = RichMediaAnnotation.#findAsset(content, xref);
+    if (!asset) {
+      warn("RichMedia annotation has no playable asset.");
+      return;
+    }
+    this._setMediaData(asset, annotationGlobals);
+  }
+  static #findAsset(content, xref) {
+    const configurations = content.get("Configurations");
+    if (!Array.isArray(configurations)) {
+      return null;
+    }
+    for (const configRef of configurations) {
+      const config = xref.fetchIfRef(configRef);
+      if (!(config instanceof Dict)) {
+        continue;
+      }
+      const instances = config.get("Instances");
+      if (!Array.isArray(instances)) {
+        continue;
+      }
+      for (const instanceRef of instances) {
+        const instance = xref.fetchIfRef(instanceRef);
+        if (!(instance instanceof Dict)) {
+          continue;
+        }
+        if (isName(instance.get("Subtype"), "Flash")) {
+          continue;
+        }
+        const rawAsset = instance.getRaw("Asset");
+        const asset = xref.fetchIfRef(rawAsset);
+        if (!(asset instanceof Dict)) {
+          continue;
+        }
+        if (!FileSpec.hasEmbeddedFile(asset)) {
+          continue;
+        }
+        const {
+          filename
+        } = new FileSpec(asset).serializable;
+        const contentType = MediaAnnotation._getContentType(asset, filename);
+        if (!contentType) {
+          continue;
+        }
+        return {
+          assetRef: rawAsset instanceof Ref ? rawAsset : null,
+          assetDict: asset,
+          filename,
+          contentType
+        };
+      }
+    }
+    return null;
+  }
+}
+class ScreenAnnotation extends MediaAnnotation {
+  constructor(params) {
+    super(params);
+    const {
+      dict,
+      xref,
+      annotationGlobals
+    } = params;
+    const asset = ScreenAnnotation.#findAsset(dict, xref);
+    if (!asset) {
+      return;
+    }
+    this._setMediaData(asset, annotationGlobals);
+  }
+  static #findAsset(dict, xref) {
+    for (const action of this.#renditionActions(dict)) {
+      const asset = this.#findRenditionAsset(action.get("R"), xref, new RefSet());
+      if (asset) {
+        return asset;
+      }
+    }
+    return null;
+  }
+  static *#renditionActions(dict) {
+    const action = dict.get("A");
+    if (action instanceof Dict && isName(action.get("S"), "Rendition") && this.#isPlayAction(action)) {
+      yield action;
+    }
+    const additionalActions = dict.get("AA");
+    if (additionalActions instanceof Dict) {
+      for (const [, aa] of additionalActions) {
+        if (aa instanceof Dict && isName(aa.get("S"), "Rendition") && this.#isPlayAction(aa)) {
+          yield aa;
+        }
+      }
+    }
+  }
+  static #isPlayAction(action) {
+    const operation = action.get("OP");
+    return operation === undefined || operation === AnnotationRenditionOperation.PLAY_OR_RESUME || operation === AnnotationRenditionOperation.PLAY;
+  }
+  static #findRenditionAsset(rendition, xref, seen) {
+    if (!(rendition instanceof Dict)) {
+      return null;
+    }
+    const subtype = rendition.get("S");
+    if (isName(subtype, "MR")) {
+      return this.#findClipAsset(rendition.get("C"), xref);
+    }
+    if (isName(subtype, "SR")) {
+      const renditions = rendition.get("R");
+      if (Array.isArray(renditions)) {
+        for (const ref of renditions) {
+          if (ref instanceof Ref) {
+            if (seen.has(ref)) {
+              continue;
+            }
+            seen.put(ref);
+          }
+          const asset = this.#findRenditionAsset(xref.fetchIfRef(ref), xref, seen);
+          if (asset) {
+            return asset;
+          }
+        }
+      }
+    }
+    return null;
+  }
+  static #findClipAsset(clip, xref) {
+    if (!(clip instanceof Dict) || !isName(clip.get("S"), "MCD")) {
+      return null;
+    }
+    const rawData = clip.getRaw("D");
+    const data = xref.fetchIfRef(rawData);
+    const contentTypeHint = clip.get("CT");
+    let explicitType = typeof contentTypeHint === "string" ? contentTypeHint : null;
+    let assetDict, filename;
+    if (data instanceof BaseStream) {
+      assetDict = data.dict;
+      const name = clip.get("N");
+      filename = typeof name === "string" ? stringToPDFString(name) : "";
+      if (!explicitType) {
+        const subtype = data.dict.get("Subtype");
+        if (subtype instanceof Name) {
+          explicitType = subtype.name;
+        }
+      }
+    } else if (data instanceof Dict) {
+      if (!FileSpec.hasEmbeddedFile(data)) {
+        return null;
+      }
+      assetDict = data;
+      ({
+        filename
+      } = new FileSpec(data).serializable);
+    } else {
+      return null;
+    }
+    const contentType = MediaAnnotation._getContentType(assetDict, filename, explicitType);
+    if (!contentType) {
+      return null;
+    }
+    return {
+      assetRef: rawData instanceof Ref ? rawData : null,
+      assetDict,
+      filename,
+      contentType
+    };
+  }
+}
+class SoundAnnotation extends MediaAnnotation {
+  constructor(params) {
+    super(params);
+    const {
+      dict,
+      xref,
+      annotationGlobals
+    } = params;
+    const soundRef = dict.getRaw("Sound");
+    if (!(soundRef instanceof Ref)) {
+      return;
+    }
+    let sound;
+    try {
+      sound = xref.fetch(soundRef);
+    } catch (ex) {
+      if (ex instanceof MissingDataException) {
+        throw ex;
+      }
+      warn(`SoundAnnotation: "${ex}".`);
+      return;
+    }
+    if (!(sound instanceof BaseStream) || !getSoundFormat(sound.dict)) {
+      return;
+    }
+    this._setMediaData({
+      assetRef: soundRef,
+      assetDict: sound.dict,
+      filename: "sound.wav",
+      contentType: "audio/wav",
+      wrapSound: true
+    }, annotationGlobals);
   }
 }
 
@@ -57199,6 +57707,7 @@ class PDF20 extends PDFBase {
 }
 class CipherTransform {
   #cipherCache = new Map();
+  embeddedFilterName = null;
   constructor(resolveCipher, stringFilterName = null, streamFilterName = null) {
     this.resolveCipher = resolveCipher;
     this.streamFilterName = streamFilterName;
@@ -57209,7 +57718,8 @@ class CipherTransform {
     return this.#cipherCache.getOrInsertComputed(key, () => this.resolveCipher(filterName));
   }
   createStream(stream, length, cryptFilterName = null) {
-    const Cipher = this.#getCipher(cryptFilterName || this.streamFilterName);
+    const defaultFilterName = this.embeddedFilterName && isDict(stream.dict, "EmbeddedFile") ? this.embeddedFilterName : this.streamFilterName;
+    const Cipher = this.#getCipher(cryptFilterName || defaultFilterName);
     const cipher = new Cipher();
     return new DecryptStream(stream, length, function cipherTransformDecryptStream(data, finalize) {
       return cipher.decryptBlock(data, finalize);
@@ -57244,6 +57754,7 @@ class CipherTransform {
   }
 }
 class CipherTransformFactory {
+  #fileId;
   static get _defaultPasswordBytes() {
     return shadow(this, "_defaultPasswordBytes", new Uint8Array([0x28, 0xbf, 0x4e, 0x5e, 0x4e, 0x75, 0x8a, 0x41, 0x64, 0x00, 0x4e, 0x56, 0xff, 0xfa, 0x01, 0x08, 0x2e, 0x2e, 0x00, 0xb6, 0xd0, 0x68, 0x3e, 0x80, 0x2f, 0x0c, 0xa9, 0xfe, 0x64, 0x53, 0x69, 0x7a]));
   }
@@ -57383,6 +57894,7 @@ class CipherTransformFactory {
     }
     this.filterName = filter.name;
     this.dict = dict;
+    this.#fileId = fileId;
     const algorithm = dict.get("V");
     if (!Number.isInteger(algorithm) || algorithm !== 1 && algorithm !== 2 && algorithm !== 4 && algorithm !== 5) {
       throw new FormatError("unsupported encryption algorithm");
@@ -57408,6 +57920,23 @@ class CipherTransformFactory {
     if (!Number.isInteger(keyLength) || keyLength < 40 || keyLength % 8 !== 0) {
       throw new FormatError("invalid key length");
     }
+    let cf = null;
+    let stmf = Name.get("Identity");
+    let strf = Name.get("Identity");
+    let eff = stmf;
+    if (algorithm >= 4) {
+      cf = dict.get("CF");
+      if (cf instanceof Dict) {
+        cf.suppressEncryption = true;
+      }
+      stmf = dict.get("StmF") || Name.get("Identity");
+      strf = dict.get("StrF") || Name.get("Identity");
+      eff = dict.get("EFF") || stmf;
+    }
+    this.cf = cf;
+    this.stmf = stmf;
+    this.strf = strf;
+    this.eff = eff;
     const ownerBytes = stringToBytes(dict.get("O")),
       userBytes = stringToBytes(dict.get("U"));
     const ownerPassword = ownerBytes.subarray(0, 32);
@@ -57444,6 +57973,14 @@ class CipherTransformFactory {
     }
     if (!encryptionKey) {
       if (!password) {
+        if (this.algorithm >= 4 && isName(this.stmf, "Identity") && isName(this.strf, "Identity")) {
+          const effCF = this.cf?.get(this.eff.name);
+          const authEvent = effCF?.get("AuthEvent");
+          if (isName(authEvent, "EFOpen")) {
+            this.encryptionKey = null;
+            return;
+          }
+        }
         throw new PasswordException("No password given", PasswordResponses.NEED_PASSWORD);
       }
       const decodedPassword = this.#decodeUserPassword(passwordBytes, ownerPassword, revision, keyLength);
@@ -57458,16 +57995,10 @@ class CipherTransformFactory {
     } else {
       this.encryptionKey = encryptionKey;
     }
-    if (algorithm >= 4) {
-      const cf = dict.get("CF");
-      if (cf instanceof Dict) {
-        cf.suppressEncryption = true;
-      }
-      this.cf = cf;
-      this.stmf = dict.get("StmF") || Name.get("Identity");
-      this.strf = dict.get("StrF") || Name.get("Identity");
-      this.eff = dict.get("EFF") || this.stmf;
-    }
+  }
+  setPassword(password) {
+    const transform = new CipherTransformFactory(this.dict, this.#fileId, password);
+    this.encryptionKey = transform.encryptionKey;
   }
   createCipherTransform(num, gen) {
     if (this.algorithm === 4 || this.algorithm === 5) {
@@ -57480,6 +58011,12 @@ class CipherTransformFactory {
         if (!cfm || cfm.name === "None") {
           return NullCipher;
         }
+        if (!this.encryptionKey) {
+          throw new PasswordException("No password given", PasswordResponses.NEED_PASSWORD);
+        }
+        if (this.algorithm === 5) {
+          return AES256Cipher.bind(null, this.encryptionKey);
+        }
         if (cfm.name === "V2") {
           return ARCFourCipher.bind(null, this.#buildObjectKey(num, gen, this.encryptionKey, false));
         }
@@ -57491,7 +58028,9 @@ class CipherTransformFactory {
         }
         throw new FormatError("Unknown crypto method");
       };
-      return new CipherTransform(resolveCipher, this.strf, this.stmf);
+      const transform = new CipherTransform(resolveCipher, this.strf, this.stmf);
+      transform.embeddedFilterName = this.eff;
+      return transform;
     }
     const resolveCipher = () => ARCFourCipher.bind(null, this.#buildObjectKey(num, gen, this.encryptionKey, false));
     return new CipherTransform(resolveCipher);
@@ -58027,9 +58566,7 @@ class XRef {
         let dict;
         if (isCmd(obj, "xref")) {
           dict = this.processXRefTable(parser);
-          if (!this.topDict) {
-            this.topDict = dict;
-          }
+          this.topDict ||= dict;
           obj = dict.get("XRefStm");
           if (Number.isInteger(obj) && !this._xrefStms.has(obj)) {
             this._xrefStms.add(obj);
@@ -58040,9 +58577,7 @@ class XRef {
             throw new FormatError("Invalid XRef stream");
           }
           dict = this.processXRefStream(obj);
-          if (!this.topDict) {
-            this.topDict = dict;
-          }
+          this.topDict ||= dict;
           if (!dict) {
             throw new FormatError("Failed to read XRef stream");
           }
@@ -58706,8 +59241,7 @@ class Page {
     await this._parsedAnnotations;
     try {
       const structTree = await this.pdfManager.ensure(this, "_parseStructTree", [structTreeRoot]);
-      const data = await this.pdfManager.ensure(structTree, "serializable");
-      return data;
+      return await this.pdfManager.ensure(structTree, "serializable");
     } catch (ex) {
       warn(`getStructTree: "${ex}".`);
       return null;
@@ -58752,8 +59286,6 @@ class Page {
         includeMarkedContent: false,
         disableNormalization: false,
         sink: null,
-        viewBox: this.view,
-        lang: null,
         intersector
       }).then(() => {
         intersector.setText();
@@ -58891,6 +59423,7 @@ function find(stream, signature, limit = 1024, backwards = false) {
 }
 class PDFDocument {
   #pagePromises = new Map();
+  #signatureData = null;
   #version = null;
   constructor(pdfManager, stream) {
     if (stream.length <= 0) {
@@ -59646,6 +60179,141 @@ class PDFDocument {
     });
     return shadow(this, "fieldObjects", promise);
   }
+  #collectSignatureFields(fields, out, visitedRefs) {
+    if (!Array.isArray(fields)) {
+      return;
+    }
+    for (const fieldRef of fields) {
+      if (fieldRef instanceof Ref) {
+        if (visitedRefs.has(fieldRef)) {
+          continue;
+        }
+        visitedRefs.put(fieldRef);
+      }
+      const field = this.xref.fetchIfRef(fieldRef);
+      if (!(field instanceof Dict)) {
+        continue;
+      }
+      if (field.has("Kids")) {
+        this.#collectSignatureFields(field.get("Kids"), out, visitedRefs);
+        continue;
+      }
+      if (!isName(field.get("FT"), "Sig")) {
+        continue;
+      }
+      const sigDict = this.xref.fetchIfRef(field.get("V"));
+      if (!(sigDict instanceof Dict)) {
+        continue;
+      }
+      const parsed = this.#parseSignatureDict(field, sigDict, fieldRef);
+      if (parsed) {
+        out.push(parsed);
+      }
+    }
+  }
+  static #WHOLE_DOCUMENT_TAIL_FUZZ = 100;
+  #parseSignatureDict(field, sigDict, fieldRef) {
+    const byteRange = sigDict.get("ByteRange");
+    if (!Array.isArray(byteRange) || byteRange.length !== 4 || byteRange.some(n => !Number.isInteger(n) || n < 0)) {
+      return null;
+    }
+    const contents = sigDict.get("Contents");
+    if (typeof contents !== "string" || contents.length === 0) {
+      return null;
+    }
+    const filterName = sigDict.get("Filter");
+    const filter = filterName instanceof Name ? filterName.name : null;
+    const subFilterName = sigDict.get("SubFilter");
+    const subFilter = subFilterName instanceof Name ? subFilterName.name : null;
+    let signatureType = null;
+    if (subFilter === "adbe.pkcs7.detached") {
+      signatureType = 0;
+    } else if (subFilter === "adbe.pkcs7.sha1") {
+      signatureType = 1;
+    }
+    const [a, b, c, d] = byteRange;
+    const stream = this.stream;
+    const fileLength = stream.end || 0;
+    if (a !== 0 || b <= 0 || d < 0 || a + b > c || c + d > fileLength || fileLength === 0) {
+      return null;
+    }
+    const data = [stream.getByteRange(a, a + b), stream.getByteRange(c, c + d)];
+    const pkcs7 = stringToBytes(contents);
+    const t = field.get("T");
+    const fieldName = typeof t === "string" ? stringToPDFString(t) : "";
+    const name = sigDict.get("Name");
+    const reason = sigDict.get("Reason");
+    const location = sigDict.get("Location");
+    const contactInfo = sigDict.get("ContactInfo");
+    const m = sigDict.get("M");
+    const refKey = fieldRef instanceof Ref ? fieldRef.toString() : "inline";
+    const id = `${refKey}:${a}-${b}-${c}-${d}`;
+    const tailGap = fileLength - (c + d);
+    return {
+      id,
+      fieldName,
+      signerName: typeof name === "string" ? stringToPDFString(name) : null,
+      reason: typeof reason === "string" ? stringToPDFString(reason) : null,
+      location: typeof location === "string" ? stringToPDFString(location) : null,
+      contactInfo: typeof contactInfo === "string" ? stringToPDFString(contactInfo) : null,
+      signingTime: typeof m === "string" ? m : null,
+      filter,
+      subFilter,
+      signatureType,
+      byteRange,
+      pkcs7,
+      data,
+      revisionIndex: 0,
+      parentId: null,
+      coversWholeDocument: tailGap >= 0 && tailGap <= PDFDocument.#WHOLE_DOCUMENT_TAIL_FUZZ
+    };
+  }
+  get signatures() {
+    const promise = this.pdfManager.ensureDoc("formInfo").then(async formInfo => {
+      if (!formInfo.hasSignatures || !formInfo.hasFields) {
+        return null;
+      }
+      const annotationGlobals = await this.annotationGlobals;
+      if (!annotationGlobals) {
+        return null;
+      }
+      const fields = annotationGlobals.acroForm.get("Fields");
+      const collected = [];
+      this.#collectSignatureFields(fields, collected, new RefSet());
+      collected.sort((a, b) => b.byteRange[2] + b.byteRange[3] - (a.byteRange[2] + a.byteRange[3]));
+      for (let i = 0, ii = collected.length; i < ii; i++) {
+        const sig = collected[i];
+        sig.revisionIndex = i;
+        for (let j = i - 1; j >= 0; j--) {
+          const candidate = collected[j];
+          if (candidate.byteRange[2] + candidate.byteRange[3] > sig.byteRange[2] + sig.byteRange[3]) {
+            sig.parentId = candidate.id;
+            break;
+          }
+        }
+      }
+      const signatureData = new Map();
+      const metadata = collected.map(sig => {
+        const {
+          data,
+          pkcs7,
+          ...rest
+        } = sig;
+        signatureData.set(sig.id, {
+          data,
+          pkcs7
+        });
+        return rest;
+      });
+      this.#signatureData = signatureData;
+      return metadata.length ? metadata : null;
+    });
+    return shadow(this, "signatures", promise);
+  }
+  async getSignatureData(id) {
+    await this.signatures;
+    return this.#signatureData?.get(id) ?? null;
+  }
   get hasJSActions() {
     const promise = this.pdfManager.ensureDoc("_parseHasJSActions");
     return shadow(this, "hasJSActions", promise);
@@ -59751,6 +60419,13 @@ class BasePdfManager {
   ensureCatalog(prop, args) {
     return this.ensure(this.pdfDocument.catalog, prop, args);
   }
+  async initDocument(recoveryMode) {
+    await this.ensureDoc("checkHeader");
+    await this.ensureDoc("parseStartXRef");
+    await this.ensureDoc("parse", [recoveryMode]);
+    await this.ensureDoc("checkFirstPage", [recoveryMode]);
+    await this.ensureDoc("checkLastPage", [recoveryMode]);
+  }
   getPage(pageIndex) {
     return this.pdfDocument.getPage(pageIndex);
   }
@@ -59774,6 +60449,7 @@ class BasePdfManager {
   }
   updatePassword(password) {
     this._password = password;
+    this.pdfDocument.xref.encrypt?.setPassword(password);
   }
   terminate(reason) {
     unreachable("Abstract method `terminate` called");
@@ -60282,8 +60958,9 @@ async function writeStream(stream, buffer, transform) {
   const filterZero = Array.isArray(filter) ? await dict.xref.fetchIfRefAsync(filter[0]) : filter;
   const isFilterZeroFlateDecode = isName(filterZero, "FlateDecode");
   const isFilterZeroImageDecode = isName(filterZero, "DCTDecode") || isName(filterZero, "JPXDecode") || isName(filterZero, "JBIG2Decode") || isName(filterZero, "CCITTFaxDecode") || isName(filterZero, "LZWDecode");
+  const isFilterZeroCompressedObject = isFilterZeroFlateDecode || isFilterZeroImageDecode || isName(filterZero, "BrotliDecode");
   const MIN_LENGTH_FOR_COMPRESSING = 256;
-  if (!isFilterZeroFlateDecode && !isFilterZeroImageDecode && bytes.length >= MIN_LENGTH_FOR_COMPRESSING) {
+  if (!isFilterZeroCompressedObject && bytes.length >= MIN_LENGTH_FOR_COMPRESSING) {
     try {
       const cs = new CompressionStream("deflate");
       const writer = cs.writable.getWriter();
@@ -60668,6 +61345,7 @@ async function incrementalUpdate({
 
 
 
+
 const MAX_LEAVES_PER_PAGES_NODE = 16;
 const MAX_IN_NAME_TREE_NODE = 64;
 class PageData {
@@ -60689,6 +61367,7 @@ class DocumentData {
     this.dedupNamedDestinations = new Map();
     this.usedNamedDestinations = new Set();
     this.postponedRefCopies = new RefSetCache();
+    this.resourceStreamPromises = new Map();
     this.usedStructParents = new Set();
     this.oldStructParentMapping = new Map();
     this.structTreeRoot = null;
@@ -60737,6 +61416,7 @@ class PDFEditor {
   isSingleFile = false;
   #newAnnotationsParams = null;
   #primaryDocument = null;
+  #resourceStreamCache = new Map();
   currentDocument = null;
   oldPages = [];
   newPages = [];
@@ -60795,25 +61475,28 @@ class PDFEditor {
     newDict.xref = this.xrefWrapper;
     return newDict;
   }
-  async #collectDependencies(obj, mustClone, xref) {
+  async #collectDependencies(obj, mustClone, xref, resourceStreamPath = new RefSet()) {
     if (obj instanceof Ref) {
       const {
         currentDocument: {
           oldRefMapping
         }
       } = this;
-      let newRef = oldRefMapping.get(obj);
-      if (newRef) {
-        return newRef;
+      const existingRef = oldRefMapping.get(obj);
+      if (existingRef) {
+        return existingRef;
       }
       const oldRef = obj;
       obj = await xref.fetchAsync(oldRef);
       if (typeof obj === "number") {
         return obj;
       }
-      newRef = this.newRef;
+      if (obj instanceof BaseStream && this.#isResourceStream(obj.dict)) {
+        return this.#collectResourceStream(oldRef, obj, xref, resourceStreamPath);
+      }
+      const newRef = this.newRef;
       oldRefMapping.put(oldRef, newRef);
-      this.xref[newRef.num] = await this.#collectDependencies(obj, true, xref);
+      this.xref[newRef.num] = await this.#collectDependencies(obj, true, xref, resourceStreamPath);
       return newRef;
     }
     const promises = [];
@@ -60832,7 +61515,7 @@ class PDFEditor {
           postponedActions.push(ref => obj[i] = ref);
           continue;
         }
-        promises.push(this.#collectDependencies(obj[i], true, xref).then(newObj => obj[i] = newObj));
+        promises.push(this.#collectDependencies(obj[i], true, xref, resourceStreamPath).then(newObj => obj[i] = newObj));
       }
       await Promise.all(promises);
       return obj;
@@ -60857,11 +61540,113 @@ class PDFEditor {
           postponedActions.push(ref => dict.set(key, ref));
           continue;
         }
-        promises.push(this.#collectDependencies(rawObj, true, xref).then(newObj => dict.set(key, newObj)));
+        promises.push(this.#collectDependencies(rawObj, true, xref, resourceStreamPath).then(newObj => dict.set(key, newObj)));
       }
       await Promise.all(promises);
     }
     return obj;
+  }
+  #isResourceStream(dict) {
+    const subtype = dict.get("Subtype");
+    return isName(subtype, "Image") || dict.has("Length1") || isName(subtype, "Type1C") || isName(subtype, "CIDFontType0C") || isName(subtype, "OpenType");
+  }
+  #rawStreamBytes(stream) {
+    const original = stream.getOriginalStream();
+    original.reset();
+    return original.getBytes();
+  }
+  async #serializeDict(dict) {
+    const buffer = [];
+    await writeValue(dict, buffer, null);
+    return buffer.join("");
+  }
+  #resourceStreamKey(dictStr, bytes) {
+    const SAMPLE_SIZE = 256;
+    const SAMPLE_COUNT = 4;
+    const {
+      length
+    } = bytes;
+    const hash = new MurmurHash3_64();
+    hash.update(dictStr);
+    hash.update(`#${length}`);
+    if (length <= SAMPLE_SIZE * SAMPLE_COUNT) {
+      hash.update(bytes);
+    } else {
+      const step = Math.floor((length - SAMPLE_SIZE) / (SAMPLE_COUNT - 1));
+      for (let i = 0; i < SAMPLE_COUNT; i++) {
+        const start = Math.min(i * step, length - SAMPLE_SIZE);
+        hash.update(bytes.subarray(start, start + SAMPLE_SIZE));
+      }
+    }
+    return hash.hexdigest();
+  }
+  async #collectResourceStream(oldRef, stream, xref, resourceStreamPath) {
+    const {
+      currentDocument: {
+        oldRefMapping,
+        resourceStreamPromises
+      }
+    } = this;
+    if (resourceStreamPath.has(oldRef)) {
+      let ref = oldRefMapping.get(oldRef);
+      if (!ref) {
+        ref = this.newRef;
+        oldRefMapping.put(oldRef, ref);
+      }
+      return ref;
+    }
+    const key = oldRef.toString();
+    const pending = resourceStreamPromises.get(key);
+    if (pending) {
+      return pending;
+    }
+    const childPath = new RefSet(resourceStreamPath);
+    childPath.put(oldRef);
+    const promise = Promise.resolve().then(async () => {
+      const collected = await this.#collectDependencies(stream, true, xref, childPath);
+      const cycleRef = oldRefMapping.get(oldRef);
+      if (cycleRef) {
+        this.xref[cycleRef.num] = collected;
+        return cycleRef;
+      }
+      const ref = await this.#dedupResourceStream(collected);
+      oldRefMapping.put(oldRef, ref);
+      return ref;
+    });
+    resourceStreamPromises.set(key, promise);
+    try {
+      return await promise;
+    } finally {
+      if (resourceStreamPromises.get(key) === promise) {
+        resourceStreamPromises.delete(key);
+      }
+    }
+  }
+  async #dedupResourceStream(stream) {
+    const dictStr = await this.#serializeDict(stream.dict);
+    const bytes = this.#rawStreamBytes(stream);
+    const key = this.#resourceStreamKey(dictStr, bytes);
+    const bucket = this.#resourceStreamCache.getOrInsertComputed(key, makeArr);
+    for (const entry of bucket) {
+      if (entry.dictStr === dictStr && isArrayEqual(this.#rawStreamBytes(entry.stream), bytes)) {
+        return entry.ref;
+      }
+    }
+    const ref = this.newRef;
+    this.xref[ref.num] = stream;
+    bucket.push({
+      ref,
+      dictStr,
+      stream
+    });
+    return ref;
+  }
+  async #resolveStructKids(rawKids, xref) {
+    if (rawKids instanceof Ref) {
+      const fetched = await xref.fetchAsync(rawKids);
+      return Array.isArray(fetched) ? fetched : [rawKids];
+    }
+    return Array.isArray(rawKids) ? rawKids : [rawKids];
   }
   async #cloneStructTreeNode(parentStructRef, node, xref, removedStructElements, dedupIDs, dedupClasses, dedupRoles, visited = new RefSet()) {
     const {
@@ -60874,18 +61659,11 @@ class PDFEditor {
     if (pg instanceof Ref && !pagesMap.has(pg)) {
       return null;
     }
-    let kids;
-    const k = kids = node.getRaw("K");
-    if (k instanceof Ref) {
-      if (visited.has(k)) {
-        return null;
-      }
-      kids = await xref.fetchAsync(k);
-      if (!Array.isArray(kids)) {
-        kids = [k];
-      }
+    const k = node.getRaw("K");
+    if (k instanceof Ref && visited.has(k)) {
+      return null;
     }
-    kids = Array.isArray(kids) ? kids : [kids];
+    const kids = await this.#resolveStructKids(k, xref);
     const newKids = [];
     const structElemIndices = [];
     for (let kid of kids) {
@@ -60934,10 +61712,11 @@ class PDFEditor {
         if (!kidRef) {
           continue;
         }
-        const newKidRef = oldRefMapping.get(kidRef);
-        if (!newKidRef) {
+        const oldObjRef = kid.getRaw("Obj");
+        if (oldObjRef instanceof Ref && !oldRefMapping.get(oldObjRef)) {
           continue;
         }
+        const newKidRef = oldRefMapping.get(kidRef) || (await this.#collectDependencies(kidRef, true, xref));
         const newKid = this.xref[newKidRef.num];
         const objRef = newKid.getRaw("Obj");
         if (objRef instanceof Ref) {
@@ -60975,21 +61754,13 @@ class PDFEditor {
     const classNames = node.get("C");
     if (classNames instanceof Name) {
       const newClassName = dedupClasses.get(classNames.name);
-      if (newClassName) {
-        newNode.set("C", Name.get(newClassName));
-      } else {
-        newNode.set("C", classNames);
-      }
+      newNode.set("C", newClassName ? Name.get(newClassName) : classNames);
     } else if (Array.isArray(classNames)) {
       const newClassNames = [];
       for (const className of classNames) {
         if (className instanceof Name) {
           const newClassName = dedupClasses.get(className.name);
-          if (newClassName) {
-            newClassNames.push(Name.get(newClassName));
-          } else {
-            newClassNames.push(className);
-          }
+          newClassNames.push(newClassName ? Name.get(newClassName) : className);
         }
       }
       newNode.set("C", newClassNames);
@@ -60997,21 +61768,13 @@ class PDFEditor {
     const roleName = node.get("S");
     if (roleName instanceof Name) {
       const newRoleName = dedupRoles.get(roleName.name);
-      if (newRoleName) {
-        newNode.set("S", Name.get(newRoleName));
-      } else {
-        newNode.set("S", roleName);
-      }
+      newNode.set("S", newRoleName ? Name.get(newRoleName) : roleName);
     }
     const id = node.get("ID");
     if (typeof id === "string") {
       const stringId = stringToPDFString(id, false);
       const newId = dedupIDs.get(stringId);
-      if (newId) {
-        newNode.set("ID", stringToAsciiOrUTF16BE(newId));
-      } else {
-        newNode.set("ID", id);
-      }
+      newNode.set("ID", newId ? stringToAsciiOrUTF16BE(newId) : id);
     }
     let attributes = newNode.get("A");
     if (attributes) {
@@ -61399,11 +62162,15 @@ class PDFEditor {
           return;
         }
         const action = annotationDict.get("A");
+        if (action instanceof Dict && !isName(action.get("S"), "GoTo")) {
+          newAnnotations[newAnnotationIndex] = annotationRef;
+          return;
+        }
         const dest = action instanceof Dict ? action.get("D") : annotationDict.get("Dest");
         if (!dest || Array.isArray(dest) && (!(dest[0] instanceof Ref) || pagesMap.has(dest[0]))) {
           newAnnotations[newAnnotationIndex] = annotationRef;
-        } else if (typeof dest === "string") {
-          const destString = stringToPDFString(dest, true);
+        } else if (dest instanceof Name || typeof dest === "string") {
+          const destString = stringToPDFString(dest instanceof Name ? dest.name : dest, true);
           if (destinations.has(destString)) {
             newAnnotations[newAnnotationIndex] = annotationRef;
             usedNamedDestinations.add(destString);
@@ -61644,20 +62411,33 @@ class PDFEditor {
           newStructTreePronunciationLexicon.push(await this.#collectDependencies(lexiconRef, true, xref));
         }
       }
-      let kids = structTreeRoot.dict.get("K");
-      if (!kids) {
+      const rawKids = structTreeRoot.dict.getRaw("K");
+      if (!rawKids) {
         continue;
       }
-      kids = Array.isArray(kids) ? kids : [kids];
+      const kids = await this.#resolveStructKids(rawKids, xref);
       for (let kid of kids) {
         const kidRef = kid instanceof Ref ? kid : null;
-        if (kidRef && removedStructElements.has(kidRef)) {
+        kid = await xref.fetchIfRefAsync(kid);
+        if (!(kid instanceof Dict)) {
           continue;
         }
-        kid = await xref.fetchIfRefAsync(kid);
+        let setAsSpan = false;
+        if (kidRef && removedStructElements.has(kidRef)) {
+          if (!isName(kid.get("S"), "Link")) {
+            continue;
+          }
+          setAsSpan = true;
+        }
         const newKidRef = await this.#cloneStructTreeNode(kidRef, kid, xref, removedStructElements, dedupIDs, dedupClasses, dedupRoles);
         if (newKidRef) {
           structTreeKids.push(newKidRef);
+          if (kidRef) {
+            oldRefMapping.put(kidRef, newKidRef);
+          }
+          if (setAsSpan) {
+            this.xref[newKidRef.num].setIfName("S", "Span");
+          }
         }
       }
       for (const [id, nodeRef] of idTree || []) {
@@ -62531,7 +63311,7 @@ class PDFEditor {
     rootDict.set("Pages", pagesRef);
     pagesDict.setIfName("Type", "Pages");
     pagesDict.set("Count", pages.length);
-    const maxLeaves = MAX_LEAVES_PER_PAGES_NODE <= 1 ? pages.length : MAX_LEAVES_PER_PAGES_NODE;
+    const maxLeaves =  false ? 0 : MAX_LEAVES_PER_PAGES_NODE;
     const stack = [{
       dict: pagesDict,
       kids: pages,
@@ -62572,8 +63352,16 @@ class PDFEditor {
     }
   }
   #makeNameNumTree(map, areNames) {
-    const allEntries = map.sort(areNames ? ([keyA], [keyB]) => keyA.localeCompare(keyB) : ([keyA], [keyB]) => keyA - keyB);
-    const maxLeaves = MAX_IN_NAME_TREE_NODE <= 1 ? allEntries.length : MAX_IN_NAME_TREE_NODE;
+    const allEntries = map.sort(areNames ? ([keyA], [keyB]) => {
+      if (keyA < keyB) {
+        return -1;
+      }
+      if (keyA > keyB) {
+        return 1;
+      }
+      return 0;
+    } : ([keyA], [keyB]) => keyA - keyB);
+    const maxLeaves =  false ? 0 : MAX_IN_NAME_TREE_NODE;
     const [treeRef, treeDict] = this.newDict;
     const stack = [{
       dict: treeDict,
@@ -62617,7 +63405,7 @@ class PDFEditor {
     const {
       pageLabels
     } = this;
-    if (!pageLabels || pageLabels.length === 0) {
+    if (!pageLabels?.length) {
       return;
     }
     const {
@@ -62646,7 +63434,7 @@ class PDFEditor {
         if (embeddedFiles.has(name)) {
           const displayName = stringToPDFString(key, true);
           for (let i = 1;; i++) {
-            const deduped = `${displayName}_${i}`;
+            const deduped = stringToAsciiOrUTF16BE(`${displayName}_${i}`);
             if (!embeddedFiles.has(deduped)) {
               name = deduped;
               break;
@@ -62682,13 +63470,13 @@ class PDFEditor {
       [this.namesRef, this.namesDict] = this.newDict;
       this.rootDict.set("Names", this.namesRef);
     }
-    this.namesDict.set("Dests", this.#makeNameNumTree(Array.from(namedDestinations.entries()), true));
+    this.namesDict.set("Dests", this.#makeNameNumTree(Array.from(namedDestinations, ([name, dest]) => [stringToAsciiOrUTF16BE(name), dest]), true));
   }
   #makeStructTree() {
     const {
       structTreeKids
     } = this;
-    if (!structTreeKids || structTreeKids.length === 0) {
+    if (!structTreeKids?.length) {
       return;
     }
     const {
@@ -63118,7 +63906,7 @@ class WorkerTask {
 }
 class WorkerMessageHandler {
   static {
-    if (typeof window === "undefined" && !isNodeJS && typeof self !== "undefined" && typeof self.postMessage === "function" && "onmessage" in self) {
+    if (typeof window === "undefined" && !(/* inlined export .isNodeJS */false) && typeof self !== "undefined" && typeof self.postMessage === "function" && "onmessage" in self) {
       this.initializeFromPort(self);
     }
   }
@@ -63146,7 +63934,7 @@ class WorkerMessageHandler {
       docId,
       apiVersion
     } = docParams;
-    const workerVersion = "6.0.243";
+    const workerVersion = "6.1.310";
     if (apiVersion !== workerVersion) {
       throw new Error(`The API version "${apiVersion}" does not match ` + `the Worker version "${workerVersion}".`);
     }
@@ -63165,11 +63953,7 @@ class WorkerMessageHandler {
       WorkerTasks.delete(task);
     }
     async function loadDocument(recoveryMode) {
-      await pdfManager.ensureDoc("checkHeader");
-      await pdfManager.ensureDoc("parseStartXRef");
-      await pdfManager.ensureDoc("parse", [recoveryMode]);
-      await pdfManager.ensureDoc("checkFirstPage", [recoveryMode]);
-      await pdfManager.ensureDoc("checkLastPage", [recoveryMode]);
+      await pdfManager.initDocument(recoveryMode);
       const isPureXfa = await pdfManager.ensureDoc("isPureXfa");
       if (isPureXfa) {
         const task = new WorkerTask("loadXfaResources");
@@ -63278,6 +64062,18 @@ class WorkerMessageHandler {
       });
       return promise;
     }
+    async function getPassword(ex) {
+      const task = new WorkerTask(`PasswordException: response ${ex.code}`);
+      startWorkerTask(task);
+      try {
+        const res = await handler.sendWithPromise("PasswordRequest", ex);
+        return res.password;
+      } finally {
+        Promise.resolve().then(() => {
+          finishWorkerTask(task);
+        });
+      }
+    }
     function setupDoc(data) {
       function onSuccess(doc) {
         ensureNotTerminated();
@@ -63290,16 +64086,10 @@ class WorkerMessageHandler {
           return;
         }
         if (ex instanceof PasswordException) {
-          const task = new WorkerTask(`PasswordException: response ${ex.code}`);
-          startWorkerTask(task);
-          handler.sendWithPromise("PasswordRequest", ex).then(function ({
-            password
-          }) {
-            finishWorkerTask(task);
+          getPassword(ex).then(password => {
             pdfManager.updatePassword(password);
             pdfManagerReady();
-          }).catch(function () {
-            finishWorkerTask(task);
+          }).catch(() => {
             handler.send("DocException", ex);
           });
         } else {
@@ -63317,7 +64107,7 @@ class WorkerMessageHandler {
           pdfManager.requestLoadedStream().then(function () {
             ensureNotTerminated();
             loadDocument(true).then(onSuccess, onFailure);
-          });
+          }, onFailure);
         });
       }
       ensureNotTerminated();
@@ -63331,57 +64121,80 @@ class WorkerMessageHandler {
           handler.send("DataLoaded", {
             length: stream.bytes.byteLength
           });
-        });
+        }, () => {});
       }).then(pdfManagerReady, onFailure);
     }
-    handler.on("GetPage", function (data) {
-      return pdfManager.getPage(data.pageIndex).then(function (page) {
-        return Promise.all([pdfManager.ensure(page, "rotate"), pdfManager.ensure(page, "ref"), pdfManager.ensure(page, "userUnit"), pdfManager.ensure(page, "view")]).then(function ([rotate, ref, userUnit, view]) {
-          return {
-            rotate,
-            ref,
-            refStr: ref?.toString() ?? null,
-            userUnit,
-            view
-          };
-        });
-      });
-    });
-    handler.on("GetPageIndex", function (data) {
-      const pageRef = Ref.get(data.num, data.gen);
-      return pdfManager.ensureCatalog("getPageIndex", [pageRef]);
-    });
-    handler.on("GetDestinations", function (data) {
-      return pdfManager.ensureCatalog("destinations");
-    });
-    handler.on("GetDestination", function (data) {
-      return pdfManager.ensureCatalog("getDestination", [data.id]);
-    });
-    handler.on("GetPageLabels", function (data) {
-      return pdfManager.ensureCatalog("pageLabels");
-    });
-    handler.on("GetPageLayout", function (data) {
-      return pdfManager.ensureCatalog("pageLayout");
-    });
-    handler.on("GetPageMode", function (data) {
-      return pdfManager.ensureCatalog("pageMode");
-    });
-    handler.on("GetViewerPreferences", function (data) {
-      return pdfManager.ensureCatalog("viewerPreferences");
-    });
-    handler.on("GetOpenAction", function (data) {
-      return pdfManager.ensureCatalog("openAction");
-    });
-    handler.on("GetAttachments", function (data) {
-      return pdfManager.ensureCatalog("attachments");
-    });
-    handler.on("GetDocJSActions", function (data) {
-      return pdfManager.ensureCatalog("jsActions");
-    });
-    handler.on("GetPageJSActions", function ({
+    handler.on("GetPage", async function ({
       pageIndex
     }) {
-      return pdfManager.getPage(pageIndex).then(page => pdfManager.ensure(page, "jsActions"));
+      const page = await pdfManager.getPage(pageIndex);
+      const [rotate, ref, userUnit, view] = await Promise.all([pdfManager.ensure(page, "rotate"), pdfManager.ensure(page, "ref"), pdfManager.ensure(page, "userUnit"), pdfManager.ensure(page, "view")]);
+      return {
+        rotate,
+        ref,
+        refStr: ref?.toString() ?? null,
+        userUnit,
+        view
+      };
+    });
+    handler.on("GetPageIndex", function ({
+      num,
+      gen
+    }) {
+      return pdfManager.ensureCatalog("getPageIndex", [Ref.get(num, gen)]);
+    });
+    handler.on("GetDestinations", function () {
+      return pdfManager.ensureCatalog("destinations");
+    });
+    handler.on("GetDestination", function ({
+      id
+    }) {
+      return pdfManager.ensureCatalog("getDestination", [id]);
+    });
+    handler.on("GetPageLabels", function () {
+      return pdfManager.ensureCatalog("pageLabels");
+    });
+    handler.on("GetPageLayout", function () {
+      return pdfManager.ensureCatalog("pageLayout");
+    });
+    handler.on("GetPageMode", function () {
+      return pdfManager.ensureCatalog("pageMode");
+    });
+    handler.on("GetViewerPreferences", function () {
+      return pdfManager.ensureCatalog("viewerPreferences");
+    });
+    handler.on("GetOpenAction", function () {
+      return pdfManager.ensureCatalog("openAction");
+    });
+    handler.on("GetAttachments", function () {
+      return pdfManager.ensureCatalog("attachments");
+    });
+    handler.on("GetAttachmentContent", async function (id) {
+      let passwordEx;
+      while (true) {
+        const password = passwordEx ? await getPassword(passwordEx) : null;
+        try {
+          if (password) {
+            pdfManager.updatePassword(password);
+          }
+          return await pdfManager.ensureCatalog("attachmentContent", [id]);
+        } catch (ex) {
+          if (ex instanceof PasswordException) {
+            passwordEx = ex;
+            continue;
+          }
+          throw ex;
+        }
+      }
+    });
+    handler.on("GetDocJSActions", function () {
+      return pdfManager.ensureCatalog("jsActions");
+    });
+    handler.on("GetPageJSActions", async function ({
+      pageIndex
+    }) {
+      const page = await pdfManager.getPage(pageIndex);
+      return pdfManager.ensure(page, "jsActions");
     });
     handler.on("GetAnnotationsByType", async function ({
       types,
@@ -63403,12 +64216,7 @@ class WorkerMessageHandler {
             task = new WorkerTask("GetAnnotationsByType");
             startWorkerTask(task);
           }
-          pagePromises.push(pdfManager.getPage(i).then(async page => {
-            if (!page) {
-              return [];
-            }
-            return page.collectAnnotationsByType(handler, task, types, annotationPromises, annotationGlobals) || [];
-          }));
+          pagePromises.push(pdfManager.getPage(i).then(page => page.collectAnnotationsByType(handler, task, types, annotationPromises, annotationGlobals)));
         }
         await Promise.all(pagePromises);
         const annotations = await Promise.all(annotationPromises);
@@ -63419,47 +64227,52 @@ class WorkerMessageHandler {
         }
       }
     });
-    handler.on("GetOutline", function (data) {
+    handler.on("GetOutline", function () {
       return pdfManager.ensureCatalog("documentOutline");
     });
-    handler.on("GetOptionalContentConfig", function (data) {
+    handler.on("GetOptionalContentConfig", function () {
       return pdfManager.ensureCatalog("optionalContentConfig");
     });
-    handler.on("GetPermissions", function (data) {
+    handler.on("GetPermissions", function () {
       return pdfManager.ensureCatalog("permissions");
     });
-    handler.on("GetMetadata", function (data) {
+    handler.on("GetMetadata", function () {
       return Promise.all([pdfManager.ensureDoc("documentInfo"), pdfManager.ensureCatalog("metadata"), pdfManager.ensureCatalog("hasStructTree")]);
     });
-    handler.on("GetMarkInfo", function (data) {
+    handler.on("GetMarkInfo", function () {
       return pdfManager.ensureCatalog("markInfo");
     });
-    handler.on("GetData", function (data) {
-      return pdfManager.requestLoadedStream().then(stream => stream.bytes);
+    handler.on("GetData", async function () {
+      const stream = await pdfManager.requestLoadedStream();
+      return stream.bytes;
     });
-    handler.on("GetAnnotations", function ({
+    handler.on("GetAnnotations", async function ({
       pageIndex,
       intent
     }) {
-      return pdfManager.getPage(pageIndex).then(function (page) {
-        const task = new WorkerTask(`GetAnnotations: page ${pageIndex}`);
-        startWorkerTask(task);
-        return page.getAnnotationsData(handler, task, intent).then(data => {
-          finishWorkerTask(task);
-          return data;
-        }, reason => {
-          finishWorkerTask(task);
-          throw reason;
-        });
-      });
+      const page = await pdfManager.getPage(pageIndex);
+      const task = new WorkerTask(`GetAnnotations: page ${pageIndex}`);
+      startWorkerTask(task);
+      try {
+        return await page.getAnnotationsData(handler, task, intent);
+      } finally {
+        finishWorkerTask(task);
+      }
     });
-    handler.on("GetFieldObjects", function (data) {
-      return pdfManager.ensureDoc("fieldObjects").then(fieldObjects => fieldObjects?.allFields || null);
+    handler.on("GetFieldObjects", async function () {
+      const fieldObjects = await pdfManager.ensureDoc("fieldObjects");
+      return fieldObjects?.allFields || null;
     });
-    handler.on("HasJSActions", function (data) {
+    handler.on("GetSignatures", function () {
+      return pdfManager.ensureDoc("signatures");
+    });
+    handler.on("GetSignatureData", function (id) {
+      return pdfManager.ensureDoc("getSignatureData", [id]);
+    });
+    handler.on("HasJSActions", function () {
       return pdfManager.ensureDoc("hasJSActions");
     });
-    handler.on("GetCalculationOrderIds", function (data) {
+    handler.on("GetCalculationOrderIds", function () {
       return pdfManager.ensureDoc("calculationOrderIds");
     });
     handler.on("ExtractPages", async function ({
@@ -63493,9 +64306,7 @@ class WorkerMessageHandler {
           while (true) {
             try {
               await manager.requestLoadedStream();
-              await manager.ensureDoc("checkHeader");
-              await manager.ensureDoc("parseStartXRef");
-              await manager.ensureDoc("parse", [recoveryMode]);
+              await manager.initDocument(recoveryMode);
               break;
             } catch (e) {
               if (e instanceof XRefParseException) {
@@ -63507,18 +64318,12 @@ class WorkerMessageHandler {
                   warn("extractPages: XRefParseException.");
                 }
               } else if (e instanceof PasswordException) {
-                const task = new WorkerTask(`PasswordException: response ${e.code}`);
-                startWorkerTask(task);
                 try {
-                  const {
-                    password
-                  } = await handler.sendWithPromise("PasswordRequest", e);
+                  const password = await getPassword(e);
                   manager.updatePassword(password);
                 } catch {
                   isValid = false;
                   warn("extractPages: invalid password.");
-                } finally {
-                  finishWorkerTask(task);
                 }
               } else {
                 isValid = false;
@@ -63548,8 +64353,7 @@ class WorkerMessageHandler {
         const pdfEditor = new PDFEditor();
         task = new WorkerTask(`ExtractPages: ${pageInfos.length} page(s)`);
         startWorkerTask(task);
-        const buffer = await pdfEditor.extractPages(pageInfos, annotationStorage, pdfManager.pdfDocument, handler, task);
-        return buffer;
+        return await pdfEditor.extractPages(pageInfos, annotationStorage, pdfManager.pdfDocument, handler, task);
       } catch (reason) {
         warn(`extractPages: "${reason}".`);
         return null;
@@ -63593,7 +64397,7 @@ class WorkerMessageHandler {
           newAnnotationPromises.push(pdfManager.getPage(pageIndex).then(page => {
             const task = new WorkerTask(`Save (editor): page ${pageIndex}`);
             startWorkerTask(task);
-            return page.saveNewAnnotations(handler, task, annotations, imagePromises, changes).finally(function () {
+            return page.saveNewAnnotations(handler, task, annotations, imagePromises, changes).finally(() => {
               finishWorkerTask(task);
             });
           }));
@@ -63625,7 +64429,7 @@ class WorkerMessageHandler {
           promises.push(pdfManager.getPage(pageIndex).then(function (page) {
             const task = new WorkerTask(`Save: page ${pageIndex}`);
             startWorkerTask(task);
-            return page.save(handler, task, annotationStorage, changes).finally(function () {
+            return page.save(handler, task, annotationStorage, changes).finally(() => {
               finishWorkerTask(task);
             });
           }));
@@ -63697,11 +64501,14 @@ class WorkerMessageHandler {
         xref.resetNewTemporaryRef();
       });
     });
-    handler.on("GetOperatorList", function (data, sink) {
-      const {
-        pageId,
-        pageIndex
-      } = data;
+    handler.on("GetOperatorList", function ({
+      pageId,
+      pageIndex,
+      intent,
+      cacheKey,
+      annotationStorage,
+      modifiedIds
+    }, sink) {
       pdfManager.getPage(pageId).then(function (page) {
         const task = new WorkerTask(`GetOperatorList: page ${pageIndex}`);
         startWorkerTask(task);
@@ -63710,33 +64517,32 @@ class WorkerMessageHandler {
           handler,
           sink,
           task,
-          intent: data.intent,
-          cacheKey: data.cacheKey,
-          annotationStorage: data.annotationStorage,
-          modifiedIds: data.modifiedIds,
+          intent,
+          cacheKey,
+          annotationStorage,
+          modifiedIds,
           pageIndex
-        }).then(function (operatorListInfo) {
-          finishWorkerTask(task);
+        }).then(opListInfo => {
           if (start) {
-            info(`page=${pageIndex + 1} - getOperatorList: time=` + `${Date.now() - start}ms, len=${operatorListInfo.length}`);
+            info(`${task.name}; time=${Date.now() - start}ms, len=${opListInfo.length}`);
           }
           sink.close();
-        }, function (reason) {
-          finishWorkerTask(task);
+        }, reason => {
           if (task.terminated) {
             return;
           }
           sink.error(reason);
+        }).finally(() => {
+          finishWorkerTask(task);
         });
       });
     });
-    handler.on("GetTextContent", function (data, sink) {
-      const {
-        pageId,
-        pageIndex,
-        includeMarkedContent,
-        disableNormalization
-      } = data;
+    handler.on("GetTextContent", function ({
+      pageId,
+      pageIndex,
+      includeMarkedContent,
+      disableNormalization
+    }, sink) {
       pdfManager.getPage(pageId).then(function (page) {
         const task = new WorkerTask("GetTextContent: page " + pageIndex);
         startWorkerTask(task);
@@ -63747,31 +64553,36 @@ class WorkerMessageHandler {
           sink,
           includeMarkedContent,
           disableNormalization
-        }).then(function () {
-          finishWorkerTask(task);
+        }).then(() => {
           if (start) {
-            info(`page=${pageIndex + 1} - getTextContent: time=` + `${Date.now() - start}ms`);
+            info(`${task.name}; time=${Date.now() - start}ms`);
           }
           sink.close();
-        }, function (reason) {
-          finishWorkerTask(task);
+        }, reason => {
           if (task.terminated) {
             return;
           }
           sink.error(reason);
+        }).finally(() => {
+          finishWorkerTask(task);
         });
       });
     });
-    handler.on("GetStructTree", function (data) {
-      return pdfManager.getPage(data.pageIndex).then(page => pdfManager.ensure(page, "getStructTree"));
+    handler.on("GetStructTree", async function ({
+      pageIndex
+    }) {
+      const page = await pdfManager.getPage(pageIndex);
+      return pdfManager.ensure(page, "getStructTree");
     });
-    handler.on("FontFallback", function (data) {
-      return pdfManager.fontFallback(data.id, handler);
+    handler.on("FontFallback", function ({
+      id
+    }) {
+      return pdfManager.fontFallback(id, handler);
     });
-    handler.on("Cleanup", function (data) {
+    handler.on("Cleanup", function () {
       return pdfManager.cleanup(true);
     });
-    handler.on("Terminate", async function (data) {
+    handler.on("Terminate", async function () {
       terminated = true;
       const waitOn = [];
       if (pdfManager) {
@@ -63791,7 +64602,7 @@ class WorkerMessageHandler {
       handler.destroy();
       handler = null;
     });
-    handler.on("Ready", function (data) {
+    handler.on("Ready", function () {
       setupDoc(docParams);
       docParams = null;
     });

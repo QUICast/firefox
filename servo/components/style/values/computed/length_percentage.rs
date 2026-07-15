@@ -834,6 +834,9 @@ impl specified::CalcLengthPercentage {
                 ComputedLeaf::Resolution(specified::Resolution::new(r).to_computed_value(context))
             },
             Leaf::ColorComponent(..) => unreachable!("Shouldn't have parsed"),
+            Leaf::TreeCountingFunction(t) => {
+                ComputedLeaf::Number(t.to_computed_value(context) as f32)
+            },
         });
 
         LengthPercentage::new_calc(node, self.0.clamping_mode)
@@ -907,8 +910,8 @@ impl specified::CalcLengthPercentage {
         specified::CalcLengthPercentage(specified::CalcNumeric {
             clamping_mode: computed.clamping_mode,
             node: computed.node.map_leaves(|l| match l {
-                ComputedLeaf::Length(ref l) => Leaf::Length(NoCalcLength::from_px(l.px())),
-                ComputedLeaf::Percentage(ref p) => Leaf::Percentage(NoCalcPercentage::new(p.0)),
+                ComputedLeaf::Length(l) => Leaf::Length(NoCalcLength::from_px(l.px())),
+                ComputedLeaf::Percentage(p) => Leaf::Percentage(NoCalcPercentage::new(p.0)),
                 ComputedLeaf::Number(n) => Leaf::Number(NoCalcNumber::new(*n)),
                 ComputedLeaf::Angle(a) => Leaf::Angle(NoCalcAngle::from_degrees(a.degrees())),
                 ComputedLeaf::Time(t) => Leaf::Time(NoCalcTime::from_seconds(t.seconds())),

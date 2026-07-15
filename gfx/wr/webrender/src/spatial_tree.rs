@@ -133,21 +133,6 @@ impl ops::Not for VisibleFace {
 pub trait SpatialNodeContainer {
     /// Get the common information for a given spatial node
     fn get_node_info(&self, index: SpatialNodeIndex) -> SpatialNodeInfo;
-
-    fn get_snapping_info(
-        &self,
-        parent_index: Option<SpatialNodeIndex>
-    ) -> Option<ScaleOffset> {
-        match parent_index {
-            Some(parent_index) => {
-                let node_info = self.get_node_info(parent_index);
-                node_info.snapping_transform
-            }
-            None => {
-                Some(ScaleOffset::identity())
-            }
-        }
-    }
 }
 
 /// The representation of the spatial tree during scene building, which is
@@ -176,7 +161,6 @@ impl SpatialNodeContainer for SceneSpatialTree {
         SpatialNodeInfo {
             parent: node.parent,
             node_type: &node.descriptor.node_type,
-            snapping_transform: node.snapping_transform,
         }
     }
 }
@@ -363,15 +347,8 @@ impl SceneSpatialTree {
 
     fn add_spatial_node(
         &mut self,
-        mut node: SceneSpatialNode,
+        node: SceneSpatialNode,
     ) -> SpatialNodeIndex {
-        let parent_info = self.get_snapping_info(node.parent);
-
-        node.snapping_transform = calculate_snapping_transform(
-            parent_info,
-            &node.descriptor.node_type,
-        );
-
         let descriptor = node.descriptor.clone();
         let parent = node.parent;
 
@@ -559,6 +536,9 @@ pub struct TransformUpdateState {
     /// True if the any parent nodes are currently zooming
     pub is_ancestor_or_self_zooming: bool,
 
+    /// True if this node or any parent node has an animated (property-bound) transform
+    pub is_ancestor_or_self_animating: bool,
+
     /// Set to true if this state represents a scroll node with external id
     pub external_id: Option<ExternalScrollId>,
 
@@ -662,7 +642,6 @@ impl SpatialNodeContainer for SpatialTree {
         SpatialNodeInfo {
             parent: node.parent,
             node_type: &node.node_type,
-            snapping_transform: node.snapping_transform,
         }
     }
 }
@@ -743,7 +722,6 @@ impl SpatialTree {
             self.spatial_nodes.push(SpatialNode {
                 viewport_transform: ScaleOffset::identity(),
                 content_transform: ScaleOffset::identity(),
-                snapping_transform: None,
                 coordinate_system_id: CoordinateSystemId(0),
                 transform_kind: TransformedRectKind::AxisAligned,
                 parent,
@@ -753,6 +731,7 @@ impl SpatialTree {
                 invertible: true,
                 is_async_zooming: false,
                 is_ancestor_or_self_zooming: false,
+                is_ancestor_or_self_animating: false,
             });
         }
 
@@ -1017,6 +996,7 @@ impl SpatialTree {
             invertible: true,
             preserves_3d: false,
             is_ancestor_or_self_zooming: false,
+            is_ancestor_or_self_animating: false,
             external_id: None,
             scroll_offset: LayoutVector2D::zero(),
         };
@@ -1035,15 +1015,7 @@ impl SpatialTree {
         node_index: SpatialNodeIndex,
         scene_properties: &SceneProperties,
     ) {
-        let parent_index = self.get_spatial_node(node_index).parent;
-        let parent_info = self.get_snapping_info(parent_index);
-
         let node = &mut self.spatial_nodes[node_index.0 as usize];
-
-        node.snapping_transform = calculate_snapping_transform(
-            parent_info,
-            &node.node_type,
-        );
 
         node.update(
             &self.update_state_stack,
@@ -1110,7 +1082,6 @@ impl SpatialTree {
         pt.add_item(format!("index: {:?}", index));
         pt.add_item(format!("content_transform: {:?}", node.content_transform));
         pt.add_item(format!("viewport_transform: {:?}", node.viewport_transform));
-        pt.add_item(format!("snapping_transform: {:?}", node.snapping_transform));
         pt.add_item(format!("coordinate_system_id: {:?}", node.coordinate_system_id));
 
         for child_index in &node.children {
@@ -1185,49 +1156,6 @@ impl PrintableTree for SpatialTree {
             self.print_node(self.root_reference_frame_index(), pt);
         }
     }
-}
-
-fn calculate_snapping_transform(
-    parent_scale_offset: Option<ScaleOffset>,
-    node_type: &SpatialNodeType,
-) -> Option<ScaleOffset> {
-    // We need to incorporate the parent scale/offset with the child.
-    // If the parent does not have a scale/offset, then we know we are
-    // not 2d axis aligned and thus do not need to snap its children
-    // either.
-    let parent_scale_offset = match parent_scale_offset {
-        Some(transform) => transform,
-        None => return None,
-    };
-
-    let scale_offset = match node_type {
-        SpatialNodeType::ReferenceFrame(ref info) => {
-            let origin_offset = info.origin_in_parent_reference_frame;
-
-            match info.source_transform {
-                PropertyBinding::Value(ref value) => {
-                    // We can only get a ScaleOffset if the transform is 2d axis
-                    // aligned.
-                    match ScaleOffset::from_transform(value) {
-                        Some(scale_offset) => {
-                            scale_offset.then(&ScaleOffset::from_offset(origin_offset.to_untyped()))
-                        }
-                        None => return None,
-                    }
-                }
-
-                // Assume animations start at the identity transform for snapping purposes.
-                // We still want to incorporate the reference frame offset however.
-                // TODO(aosmond): Is there a better known starting point?
-                PropertyBinding::Binding(..) => {
-                    ScaleOffset::from_offset(origin_offset.to_untyped())
-                }
-            }
-        }
-        _ => ScaleOffset::identity(),
-    };
-
-    Some(scale_offset.then(&parent_scale_offset))
 }
 
 #[cfg(test)]
@@ -1919,4 +1847,79 @@ fn test_is_ancestor_or_self_zooming() {
     assert!(st.get_spatial_node(root).is_ancestor_or_self_zooming);
     assert!(st.get_spatial_node(child1).is_ancestor_or_self_zooming);
     assert!(st.get_spatial_node(child2).is_ancestor_or_self_zooming);
+}
+
+/// Tests that a reference frame with an animated (property-bound) transform, and
+/// all of its descendants, are marked as having a self-or-ancestor animating
+/// transform, while a static ancestor above it is not.
+#[test]
+fn test_is_ancestor_or_self_animating() {
+    let mut cst = SceneSpatialTree::new();
+    let root_reference_frame_index = cst.root_reference_frame_index();
+
+    // A static reference frame ...
+    let root = add_reference_frame(
+        &mut cst,
+        root_reference_frame_index,
+        LayoutTransform::identity(),
+        LayoutVector2D::zero(),
+    );
+    // ... an animated CSS-transform reference frame below it (transform bound to
+    // a property, not an APZ scale/translation frame) ...
+    let animated = cst.add_reference_frame(
+        root,
+        TransformStyle::Flat,
+        PropertyBinding::Binding(api::PropertyBindingKey::new(1), LayoutTransform::identity()),
+        ReferenceFrameKind::Transform {
+            is_2d_scale_translation: false,
+            should_snap: false,
+            paired_with_perspective: false,
+        },
+        LayoutVector2D::zero(),
+        PipelineId::dummy(),
+        false,
+    );
+    // ... and a static child of the animated frame.
+    let child = add_reference_frame(
+        &mut cst,
+        animated,
+        LayoutTransform::identity(),
+        LayoutVector2D::zero(),
+    );
+
+    // A bound reference frame marked `is_2d_scale_translation` is an APZ
+    // async-zoom / fixed-position frame, not a CSS animation: it must NOT be
+    // treated as animating (and must not propagate that to its children).
+    let apz = cst.add_reference_frame(
+        root,
+        TransformStyle::Flat,
+        PropertyBinding::Binding(api::PropertyBindingKey::new(2), LayoutTransform::identity()),
+        ReferenceFrameKind::Transform {
+            is_2d_scale_translation: true,
+            should_snap: true,
+            paired_with_perspective: false,
+        },
+        LayoutVector2D::zero(),
+        PipelineId::dummy(),
+        false,
+    );
+    let apz_child = add_reference_frame(
+        &mut cst,
+        apz,
+        LayoutTransform::identity(),
+        LayoutVector2D::zero(),
+    );
+
+    let mut st = SpatialTree::new();
+    st.apply_updates(cst.end_frame_and_get_pending_updates());
+    st.update_tree(&SceneProperties::new());
+
+    // The static ancestor above the animated frame is unaffected.
+    assert!(!st.get_spatial_node(root).is_ancestor_or_self_animating);
+    // The CSS-animated frame and everything below it are marked.
+    assert!(st.get_spatial_node(animated).is_ancestor_or_self_animating);
+    assert!(st.get_spatial_node(child).is_ancestor_or_self_animating);
+    // The APZ (async-zoom / fixed) frame and its children are not.
+    assert!(!st.get_spatial_node(apz).is_ancestor_or_self_animating);
+    assert!(!st.get_spatial_node(apz_child).is_ancestor_or_self_animating);
 }

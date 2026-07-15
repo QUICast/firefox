@@ -7,8 +7,8 @@ import { XPCOMUtils } from "resource://gre/modules/XPCOMUtils.sys.mjs";
 const lazy = XPCOMUtils.declareLazy({
   IPPExceptionsManager:
     "moz-src:///toolkit/components/ipprotection/IPPExceptionsManager.sys.mjs",
-  IPProtectionService:
-    "moz-src:///toolkit/components/ipprotection/IPProtectionService.sys.mjs",
+  IPPPrincipalRules:
+    "moz-src:///toolkit/components/ipprotection/IPPExceptionsManager.sys.mjs",
   ProxyService: {
     service: "@mozilla.org/network/protocol-proxy-service;1",
     iid: Ci.nsIProtocolProxyService,
@@ -20,14 +20,7 @@ const failOverTimeout = 10; // seconds
 
 const MODE_PREF = "browser.ipProtection.mode";
 
-const INCLUSION_PREF = "browser.ipProtection.inclusion.match_patterns";
-
 const isXpcshell = Services.env.exists("XPCSHELL_TEST_PROFILE_DIR");
-
-const MATCH_PATTERN_OPTIONS = {
-  ignorePath: true,
-  restrictSchemes: false,
-};
 
 /**
  * The IPP Mode the default behavior of Channels
@@ -58,22 +51,16 @@ const TRACKING_FLAGS =
   Ci.nsIClassifiedChannel.CLASSIFIED_TRACKING_SOCIAL |
   Ci.nsIClassifiedChannel.CLASSIFIED_TRACKING_CONTENT;
 
-const DEFAULT_EXCLUDED_URL_PREFS = [
-  "browser.ipProtection.guardian.endpoint",
-  "captivedetect.canonicalURL",
-];
-
 /**
  * IPPChannelFilter is a class that implements the nsIProtocolProxyChannelFilter
  *
  * While active it will review every request the browser makes.
  * Depending on IPPMode - it will proxy the request unless a rule is attached to the Destination.
  *
- * -> Exclusions can be made by putting the page into excludedPages OR by attaching the IPP-Deny permission to the Principal.
- *    See also IPPExceptionsManager.sys.mjs
- * -> Inclusions can be made by putting pages into the INCLUSION_PREF matchset
- *
- * If a Channel Matches both Exclusion and Inclusion Rule, the Inclusion Rule is taken.
+ * The include/exclude classification of a request's principal is delegated to
+ * IPPExceptionsManager (see IPPExceptionsManager.sys.mjs); shouldProxy only
+ * handles channel-object concerns (system-channel early-out, DoH/TRR bypass)
+ * and the channel -> principal selection.
  *
  */
 export class IPPChannelFilter {
@@ -81,11 +68,9 @@ export class IPPChannelFilter {
    * Creates a new IPPChannelFilter that can connect to a proxy server. After
    * created, the proxy can be immediately activated. It will suspend all the
    * received nsIChannel until the object is fully initialized.
-   *
-   * @param {Array<string>} [excludedPages] - list of page URLs whose *origin* should bypass the proxy
    */
-  static create(excludedPages = []) {
-    return new IPPChannelFilter(excludedPages);
+  static create() {
+    return new IPPChannelFilter();
   }
 
   /**
@@ -159,10 +144,15 @@ export class IPPChannelFilter {
    * @typedef {import("./IPProtectionServerlist.sys.mjs").Server} Server
    * @param {string} authToken - a bearer token for the proxy server.
    * @param {Server} server - the server to connect to.
+   * @param {string} [isolationKey] - the isolation key to bake into the
+   *   proxyInfo. When omitted a new random one is generated.
    * @returns {nsIProxyInfo}
    */
-  static serverToProxyInfo(authToken, server) {
-    const isolationKey = IPPChannelFilter.makeIsolationKey();
+  static serverToProxyInfo(
+    authToken,
+    server,
+    isolationKey = IPPChannelFilter.makeIsolationKey()
+  ) {
     // When running tests, we can’t set alwaysTunnel to true because our test
     // server doesn’t support tunneling.
     const alwaysTunnel = !(Cu.isInAutomation || isXpcshell);
@@ -182,57 +172,44 @@ export class IPPChannelFilter {
    * active, will process the new and the pending channels.
    *
    * @typedef {import("./IPProtectionServerlist.sys.mjs").Server} Server
-   * @param {string} authToken - a bearer token for the proxy server.
+   * @typedef {import("./GuardianTypes.sys.mjs").ProxyPass} ProxyPass
+   * @param {ProxyPass} pass - the proxy pass to authenticate with.
    * @param {Server} server - the server to connect to.
    */
-  initialize(authToken = "", server) {
+  initialize(pass, server) {
     if (this.proxyInfo) {
       throw new Error("Double initialization?!?");
     }
-    const proxyInfo = IPPChannelFilter.serverToProxyInfo(authToken, server);
-    Object.freeze(proxyInfo);
-    this.proxyInfo = proxyInfo;
-
+    this.#pass = pass;
     this.#server = server;
-    this.#processPendingChannels();
+    this.#setProxyInfo(IPPChannelFilter.makeIsolationKey());
   }
 
   /**
-   * @param {Array<string>} [excludedPages]
+   * Builds the proxyInfo for the stored pass and server with the given isolation
+   * key, saves the key, and flushes any queued channels.
+   *
+   * @param {string} isolationKey
    */
-  constructor(excludedPages = []) {
-    // Normalize and store excluded origins (scheme://host[:port])
-    this.#excludedOrigins = new Set();
-    excludedPages.forEach(url => {
-      this.addPageExclusion(url);
-    });
-    this.#inclusionSet = IPPChannelFilter.getInclusionList();
+  #setProxyInfo(isolationKey) {
+    this.#isolationKey = isolationKey;
+    const proxyInfo = IPPChannelFilter.serverToProxyInfo(
+      this.#pass.asBearerToken(),
+      this.#server,
+      isolationKey
+    );
+    Object.freeze(proxyInfo);
+    this.proxyInfo = proxyInfo;
+    this.#processPendingChannels();
+  }
 
-    DEFAULT_EXCLUDED_URL_PREFS.forEach(pref => {
-      const prefValue = Services.prefs.getStringPref(pref, "");
-      if (prefValue) {
-        this.addPageExclusion(prefValue);
-      }
-    });
-
-    lazy.IPProtectionService.authProvider.excludedUrlPrefs.forEach(pref => {
-      const prefValue = Services.prefs.getStringPref(pref, "");
-      if (prefValue) {
-        this.addPageExclusion(prefValue);
-      }
-    });
-
+  constructor() {
     XPCOMUtils.defineLazyPreferenceGetter(
       this,
       "mode",
       MODE_PREF,
       IPPMode.MODE_FULL
     );
-
-    this.#inclusionPrefObserver = () => {
-      this.#inclusionSet = IPPChannelFilter.getInclusionList();
-    };
-    Services.prefs.addObserver(INCLUSION_PREF, this.#inclusionPrefObserver);
   }
 
   /**
@@ -283,13 +260,51 @@ export class IPPChannelFilter {
     ) {
       return false;
     }
-    if (this.shouldInclude(channel)) {
+
+    // DoH traffic must bypass the proxy: in TRR_ONLY mode (Max Protection)
+    // sending DNS-over-HTTPS through the proxy creates a circular resolution
+    // dependency that breaks all DNS.
+    if (
+      channel instanceof Ci.nsIHttpChannelInternal &&
+      channel.isTRRServiceChannel
+    ) {
+      return false;
+    }
+
+    const principal = this.#principalForChannel(channel);
+    const rule = lazy.IPPExceptionsManager.getPrincipalRule(principal);
+    if (rule === lazy.IPPPrincipalRules.INCLUDED) {
       return true;
     }
-    if (this.shouldExclude(channel)) {
+    if (rule === lazy.IPPPrincipalRules.EXCLUDED) {
       return false;
     }
     return this.#matchMode(channel);
+  }
+
+  /**
+   * Selects the principal a proxy decision should be attributed to.
+   *
+   * Prefers a non-system loadingPrincipal, falling back to the channel URI
+   * principal. For downloads, uses the triggeringPrincipal instead so the
+   * exclusion is attributed to the originating page.
+   *
+   * @param {nsIChannel} channel
+   * @returns {nsIPrincipal}
+   */
+  #principalForChannel(channel) {
+    let { loadingPrincipal, triggeringPrincipal } = channel.loadInfo ?? {};
+    if (loadingPrincipal && !loadingPrincipal.isSystemPrincipal) {
+      return loadingPrincipal;
+    }
+    if (
+      channel.loadInfo?.isUserTriggeredSave &&
+      triggeringPrincipal &&
+      !triggeringPrincipal.isSystemPrincipal
+    ) {
+      return triggeringPrincipal;
+    }
+    return Services.scriptSecurityManager.getChannelURIPrincipal(channel);
   }
 
   #matchMode(channel) {
@@ -307,115 +322,6 @@ export class IPPChannelFilter {
       case IPPMode.MODE_FULL:
       default:
         return true;
-    }
-  }
-
-  /**
-   * Decides whether a channel *should* take the proxy
-   *
-   * @param {nsIChannel} channel
-   * @returns {boolean} - True: The channel *should* take the proxy.
-   */
-  shouldInclude(channel) {
-    try {
-      return this.#inclusionSet.matches(channel.URI);
-    } catch (_) {
-      return false;
-    }
-  }
-
-  /**
-   * Decide whether a channel should bypass the proxy based on origin.
-   *
-   * @param {nsIChannel} channel
-   * @returns {boolean}
-   */
-  shouldExclude(channel) {
-    try {
-      const uri = channel.URI; // nsIURI
-      if (!uri) {
-        return true;
-      }
-
-      if (!["http", "https"].includes(uri.scheme)) {
-        return true;
-      }
-
-      // DoH traffic must bypass the proxy: in TRR_ONLY mode (Max Protection)
-      // sending DNS-over-HTTPS through the proxy creates a circular
-      // resolution dependency that breaks all DNS.
-      if (
-        channel instanceof Ci.nsIHttpChannelInternal &&
-        channel.isTRRServiceChannel
-      ) {
-        return true;
-      }
-
-      // Only get the principal from the channel URI when both loadingPrincipal
-      // and triggeringPrincipal are system principals.
-      let { loadingPrincipal, triggeringPrincipal } = channel.loadInfo ?? {};
-      let principal;
-      if (loadingPrincipal && !loadingPrincipal.isSystemPrincipal) {
-        principal = loadingPrincipal;
-      } else if (
-        triggeringPrincipal &&
-        !triggeringPrincipal.isSystemPrincipal
-      ) {
-        principal = triggeringPrincipal;
-      } else {
-        principal =
-          Services.scriptSecurityManager.getChannelURIPrincipal(channel);
-      }
-
-      if (IPPChannelFilter.isLocal(principal)) {
-        return true;
-      }
-
-      const origin = uri.prePath; // scheme://host[:port]
-
-      let hasExclusion = lazy.IPPExceptionsManager.hasExclusion(principal);
-
-      if (hasExclusion) {
-        return true;
-      }
-
-      return this.#excludedOrigins.has(origin);
-    } catch (_) {
-      return true;
-    }
-  }
-
-  static getInclusionList() {
-    let raw = Services.prefs.getStringPref(INCLUSION_PREF, "[]");
-    let arr = JSON.parse(raw);
-    if (!Array.isArray(arr)) {
-      throw new TypeError(`${INCLUSION_PREF} does not contain a JSON array`);
-    }
-    let patterns = arr.filter(s => typeof s === "string" && s.length);
-    return new MatchPatternSet(patterns, MATCH_PATTERN_OPTIONS);
-  }
-
-  /**
-   *
-   * @param {nsIPrincipal} principal
-   */
-  static isLocal(principal) {
-    return principal.isLoopbackHost || principal.isLocalIpAddress;
-  }
-
-  /**
-   * Adds a page URL to the exclusion list.
-   *
-   * @param {string} url - The URL to exclude.
-   * @param {Set<string>} [list] - The exclusion list to add the URL to.
-   */
-  addPageExclusion(url, list = this.#excludedOrigins) {
-    try {
-      const uri = Services.io.newURI(url);
-      // prePath is scheme://host[:port]
-      list.add(uri.prePath);
-    } catch (_) {
-      // ignore bad entries
     }
   }
 
@@ -438,14 +344,6 @@ export class IPPChannelFilter {
       return;
     }
 
-    if (this.#inclusionPrefObserver) {
-      Services.prefs.removeObserver(
-        INCLUSION_PREF,
-        this.#inclusionPrefObserver
-      );
-      this.#inclusionPrefObserver = null;
-    }
-
     lazy.ProxyService.unregisterChannelFilter(this);
 
     this.abortPendingChannels();
@@ -455,8 +353,9 @@ export class IPPChannelFilter {
   }
 
   /**
-   * Returns the isolation key of the proxy connection.
-   * All ProxyInfo objects related to this Connection will have the same isolation key.
+   * Returns the isolation key of the active proxy connection, or null when
+   * suspended. The key is also stored in #isolationKey so it survives a
+   * suspend() and can be re-used by resume().
    */
   get isolationKey() {
     if (!this.proxyInfo) {
@@ -471,26 +370,39 @@ export class IPPChannelFilter {
 
   /**
    * Suspends the filter: new channels that should be proxied are queued until
-   * replaceAuthTokenAndResume() is called.
+   * the filter is resumed.
    */
   suspend() {
     this.proxyInfo = null;
   }
 
   /**
-   * Replaces the authentication token and flushes any queued channels.
-   * --> Important <--: This Changes the isolationKey of the Connection!
-   *
-   * @param {string} newToken - The new authentication token.
+   * True if the stored pass is still valid and not yet due for rotation, meaning
+   * the connection can be resumed as-is (e.g. when waking from sleep).
    */
-  replaceAuthTokenAndResume(newToken) {
-    const proxyInfo = IPPChannelFilter.serverToProxyInfo(
-      newToken,
-      this.#server
-    );
-    Object.freeze(proxyInfo);
-    this.proxyInfo = proxyInfo;
-    this.#processPendingChannels();
+  get canResume() {
+    return !!this.#pass?.isValid() && !this.#pass.shouldRotate();
+  }
+
+  /**
+   * Rebuilds the connection from the stored pass, re-using the saved isolation
+   * key so the woken connection keeps the same identity (e.g. resuming after
+   * sleep). Flushes any queued channels.
+   */
+  resume() {
+    this.#setProxyInfo(this.#isolationKey);
+  }
+
+  /**
+   * Replaces the proxy pass and flushes any queued channels. This generates a
+   * new isolation key for the connection.
+   *
+   * @typedef {import("./GuardianTypes.sys.mjs").ProxyPass} ProxyPass
+   * @param {ProxyPass} pass - The new proxy pass.
+   */
+  replaceAuthTokenAndResume(pass) {
+    this.#pass = pass;
+    this.#setProxyInfo(IPPChannelFilter.makeIsolationKey());
   }
 
   /**
@@ -556,11 +468,12 @@ export class IPPChannelFilter {
   #abort = new AbortController();
   #observers = [];
   #active = false;
-  #excludedOrigins = new Set();
   #pendingChannels = [];
-  #inclusionSet = new MatchPatternSet([], MATCH_PATTERN_OPTIONS);
-  #inclusionPrefObserver = null;
   #server = null;
+  /** @type {import("./GuardianTypes.sys.mjs").ProxyPass | null} */
+  #pass = null;
+  /** @type {string | null} */
+  #isolationKey = null;
 
   static makeIsolationKey() {
     return Math.random().toString(36).slice(2, 18).padEnd(16, "0");

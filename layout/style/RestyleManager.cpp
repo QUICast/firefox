@@ -6,6 +6,7 @@
 
 #include "ActiveLayerTracker.h"
 #include "ScrollSnap.h"
+#include "ServoStyleSet.h"
 #include "StickyScrollContainer.h"
 #include "mozilla/AnimationUtils.h"
 #include "mozilla/Assertions.h"
@@ -151,6 +152,38 @@ void RestyleManager::ContentAppended(nsIContent* aFirstNewContent) {
       }
     }
   }
+
+  if (selectorFlags & NodeSelectorFlags::MayHaveTreeCountingFunction) {
+    RecascadeForTreeCountingFunctions(container);
+  }
+}
+
+/**
+ * Runs the given function on the provided element, its generated content
+ * pseudo elements, and any UA widget pseudo elements.
+ */
+template <typename Func>
+static void ForEachElementAndPseudo(Element* aElement, Func&& aFunc) {
+  // TODO(Bug 2037724): this method covers a limited number of
+  // pseudos (i.e. ::selection is not handled).
+  aFunc(aElement);
+
+  AutoTArray<nsIContent*, 4> pseudos;
+  nsLayoutUtils::AppendGeneratedContentPseudos(aElement, pseudos);
+  for (nsIContent* pseudo : pseudos) {
+    aFunc(Element::FromNode(pseudo));
+  }
+
+  auto* shadow = aElement->GetShadowRoot();
+  if (shadow && shadow->IsUAWidget()) {
+    for (nsIContent* node = shadow->GetFirstChild(); node;
+         node = node->GetNextNode(shadow)) {
+      if (node->IsElement() && node->AsElement()->GetPseudoElementType() !=
+                                   PseudoStyleType::NotPseudo) {
+        aFunc(node->AsElement());
+      }
+    }
+  }
 }
 
 void RestyleManager::RestylePreviousSiblings(nsIContent* aStartingSibling) {
@@ -168,6 +201,26 @@ void RestyleManager::RestyleSiblingsStartingWith(nsIContent* aStartingSibling) {
     if (auto* element = Element::FromNode(sibling)) {
       PostRestyleEvent(element, RestyleHint::RestyleSubtree(), nsChangeHint(0));
     }
+  }
+}
+
+void RestyleManager::RecascadeForTreeCountingFunctions(nsINode* aContainer) {
+  MOZ_ASSERT(aContainer->GetSelectorFlags() &
+             NodeSelectorFlags::MayHaveTreeCountingFunction);
+
+  for (nsIContent* child = aContainer->GetFirstChild(); child;
+       child = child->GetNextSibling()) {
+    auto* element = Element::FromNode(child);
+    if (!element) {
+      continue;
+    }
+
+    ForEachElementAndPseudo(element, [&](Element* aTargetElement) {
+      if (Servo_Element_UsesTreeCountingFunction(aTargetElement)) {
+        PostRestyleEvent(aTargetElement, RestyleHint::RECASCADE_SELF,
+                         nsChangeHint(0));
+      }
+    });
   }
 }
 
@@ -421,6 +474,10 @@ void RestyleManager::RestyleForInsertOrChange(nsIContent* aChild) {
   if (selectorFlags & NodeSelectorFlags::HasEdgeChildSelector) {
     MaybeRestyleForEdgeChildChange(container, aChild);
   }
+
+  if (selectorFlags & NodeSelectorFlags::MayHaveTreeCountingFunction) {
+    RecascadeForTreeCountingFunctions(container);
+  }
 }
 
 void RestyleManager::ContentWillBeRemoved(nsIContent* aOldChild) {
@@ -560,6 +617,10 @@ void RestyleManager::ContentWillBeRemoved(nsIContent* aOldChild) {
         reachedFollowingSibling = true;
       }
     }
+  }
+
+  if (selectorFlags & NodeSelectorFlags::MayHaveTreeCountingFunction) {
+    RecascadeForTreeCountingFunctions(container);
   }
 }
 
@@ -928,7 +989,7 @@ static bool RecomputePosition(nsIFrame* aFrame) {
   nsFrameState savedState = parentFrame->GetStateBits();
   ReflowInput parentReflowInput(aFrame->PresContext(), parentFrame, rc.get(),
                                 parentSize);
-  parentFrame->RemoveStateBits(~nsFrameState(0));
+  parentFrame->RemoveStateBits(~NS_FRAME_STATE_NONE);
   parentFrame->AddStateBits(savedState);
 
   // The bogus parent state here was created with no parent state of its own,
@@ -1055,9 +1116,18 @@ static bool ContainingBlockChangeAffectsDescendants(
   MOZ_ASSERT_IF(aIsFixedPosContainingBlock, aIsAbsPosContainingBlock);
 
   for (const auto& childList : aFrame->ChildLists()) {
+    // Floats are reachable by diving into their real frame from the placeholder
+    // below, so skip the float list to avoid visiting them twice.
+    if (childList.mID == FrameChildListID::Float) {
+      continue;
+    }
     for (nsIFrame* f : childList.mList) {
+      nsIFrame* frameToDiveInto = f;
       if (f->IsPlaceholderFrame()) {
         nsIFrame* outOfFlow = nsPlaceholderFrame::GetRealFrameForPlaceholder(f);
+        if (!outOfFlow) {
+          continue;
+        }
         // If SVG text frames could appear here, they could confuse us since
         // they ignore their position style ... but they can't.
         NS_ASSERTION(!outOfFlow->IsInSVGTextSubtree(),
@@ -1090,6 +1160,12 @@ static bool ContainingBlockChangeAffectsDescendants(
             }
           }
         }
+
+        // For floats, also dive into the real frame since it may be reparented
+        // into an ancestor block outside |aFrame|, so an abspos placeholder
+        // inside that float would be unreachable. For other out-of-flows, we
+        // don't recurse since the placeholder |f| has no children.
+        frameToDiveInto = outOfFlow->IsFloating() ? outOfFlow : nullptr;
       }
       // NOTE:  It's tempting to check f->IsAbsPosContainingBlock() or
       // f->IsFixedPosContainingBlock() here.  However, that would only
@@ -1099,9 +1175,10 @@ static bool ContainingBlockChangeAffectsDescendants(
       // could lead to an unsafe call to
       // cont->MarkAsNotAbsoluteContainingBlock() before we've reframed
       // the descendant and taken it off the absolute list.
-      if (ContainingBlockChangeAffectsDescendants(
-              aPossiblyChangingContainingBlock, f, aIsAbsPosContainingBlock,
-              aIsFixedPosContainingBlock)) {
+      if (frameToDiveInto &&
+          ContainingBlockChangeAffectsDescendants(
+              aPossiblyChangingContainingBlock, frameToDiveInto,
+              aIsAbsPosContainingBlock, aIsFixedPosContainingBlock)) {
         return true;
       }
     }
@@ -1346,7 +1423,7 @@ static void StyleChangeReflow(nsIFrame* aFrame, nsChangeHint aHint) {
 
   nsFrameState dirtyBits;
   if (aFrame->HasAnyStateBits(NS_FRAME_FIRST_REFLOW)) {
-    dirtyBits = nsFrameState(0);
+    dirtyBits = NS_FRAME_STATE_NONE;
   } else if ((aHint & nsChangeHint_NeedDirtyReflow) ||
              dirtyType == IntrinsicDirty::FrameAncestorsAndDescendants) {
     dirtyBits = NS_FRAME_IS_DIRTY;
@@ -2749,6 +2826,15 @@ static bool NeedsToReframeForConditionallyCreatedPseudoElement(
       return true;
     }
   }
+  if (aElement->IsHTMLElement(nsGkAtoms::select) && !aStyleFrame->IsLeaf() &&
+      !nsLayoutUtils::GetPickerIconPseudo(aElement)) {
+    RefPtr<ComputedStyle> pseudoStyle =
+        aRestyleState.StyleSet().ProbePseudoElementStyle(
+            *aElement, PseudoStyleType::PickerIcon, nullptr, aNewStyle);
+    if (pseudoStyle) {
+      return true;
+    }
+  }
   return false;
 }
 
@@ -3527,36 +3613,12 @@ static inline bool NeedToRecordAttrChange(
 
 void RestyleManager::MaybeRecascadeForAttrFunction(Element* aElement,
                                                    nsAtom* aAttribute) {
-  // TODO(Bug 2037724): this method covers a limited number of
-  // pseudos (i.e. ::selection is not handled).
-  if (Servo_Element_ReferencesAttribute(aElement, aAttribute)) {
-    PostRestyleEvent(aElement, RestyleHint::RECASCADE_SELF, nsChangeHint(0));
-  }
-
-  AutoTArray<nsIContent*, 4> pseudos;
-  nsLayoutUtils::AppendGeneratedContentPseudos(aElement, pseudos);
-  for (nsIContent* pseudo : pseudos) {
-    Element* pseudoElement = Element::FromNode(pseudo);
-    if (Servo_Element_ReferencesAttribute(pseudoElement, aAttribute)) {
-      PostRestyleEvent(pseudoElement, RestyleHint::RECASCADE_SELF,
+  ForEachElementAndPseudo(aElement, [&](Element* aTargetElement) {
+    if (Servo_Element_ReferencesAttribute(aTargetElement, aAttribute)) {
+      PostRestyleEvent(aTargetElement, RestyleHint::RECASCADE_SELF,
                        nsChangeHint(0));
     }
-  }
-
-  auto* shadow = aElement->GetShadowRoot();
-  if (shadow && shadow->IsUAWidget()) {
-    for (nsIContent* node = shadow->GetFirstChild(); node;
-         node = node->GetNextNode(shadow)) {
-      if (!node->IsElement() || node->AsElement()->GetPseudoElementType() ==
-                                    PseudoStyleType::NotPseudo) {
-        continue;
-      }
-      if (Servo_Element_ReferencesAttribute(node->AsElement(), aAttribute)) {
-        PostRestyleEvent(node->AsElement(), RestyleHint::RECASCADE_SELF,
-                         nsChangeHint(0));
-      }
-    }
-  }
+  });
 }
 
 void RestyleManager::AttributeWillChange(Element* aElement,
@@ -3646,6 +3708,27 @@ void RestyleManager::AttributeChanged(Element* aElement, int32_t aNameSpaceID,
     // TODO(emilio, bug 1598094): Maybe finer-grained invalidation for part
     // attribute changes?
     restyleHint |= RestyleHint::RESTYLE_SELF | RestyleHint::RESTYLE_PSEUDOS;
+  }
+
+  // If we match/unmatch a named container we have to restyle at least all our
+  // descendants that are affected by rules in style container queries.
+  // Ideally we could be more discerning by adding another Computed Value Flag
+  // for elements that are affected specifically by named container queries and
+  // thus require us to possibly restyle distant descendants.
+  switch (StyleSet()->MightHaveAttributeDependencyInContainer(*aElement,
+                                                              aAttribute)) {
+    case StyleContainerAttributeDependencyKind::NamedContainer:
+      /// Note that this unnecessarily restyles self if self also happens to
+      /// be affected by a style container query. This may be acceptable but...
+      /// TODO(descalante, bug 2050532): It's also worth looking into whether
+      /// or not we can rework the flags to avoid this extra restyle.
+      restyleHint |= RestyleHint::RESTYLE_IF_AFFECTED_BY_NAMED_STYLE_CONTAINER;
+      break;
+    case StyleContainerAttributeDependencyKind::UnnamedContainer:
+      restyleHint |= RestyleHint::RESTYLE_CHILD_IF_AFFECTED_BY_STYLE_QUERIES;
+      break;
+    case StyleContainerAttributeDependencyKind::None:
+      break;
   }
 
   if (nsIFrame* primaryFrame = aElement->GetPrimaryFrame()) {

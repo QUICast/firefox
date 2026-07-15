@@ -13,41 +13,41 @@
   - Presentation feedback
   - Fullscreen - handle differently
   - Attach dmabuf feedback to dmabuf surfaces to get formats for direct scanout
-  - Don't use for tooltips/small menus etc.
 
   Testing:
     Mochitest test speeds
-    SW/HW rendering + VSync
 */
 
 #include "mozilla/layers/NativeLayerWayland.h"
 
 #include <dlfcn.h>
-#include <utility>
-#include <algorithm>
 
-#include "gfxUtils.h"
-#include "nsGtkUtils.h"
-#include "GLContextProvider.h"
+#include <algorithm>
+#include <utility>
+
 #include "GLBlitHelper.h"
+#include "GLContextProvider.h"
+#include "ScopedGLHelpers.h"
+#include "gfxUtils.h"
+#include "mozilla/StaticPrefs_widget.h"
 #include "mozilla/gfx/DataSurfaceHelpers.h"
 #include "mozilla/gfx/Logging.h"
 #include "mozilla/gfx/gfxVars.h"
 #include "mozilla/layers/SurfacePoolWayland.h"
-#include "mozilla/StaticPrefs_widget.h"
-#include "mozilla/webrender/RenderThread.h"
 #include "mozilla/webrender/RenderDMABUFTextureHost.h"
+#include "mozilla/webrender/RenderThread.h"
 #include "mozilla/widget/WaylandSurface.h"
-#include "mozilla/StaticPrefs_widget.h"
-#include "ScopedGLHelpers.h"
+#include "nsGtkUtils.h"
 
 #ifdef MOZ_LOGGING
 #  undef LOG
 #  undef LOGVERBOSE
+#  undef LOG_VSYNC
+#  include "Units.h"
 #  include "mozilla/Logging.h"
 #  include "nsTArray.h"
-#  include "Units.h"
 extern mozilla::LazyLogModule gWidgetCompositorLog;
+extern mozilla::LazyLogModule gWidgetVsync;
 #  define LOG(str, ...)                                     \
     MOZ_LOG(gWidgetCompositorLog, mozilla::LogLevel::Debug, \
             ("%s: " str, GetDebugTag().get(), ##__VA_ARGS__))
@@ -57,8 +57,12 @@ extern mozilla::LazyLogModule gWidgetCompositorLog;
 #  define LOGS(str, ...)                                    \
     MOZ_LOG(gWidgetCompositorLog, mozilla::LogLevel::Debug, \
             (str, ##__VA_ARGS__))
+#  define LOG_VSYNC(str, ...)                       \
+    MOZ_LOG(gWidgetVsync, mozilla::LogLevel::Debug, \
+            ("[%p]: " str, GetDebugTag().get(), ##__VA_ARGS__))
 #else
 #  define LOG(args)
+#  define LOG_VSYNC(args)
 #endif /* MOZ_LOGGING */
 
 using namespace mozilla;
@@ -213,7 +217,7 @@ void NativeLayerRootWayland::Init() {
   // to save resources.
   mRootSurface->SetVSyncCallbackStateHandlerLocked(
       lock, [this, self = RefPtr{this}](bool aState) -> void {
-        LOGVERBOSE("VSyncCallbackStateHandler()");
+        LOG_VSYNC("VSyncCallbackStateHandler()");
         // It's run on locked surface
         mRootSurface->AssertCurrentThreadOwnsMutex();
         for (RefPtr<NativeLayerWayland>& layer : mSublayers) {
@@ -232,7 +236,7 @@ void NativeLayerRootWayland::Init() {
             break;
           }
         }
-        LOGVERBOSE("Emulate VSync [%d]", !isVisible);
+        LOG_VSYNC("Emulate VSync [%d]", !isVisible);
         return !isVisible;
       });
 
@@ -685,7 +689,7 @@ void NativeLayerRootWayland::VSyncCallbackHandler(uint32_t aTime,
   }
 
   if (aTime <= mLastFrameCallbackTime) {
-    LOGVERBOSE(
+    LOG_VSYNC(
         "NativeLayerRootWayland::VSyncCallbackHandler() ignoring redundant "
         "callback %d",
         aTime);
@@ -693,7 +697,7 @@ void NativeLayerRootWayland::VSyncCallbackHandler(uint32_t aTime,
   }
   mLastFrameCallbackTime = aTime;
 
-  LOGVERBOSE(
+  LOG_VSYNC(
       "NativeLayerRootWayland::VSyncCallbackHandler() time %d emulated [%d]",
       aTime, aEmulated);
   mRootSurface->VSyncCallbackHandler(nullptr, aTime,
@@ -912,6 +916,9 @@ void NativeLayerWayland::UpdateLayerPlacementLocked(
   }
   mState.mMutatedPlacement = false;
 
+  // Placement is changed to we need to repaint
+  mState.mMutatedVisibility = true;
+
   LOGVERBOSE("NativeLayerWayland::UpdateLayerPlacementLocked()");
 
   MOZ_RELEASE_ASSERT(mTransform.Is2D());
@@ -935,7 +942,6 @@ void NativeLayerWayland::UpdateLayerPlacementLocked(
   const bool visible = !surfaceRectClipped.IsEmpty();
   if (mState.mIsVisible != visible) {
     mState.mIsVisible = visible;
-    mState.mMutatedVisibility = true;
     mState.mMutatedStackingOrder = true;
     if (!mState.mIsVisible) {
       LOGVERBOSE("NativeLayerWayland become hidden");
@@ -963,20 +969,19 @@ void NativeLayerWayland::UpdateLayerPlacementLocked(
 
   auto transform2DInversed = transform2D.Inverse();
   Rect bufferClip = transform2DInversed.TransformBounds(surfaceRectClipped);
-  auto unscaledViewportRect =
+  Rect unscaledViewportRect =
       bufferClip.Intersect(Rect(0, 0, mSize.width, mSize.height));
-  auto viewportRect =
+  Rect scaledViewportRect =
       useCoordinatesScale
-          ? gfx::RoundedToInt(
-                unscaledViewportRect *
-                UnknownScaleFactor(mSurface->GetCoordinatesScaleRounded()))
-          : gfx::RoundedToInt(unscaledViewportRect);
+          ? unscaledViewportRect *
+                UnknownScaleFactor(mSurface->GetCoordinatesScaleRounded())
+          : unscaledViewportRect;
+  DesktopRect viewportRect = DesktopRect::FromUnknownRect(scaledViewportRect);
 
-  LOGVERBOSE("  source [%d, %d] -> [%d x %d] coordinate scale [%f]",
+  LOGVERBOSE("  source [%f, %f] -> [%f x %f] coordinate scale [%f]",
              viewportRect.x, viewportRect.y, viewportRect.width,
              viewportRect.height, mSurface->GetCoordinatesScaleRounded());
-  mSurface->SetViewPortSourceRectLocked(
-      aProofOfLock, DesktopIntRect::FromUnknownRect(viewportRect));
+  mSurface->SetViewPortSourceRectLocked(aProofOfLock, viewportRect);
 }
 
 void NativeLayerWayland::RenderLayer(double aScale) {
@@ -1058,7 +1063,7 @@ bool NativeLayerWayland::Map(WaylandSurfaceLock& aParentWaylandSurfaceLock) {
       surfaceLock,
       [this, self = RefPtr{this}](wl_callback* aCallback, uint32_t aTime,
                                   bool aEmulated) -> void {
-        LOGVERBOSE(
+        LOG_VSYNC(
             "NativeLayerWayland::VSyncCallbackHandler() time %d emulated %d",
             aTime, aEmulated);
         MOZ_DIAGNOSTIC_ASSERT(!aEmulated);
@@ -1099,7 +1104,7 @@ bool NativeLayerWayland::Map(WaylandSurfaceLock& aParentWaylandSurfaceLock) {
 }
 
 void NativeLayerWayland::SetFrameCallbackState(bool aState) {
-  LOGVERBOSE("NativeLayerWayland::SetFrameCallbackState() %d", aState);
+  LOG_VSYNC("NativeLayerWayland::SetFrameCallbackState() %d", aState);
   WaylandSurfaceLock lock(mSurface);
   mSurface->SetVSyncCallbackStateLocked(lock, aState);
 }

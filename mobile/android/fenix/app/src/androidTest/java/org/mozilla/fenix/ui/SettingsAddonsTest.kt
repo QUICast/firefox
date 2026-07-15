@@ -9,14 +9,13 @@ import org.junit.Rule
 import org.junit.Test
 import org.mozilla.fenix.R
 import org.mozilla.fenix.customannotations.SmokeTest
-import org.mozilla.fenix.ext.settings
+import org.mozilla.fenix.ext.components
 import org.mozilla.fenix.helpers.AppAndSystemHelper.registerAndCleanupIdlingResources
 import org.mozilla.fenix.helpers.FenixTestRule
 import org.mozilla.fenix.helpers.HomeActivityIntentTestRule
 import org.mozilla.fenix.helpers.RecyclerViewIdlingResource
 import org.mozilla.fenix.helpers.TestAssetHelper.enhancedTrackingProtectionAsset
 import org.mozilla.fenix.helpers.TestAssetHelper.getGenericAsset
-import org.mozilla.fenix.helpers.TestHelper
 import org.mozilla.fenix.helpers.perf.DetectMemoryLeaksRule
 import org.mozilla.fenix.ui.robots.addonsMenu
 import org.mozilla.fenix.ui.robots.homeScreen
@@ -116,7 +115,7 @@ class SettingsAddonsTest {
     @Test
     fun noCrashWithAddonInstalledTest() {
         // setting ETP to Strict mode to test it works with add-ons
-        composeTestRule.activity.settings().setStrictETP()
+        composeTestRule.activity.components.settings.setStrictETP()
 
         val uBlockAddon = "uBlock Origin"
         val darkReaderAddon = "Dark Reader"
@@ -148,7 +147,6 @@ class SettingsAddonsTest {
     @SmokeTest
     @Test
     fun verifyUBlockWorksInPrivateModeTest() {
-        TestHelper.appContext.settings().shouldShowCookieBannersCFR = false
         val addonName = "uBlock Origin"
         val webPage = "https://mozilla-mobile.github.io/testapp/"
 

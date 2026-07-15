@@ -3,6 +3,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsViewSourceChannel.h"
+
 #include "mozilla/NullPrincipal.h"
 #include "nsContentSecurityManager.h"
 #include "nsContentUtils.h"
@@ -614,6 +615,22 @@ nsViewSourceChannel::SetLoadInfo(nsILoadInfo* aLoadInfo) {
   NS_ENSURE_TRUE(mChannel, NS_ERROR_FAILURE);
   MOZ_RELEASE_ASSERT(aLoadInfo, "loadinfo can't be null");
   return mChannel->SetLoadInfo(aLoadInfo);
+}
+
+NS_IMETHODIMP
+nsViewSourceChannel::GetParentProcessChannelHandle(
+    mozilla::dom::ParentProcessChannelHandle** aValue) {
+  NS_ENSURE_TRUE(mChannel, NS_ERROR_FAILURE);
+
+  return mChannel->GetParentProcessChannelHandle(aValue);
+}
+
+NS_IMETHODIMP
+nsViewSourceChannel::SetParentProcessChannelHandle(
+    mozilla::dom::ParentProcessChannelHandle* aValue) {
+  NS_ENSURE_TRUE(mChannel, NS_ERROR_FAILURE);
+
+  return mChannel->SetParentProcessChannelHandle(aValue);
 }
 
 NS_IMETHODIMP

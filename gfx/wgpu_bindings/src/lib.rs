@@ -127,7 +127,6 @@ pub struct AdapterInformation<S> {
     driver_info: S,
     backend: wgt::Backend,
     support_use_shared_texture_in_swap_chain: bool,
-    transient_saves_memory: bool,
     subgroup_min_size: u32,
     subgroup_max_size: u32,
 }
@@ -149,7 +148,9 @@ pub struct TextureViewDescriptor<'a> {
 // them to be managed by IdentityHub just like built-in wgpu resource types.
 #[derive(Debug)]
 pub enum ExternalTextureSource {}
-impl id::Marker for ExternalTextureSource {}
+impl id::Marker for ExternalTextureSource {
+    const TYPE: &'static str = "ExternalTextureSource";
+}
 pub type ExternalTextureSourceId = id::Id<ExternalTextureSource>;
 
 #[repr(C)]
@@ -288,6 +289,9 @@ enum Message<'a> {
         width: i32,
         height: i32,
         format: SurfaceFormat,
+        texture_format: wgt::TextureFormat,
+        usage: wgt::TextureUsages,
+        view_formats: Vec<wgt::TextureFormat>,
         buffer_ids: [id::BufferId; MAX_SWAPCHAIN_BUFFER_COUNT],
         remote_texture_owner_id: RemoteTextureOwnerId,
         use_shared_texture_in_swap_chain: bool,
@@ -482,5 +486,5 @@ impl<'a> TexelCopyBufferLayout<'a> {
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct SwapChainId(pub u64);

@@ -31,6 +31,329 @@ newtab-card-dismiss-button =
     .title = 닫기
     .aria-label = 닫기
 
+## Strings for "Homepage" and "Firefox Home" sections of about:settings#home.
+## Homepage panel
+
+home-homepage-title =
+    .label = 홈페이지
+home-homepage-new-windows =
+    .label = 새 창
+home-homepage-new-tabs =
+    .label = 새 탭
+# This option leads to the "Custom Homepage" subpage
+home-homepage-custom-homepage-button =
+    .label = 특정 사이트 선택
+
+## Custom URLs subpage
+
+# Subheader on the Custom Homepage subpage. Followed by a form to enter URLs and a list of URLs already saved, if any.
+home-custom-homepage-card-header =
+    .label = 웹 사이트 주소
+home-custom-homepage-address =
+    .placeholder = 주소 입력
+home-custom-homepage-address-button =
+    .label = 주소 추가
+# Shown when no custom websites/URLs to use as a homepage have been added yet
+home-custom-homepage-no-results =
+    .label = 아직 추가된 웹 사이트가 없습니다.
+home-custom-homepage-delete-address-button =
+    .aria-label = 주소 삭제
+    .title = 주소 삭제
+# Further options to use when setting the home page. Two action buttons are placed in line with this prompt
+# to replace the current home page with a currently open page or bookmark.
+home-custom-homepage-replace-with-prompt =
+    .label = 대체:
+# Button that appears in-line after text "Replace with" (home-custom-homepage-replace-with-prompt)
+home-custom-homepage-current-pages-button =
+    .label = 현재 열려있는 페이지
+# Button that appears in-line after text "Replace with" (home-custom-homepage-replace-with-prompt)
+home-custom-homepage-bookmarks-button =
+    .label = 북마크…
+
+## Firefox Home content
+
+home-prefs-content-header =
+    .label = { -firefox-home-brand-name }
+home-prefs-search-header2 =
+    .label = 검색
+home-prefs-stories-header2 =
+    .label = 이야기
+    .description = { -brand-product-name } 제품군이 선별한 뛰어난 콘텐츠
+home-prefs-widgets-header =
+    .label = 위젯
+# Lists is a widget on New Tab, similar to a to-do widget
+home-prefs-lists-header =
+    .label = 목록
+# Timer is a widget on New Tab, similar to the Pomodoro timer.
+home-prefs-timer-header =
+    .label = 타이머
+# Sports is a widget on New Tab showing sports scores and schedules.
+home-prefs-sports-widget-header =
+    .label = 스포츠
+# Clock is a widget on New Tab that displays time zones around the world.
+home-prefs-clocks-header =
+    .label = 시계
+# Privacy is a widget on New Tab that shows tracking protection activity.
+home-prefs-privacy-header =
+    .label = 개인 정보 보호
+# Stocks is a widget on New Tab that shows stock ticker prices.
+home-prefs-stocks-header =
+    .label = 주식
+# Picture of the day is a widget on New Tab that shows a daily Wikimedia Commons image.
+home-prefs-picture-header =
+    .label = 오늘의 사진
+home-prefs-mission-message2 =
+    .message = 스폰서는 더 나은 웹을 만들려는 저희를 지원합니다.
+home-prefs-manage-topics-link2 =
+    .label = 주제 관리
+home-prefs-choose-wallpaper-link2 =
+    .label = 배경 화면 선택
+home-prefs-firefox-logo-header =
+    .label = { -brand-short-name } 로고
+# Informational message bar that appears in the Firefox Home section when the options are disabled.
+# The user must select Firefox Home as their homepage for either new tabs or new windows to enable
+# the features in settings.
+home-prefs-firefox-home-disabled-notice =
+    .message = 이 기능을 사용하려면, 새 탭이나 새 창을 { -firefox-home-brand-name }으로 설정하세요.
+# Variables:
+#   $num (number) - Number of rows displayed
+home-prefs-sections-rows-option-srd =
+    .label = { $num } 행
+# Dropdown option shown when an extension replaces the contents of new windows or tabs.
+# Variables:
+#   $extension (string) - Name of the extension
+home-prefs-homepage-extension-option =
+    .label = 확장 기능 ({ $extension })
+home-restore-defaults-srd =
+    .label = 기본값으로 복원
+    .accesskey = R
+home-mode-choice-default-fx-srd =
+    .label = { -firefox-home-brand-name } (기본값)
+home-mode-choice-custom-srd =
+    .label = 사용자 지정 URL…
+home-mode-choice-blank-srd =
+    .label = 빈 페이지
+home-prefs-shortcuts-header-srd =
+    .label = 바로 가기
+home-prefs-shortcuts-select =
+    .aria-label = 바로 가기
+home-prefs-shortcuts-by-option-sponsored-srd =
+    .label = 스폰서 바로 가기
+home-prefs-recommended-by-option-sponsored-stories-srd =
+    .label = 스폰서 소식
+home-prefs-highlights-option-visited-pages-srd =
+    .label = 방문한 페이지
+home-prefs-highlights-options-bookmarks-srd =
+    .label = 북마크
+home-prefs-highlights-option-most-recent-download-srd =
+    .label = 가장 최근 다운로드
+home-prefs-recent-activity-header-srd =
+    .label = 최근 활동
+home-prefs-recent-activity-select =
+    .aria-label = 최근 활동
+home-prefs-weather-header-srd =
+    .label = 날씨
+home-prefs-support-firefox-header-srd =
+    .label = { -brand-product-name } 지원
+home-prefs-mission-message-learn-more-link-srd = 방법 알아보기
+
+## Strings for the Privacy widget
+
+# Context menu item linking to more information about the Privacy widget.
+newtab-privacy-menu-learn-more = 더 알아보기
+
+## Privacy widget — count readout
+
+# Label shown under the large tracker-count number, appearing like:
+# Line 1: 86
+# Line 2: Trackers blocked today
+# Translations can be adjusted to "Today's blocked trackers" or something
+# similar if this fixed order causes issues.
+# Variables:
+#   $count (number) - Number of trackers blocked today
+newtab-privacy-trackers-blocked-today = 오늘 차단된 추적기
+# Second line of the readout, under the large number and "Trackers blocked
+# today". Counts the sites those trackers were blocked on. The English is
+# shortened from "Blocked across { $count } sites" — translate it that fuller way
+# if the short fragment doesn't work in your language.
+# Variables:
+#   $count (number) - Number of sites where trackers were blocked
+newtab-privacy-across-sites = { $count }개 사이트에서
+
+## Privacy widget — empty state
+
+# Shown when no trackers have been blocked yet today.
+newtab-privacy-empty = { -brand-short-name }는 탐색할 때 추적기를 차단합니다. 여기서 볼 수 있습니다.
+
+## Privacy widget — informational messages
+##
+## Rotating "info" secondary messages. Each message has a body plus a matched
+## "-cta" button label sharing the same id stem (the CTA button isn't rendered
+## yet; the labels are authored so the pairing is ready).
+
+newtab-privacy-message-info-1 = { -brand-short-name }는 탐색할 때 자동으로 추적기를 차단합니다.
+newtab-privacy-message-info-1-cta = 보호 기능 보기
+newtab-privacy-message-info-2 = 추적기 차단은 기업이 온라인에서 사용자를 추적하는 것을 방지하는 데 도움이 됩니다.
+newtab-privacy-message-info-2-cta = 보호 기능 보기
+newtab-privacy-message-info-3 = 많은 사이트에 추적기가 있어 사용자가 방문한 적이 없는 회사가 온라인에서 사용자를 추적할 수 있습니다.
+newtab-privacy-message-info-3-cta = 보호 기능 보기
+newtab-privacy-message-info-4 = { -brand-short-name }를 선택하면 보호 기능이 기본적으로 선택됩니다.
+newtab-privacy-message-info-4-cta = 보호 기능 보기
+newtab-privacy-message-info-5 = 추적기를 차단한다는 것은 여러 사이트에서 사용자를 팔로우할 수 있는 기업이 줄어 든다는 것을 의미합니다.
+newtab-privacy-message-info-5-cta = 보호 기능 보기
+newtab-privacy-message-info-6 = 당신의 데이터를 { -brand-short-name }로 유지하세요. 절대 판매하지 않지만, 다른 브라우저에서는 판매할 수 있습니다.
+newtab-privacy-message-info-6-cta = 더 알아보기
+newtab-privacy-message-info-7 = { -brand-short-name }가 어떤 추적기를 차단했는지 확인하세요.
+newtab-privacy-message-info-7-cta = 보호 기능 보기
+newtab-privacy-message-info-8 = { -brand-short-name }로 탐색하는 것은 더 나은 웹을 구축하는 { -vendor-short-name }의 사명을 지원합니다.
+newtab-privacy-message-info-8-cta = 더 알아보기
+newtab-privacy-message-info-9 = 개인 정보 보호를 위해 { -brand-short-name }를 기본 브라우저로 설정하세요.
+newtab-privacy-message-info-9-cta = 기본 브라우저로
+newtab-privacy-message-info-10 = 어디서나 강력하고 고유한 로그인을 사용하려면 비밀번호를 { -brand-short-name }에 저장하세요.
+newtab-privacy-message-info-10-cta = 비밀번호로 이동
+newtab-privacy-message-info-11 = { -brand-short-name }가 어떻게 개인 정보 보호 탐색을 돕는지 알아보세요.
+newtab-privacy-message-info-11-cta = 더 알아보기
+newtab-privacy-message-info-12 = 추적기를 차단하면 제한된 데이터 요금제에 대한 대역폭을 절약하는데 도움이 될 수 있습니다.
+newtab-privacy-message-info-12-cta = 보호 기능 보기
+newtab-privacy-message-info-13 = { -brand-short-name }는 추적기를 차단하고, 더 원활한 스트리밍을 위해 대역폭을 확보합니다.
+newtab-privacy-message-info-13-cta = 보호 기능 보기
+
+## Privacy widget — promotional messages
+##
+## Rotating "promo" secondary messages suggesting another Firefox feature. Each
+## has a body plus a matched "-cta" button label.
+
+newtab-privacy-message-promo-monitor-1 = 데이터 유출 사례에서 개인 정보가 표시되는지 확인하세요.
+newtab-privacy-message-promo-monitor-1-cta = 더 알아보기
+newtab-privacy-message-promo-monitor-2 = 최대 20개의 이메일에 대한 무료 데이터 유출 모니터링을 통해 정보를 보호하세요.
+newtab-privacy-message-promo-monitor-2-cta = 더 알아보기
+newtab-privacy-message-promo-signin-1 = { -vendor-short-name } 계정을 사용하여 여러 기기에서 북마크, 비밀번호 및 탭을 암호화하세요.
+newtab-privacy-message-promo-signin-1-cta = 로그인
+newtab-privacy-message-promo-vpn-1 = 공용 Wi-Fi에서 쇼핑하세요? 추가 보호를 위해 내장 VPN을 켜세요.
+newtab-privacy-message-promo-vpn-1-cta = VPN 열기
+newtab-privacy-message-promo-vpn-2 = 공항 Wi-Fi를 사용하세요? 내장 VPN을 켜서 탐색을 보호하세요.
+newtab-privacy-message-promo-vpn-2-cta = VPN 열기
+newtab-privacy-message-promo-vpn-3 = 내장 VPN을 켜서 위치를 보다 안전하게 보호하세요.
+newtab-privacy-message-promo-vpn-3-cta = VPN 열기
+newtab-privacy-message-promo-private-window-1 = 공용 컴퓨터를 사용할 때는 더 안전한 개인 정보 보호를 위해 사생활 보호 창을 이용해 보세요.
+newtab-privacy-message-promo-private-window-1-cta = 사생활 보호 창 열기
+newtab-privacy-message-promo-relay-1 = 신뢰할 수 있는 사람들을 위해 실제 이메일 주소는 저장하지 마세요. 가입시 이메일 가리기를 사용하세요.
+newtab-privacy-message-promo-relay-1-cta = 이메일 가리기 받기
+newtab-privacy-message-promo-relay-2 = 무료 이메일 가리기로 스팸으로부터 받은 편지함을 보호하세요.
+newtab-privacy-message-promo-relay-2-cta = 이메일 가리기 받기
+newtab-privacy-message-promo-relay-3 = 실제 이메일을 비공개로 유지하는 데 도움이 되는 50개의 무료 이메일 가리기를 받으세요.
+newtab-privacy-message-promo-relay-3-cta = 이메일 가리기 받기
+
+## Privacy widget — celebration messages
+##
+## Earned "celebration" moments (milestones, daily cap, streak, first
+## protection). Count-bearing ones interpolate { $count }.
+
+# Variables:
+#   $count (number) - Trackers blocked this week
+newtab-privacy-message-milestone-week = 이번 주에 추적기 { $count }개가 차단되었습니다. { -brand-short-name }가 사용자의 방해 요소를 어떻게 막아내고 있는지 확인해 보세요.
+newtab-privacy-message-milestone-week-cta = 보호 기능 보기
+# Variables:
+#   $count (number) - Trackers blocked this month
+newtab-privacy-message-milestone-month = 이번 달에 추적기 { $count }개를 차단했습니다. 개인 정보 보호를 향한 작은 한 걸음이자, 마음의 평안을 위한 큰 도약입니다.
+newtab-privacy-message-milestone-month-cta = 보호 기능 보기
+# Variables:
+#   $count (number) - Trackers blocked this year
+newtab-privacy-message-milestone-year = 올해 { $count }개의 추적기가 차단되었습니다. 개인 정보를 보호해야 하는 올해입니다.
+newtab-privacy-message-milestone-year-cta = 보호 기능 보기
+# Variables:
+#   $count (number) - Trackers blocked all-time
+newtab-privacy-message-milestone-total = 추적기가 { $count }개 차단되었습니다. 내가 주도하는 개인 정보 보호를 향한 큰 진전입니다.
+newtab-privacy-message-milestone-total-cta = 보호 기능 보기
+# Shown when today's blocked-tracker count reaches the display cap ("100+").
+newtab-privacy-message-daily-cap = (오늘 100개 이상의 추적기가 차단되었습니다.) 더 적은 추적기가 더 많은 개인 정보 보호를 의미합니다.
+newtab-privacy-message-daily-cap-cta = 보호 기능 보기
+# Variables:
+#   $count (number) - Consecutive days the user has had trackers blocked
+newtab-privacy-message-streak = { $count }일 연속 보호받고 있습니다.
+newtab-privacy-message-streak-cta = 보호 기능 보기
+# Shown the first time the tracker count goes above zero.
+newtab-privacy-message-first-protection = 안심하고 탐색하세요. { -brand-short-name }가 계속해서 차단하겠습니다.
+newtab-privacy-message-first-protection-cta = 보호 기능 보기
+
+## Strings for the Stocks widget
+
+# Context menu item for searching stock ticker symbols.
+newtab-stocks-menu-search = 주식 종목 코드 검색
+# Context menu item linking to more information about the Stocks widget.
+newtab-stocks-menu-learn-more = 더 알아보기
+# "Stocks widget options" is an icon-only button in the widget toolbar — the
+# attributes are consumed as tooltip/screen-reader label only. The button
+# never renders visible text.
+newtab-stocks-widget-menu-button =
+    .title = 주식 위젯 옵션
+    .aria-label = 주식 위젯 옵션
+# Heading for the Stocks widget.
+newtab-stocks-widget-title = 주식
+
+## Screen-reader summary of a stock ticker.
+## Variables:
+##   $name (String) - the full fund/ETF name, e.g. "SPDR S&P 500 ETF Trust".
+##   $change (String) - the day's percentage change, e.g. "+2.1%".
+##   $price (String) - the last price, e.g. "$559.44".
+
+# Stock increased (went up) during the day
+newtab-stocks-ticker-status-up = { $name } 주가 { $price }, 당일 { $change } 상승
+# Stock decreased (went down) during the day
+newtab-stocks-ticker-status-down = { $name } 주가 { $price }, 당일 { $change } 하강
+# Stock didn't change during the day
+newtab-stocks-ticker-status-flat = { $name } 주가 { $price }, 변동 없음 ({ $change })
+
+## Strings for the Picture of the Day widget
+
+# Title shown at the top of the widget, with the source name appended.
+# "Wikimedia Commons" is a brand name and should not be translated.
+newtab-picture-header = 오늘의 사진 · Wikimedia Commons
+# Shorter title shown at the top of the widget, without the source name.
+newtab-picture-header-main = 오늘의 사진
+# Attribution line shown under the title once a picture loads: an author
+# credit, a link to the picture's source page, and a link to its license.
+# "©" is the copyright symbol.
+# $author (string) - the name of the image's author.
+newtab-picture-attribution-author = © { $author }
+# Link to the picture's source page (its Wikimedia Commons file page).
+# "Wikimedia Commons" is a brand name and should not be translated.
+newtab-picture-attribution-source-link = Wikimedia Commons
+# Screen-reader label for the license link; the visible text is the license
+# name (for example "CC BY-SA 4.0") provided with the picture.
+# $license (string) - the name of the license.
+newtab-picture-attribution-license =
+    .aria-label = { $license } 라이선스 보기
+# Tooltip and screen-reader label for the icon-only button that opens the
+# widget's context menu. The button never renders visible text.
+newtab-picture-widget-menu-button =
+    .title = 오늘의 사진 옵션
+    .aria-label = 오늘의 사진 옵션
+# Button that sets the current picture as the New Tab background wallpaper. The
+# button collapses to an icon when not hovered/focused, so .title is its tooltip.
+newtab-picture-set-wallpaper =
+    .label = 배경 화면 설정
+    .title = 배경 화면 설정
+    .aria-label = 오늘의 사진을 배경 화면으로 설정하세요
+# Context menu item that opens the New Tab customization panel.
+newtab-picture-menu-manage-wallpaper = 배경 화면 관리
+# Context menu item that hides today’s picture, replacing it with an existing
+# wallpaper.
+newtab-picture-menu-hide-photo = 오늘의 사진 숨기기
+# Context menu item that restores today’s picture after it has been hidden.
+newtab-picture-menu-show-photo = 오늘의 사진 보기
+# Context menu item linking to more information about the widget.
+newtab-picture-menu-learn-more = 더 알아보기
+# Icon button shown on the widget once the picture is hidden; restores it.
+newtab-picture-show-button =
+    .title = 오늘의 사진 보기
+    .aria-label = 오늘의 사진 보기
+# Shown when there is no new picture to display yet.
+newtab-picture-check-back = 새로운 사진은 내일 다시 확인해 주세요
+# Screen-reader text alternative for the picture; fallback used when the source
+# provides no localized description.
+newtab-picture-image-alt = 위키미디어 공용 오늘의 사진
+
 ## Search box component.
 
 # "Search" is a verb/action
@@ -66,6 +389,7 @@ newtab-topsites-add-shortcut-label = 바로 가기 추가
 newtab-topsites-add-shortcut-title =
     .title = 바로 가기 추가
     .aria-label = 바로 가기 추가
+newtab-shortcuts-pinned-area = 고정된 영역
 newtab-topsites-title-label = 제목
 newtab-topsites-title-input =
     .placeholder = 제목 입력
@@ -151,6 +475,8 @@ newtab-menu-section-block = 차단
 # "Follow", "unfollow", and "following" are social media terms that refer to subscribing to or unsubscribing from a section of stories.
 # e.g. Following the travel section of stories.
 newtab-menu-section-unfollow-topic = 팔로우 취소
+# Context menu option to open a support page explaining the New Tab personalization features and privacy controls.
+newtab-menu-section-learn-more = 더 알아보기
 # "Follow", "unfollow", and "following" are social media terms that refer to subscribing to or unsubscribing from a section of stories.
 # e.g. Following the travel section of stories.
 newtab-menu-section-unfollow = 주제 팔로우 취소
@@ -351,6 +677,8 @@ newtab-recommended-stories-toggle =
     .label = 추천 이야기
 newtab-custom-stories-personalized-toggle =
     .label = 이야기
+newtab-custom-stories-personalized-checkbox =
+    .label = 활동에 기반한 개인화된 이야기
 newtab-custom-stories-personalized-checkbox-label = 활동에 기반한 개인화된 이야기
 newtab-custom-pocket-sponsored = 스폰서 소식
 newtab-custom-pocket-show-recent-saves = 최근 저장한 항목 표시
@@ -371,6 +699,12 @@ newtab-custom-widget-clock-toggle =
     .label = 시계
 newtab-custom-widget-sports-toggle2 =
     .label = 스포츠
+newtab-custom-widget-privacy-toggle =
+    .label = 개인 정보 보호
+newtab-custom-widget-stocks-toggle =
+    .label = 주식
+newtab-custom-widget-picture-toggle =
+    .label = 오늘의 사진
 newtab-custom-widget-section-title = 위젯
 newtab-custom-widget-section-toggle =
     .label = 위젯
@@ -756,8 +1090,6 @@ newtab-widget-lists-button-add-item = 항목 추가
 newtab-widget-lists-input-add-an-item2 =
     .placeholder = 항목 추가
     .aria-label = 항목 추가
-newtab-widget-lists-input-add-an-item =
-    .placeholder = 항목 추가
 newtab-widget-lists-input-error = 항목을 추가하려면 텍스트를 포함하세요.
 newtab-widget-lists-input-menu-open-link = 링크 열기
 newtab-widget-lists-input-menu-move-up = 위로 이동
@@ -785,11 +1117,6 @@ newtab-widget-lists-name-placeholder-checklist2 =
 newtab-widget-lists-name-placeholder-new2 =
     .placeholder = 새 목록
     .aria-label = 목록 이름 편집
-newtab-widget-lists-name-placeholder-checklist =
-    .placeholder = 체크리스트
-# The placeholder value of the name field for a newly created list
-newtab-widget-lists-name-placeholder-new =
-    .placeholder = 새 목록
 newtab-widget-section-title = 위젯
 newtab-widget-menu-hide = 위젯 숨기기
 newtab-widget-menu-change-size = 크기 변경
@@ -854,6 +1181,8 @@ newtab-widget-timer-reset =
 newtab-widget-timer-menu-notifications = 알림 끄기
 newtab-widget-timer-menu-notifications-on = 알림 켜기
 newtab-widget-timer-menu-learn-more = 더 알아보기
+newtab-widget-timer-menu-button =
+    .aria-label = 타이머 옵션
 # The title displays above a set of top news headlines.
 newtab-daily-briefing-card-title = 주요 헤드라인
 newtab-daily-briefing-card-menu-dismiss = 닫기
@@ -956,6 +1285,8 @@ newtab-sports-widget-show-less =
 # Toggle that filters the list of teams the user follows
 newtab-sports-widget-followed-only-toggle =
     .label = 팔로우한 팀만
+# Status shown when more matches are being fetched.
+newtab-sports-widget-loading-more = 더 많은 경기 로딩 중…
 # Watch is a verb (as in watch matches online).
 newtab-sports-widget-watch =
     .label = 시청
@@ -1035,6 +1366,9 @@ newtab-sports-widget-third-place = 3위
 newtab-sports-widget-runner-up = 준우승
 newtab-sports-widget-champions = 우승팀
 newtab-sports-widget-world-cup-champions = 2026년 월드컵 우승팀
+# Compact champions label for the medium-size widget result card; the larger
+# card uses newtab-sports-widget-world-cup-champions.
+newtab-sports-widget-world-cup-champions-short = 2026 우승팀
 # Variables:
 #   $date (Date) - The match start time
 newtab-sports-widget-match-time = { DATETIME($date, hour: "2-digit", minute: "2-digit") }
@@ -1042,6 +1376,28 @@ newtab-sports-widget-match-full-time = 경기 종료
 newtab-sports-widget-match-halftime = 하프타임
 newtab-sports-widget-match-extra-time = 연장전
 newtab-sports-widget-match-penalties = 페널티
+# Separator shown between two teams in a placeholder match row when no upcoming
+# match details are available yet.
+newtab-sports-widget-match-vs = vs
+# Note shown in the Upcoming tab when no match details are available yet.
+newtab-sports-widget-no-upcoming-matches = 향후 경기 정보를 기대해 주세요
+
+## Sports widget live-games pagination. Shown when 2+ matches are live at the same time
+
+# arrow button that goes to the previous page of live matches.
+newtab-sports-widget-pagination-previous =
+    .aria-label = 이전
+    .title = 이전
+# arrow button that goes to the next page of live matches.
+newtab-sports-widget-pagination-next =
+    .aria-label = 다음
+    .title = 다음
+# Dot indicator that jumps directly to a given live match.
+# $index (number) - 1-based position of this dot in the list.
+# $total (number) - Total number of live matches.
+newtab-sports-widget-pagination-dot =
+    .aria-label = 라이브 경기 { $index } / { $total }
+    .title = 라이브 경기 { $index } / { $total }
 
 ## Accessible labels for match rows in the sports widget. These are read by
 ## screen readers to announce the match details and status.
@@ -1102,6 +1458,8 @@ newtab-sports-widget-team-name-label-eng =
     .label = 잉글랜드
 newtab-sports-widget-team-name-label-sco =
     .label = 스코틀랜드
+# Placeholder used in a match row's aria-label for an undecided team (shown visually as "--").
+newtab-sports-widget-team-tbd = 미정
 
 ## Sports widget OMC messages
 ## Shown as on-screen messages promoting the Sports widget and World Cup wallpapers.
@@ -1109,12 +1467,23 @@ newtab-sports-widget-team-name-label-sco =
 newtab-sports-widget-message-wallpapers-title = 새로운 배경 화면으로 월드컵을 시작하세요
 newtab-sports-widget-message-wallpapers-body = 토너먼트 기간 동안 브라우저에 경기 날의 생생한 열기를 더해 보세요.
 newtab-sports-widget-message-wallpapers-cta = 배경 화면 선택
+newtab-sports-widget-message-wallpapers-semifinals-title = 새 준결승전 배경 화면을 받으세요
+newtab-sports-widget-message-wallpapers-semifinals-body = 월드컵에서 가장 큰 성패를 가릴 수 있는 발판을 마련하세요.
 newtab-sports-widget-message-add-widgets-cta =
     .label = 위젯 추가
 newtab-sports-widget-message-day-in-play-title = { -brand-product-name } 위젯으로 활기를 되찾으세요
 newtab-sports-widget-message-day-in-play-body = 월드컵 소식을 확인하고, 할 일에 집중하며, 세계 각지의 시간을 확인하는 등 다양한 기능을 만나보세요.
 newtab-sports-widget-message-explore-widgets-cta =
     .label = 위젯 살펴보기
+
+## Survey prompts shown after the World Cup to gather feedback on the widgets experience.
+
+newtab-sports-widget-message-survey-title = 더 나은 위젯을 만들 수 있도록 도와주세요
+newtab-sports-widget-message-survey-body = 월드컵이 막을 내렸습니다. 이번 위젯 경험에 대한 피드백을 공유해 주세요.
+newtab-sports-widget-message-survey-widget-title = 월드컵 위젯은 어떠셨나요?
+newtab-sports-widget-message-survey-widget-body = 더 나은 위젯을 만들 수 있도록 피드백을 공유해 주세요. 그런 다음 내 위젯 목록에 추가된 새로운 위젯도 이용해 보세요.
+newtab-sports-widget-message-survey-cta =
+    .label = 설문 조사 참여
 
 ## Strings for activation window message variants. In certain experiment configurations,
 ## the strings from these variants may be displayed in a message below the search input

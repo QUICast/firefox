@@ -32,8 +32,7 @@ use stylo_atoms::Atom;
 pub enum DevicePixel {}
 
 /// Represents a mobile style pinch zoom factor.
-#[derive(Clone, Copy, Debug, PartialEq)]
-#[cfg_attr(feature = "servo", derive(Deserialize, Serialize, MallocSizeOf))]
+#[derive(Clone, Copy, Debug, Deserialize, MallocSizeOf, PartialEq, Serialize)]
 pub struct PinchZoomFactor(f32);
 
 impl PinchZoomFactor {
@@ -71,6 +70,7 @@ pub mod dom;
 pub mod specified_value_info;
 #[macro_use]
 pub mod values;
+pub mod owned_array;
 pub mod owned_slice;
 pub mod owned_str;
 
@@ -261,6 +261,9 @@ bitflags! {
         const DISALLOW_COMPUTATIONALLY_DEPENDENT = 1 << 2;
         /// In Typed OM; unitless zero must not be interpreted as a length.
         const DISALLOW_UNITLESS_ZERO_LENGTH = 1 << 3;
+        /// Media query conditions in the preludes for @media, @custom-media, and @import.
+        /// <https://drafts.csswg.org/mediaqueries/>
+        const MEDIA_QUERY_CONDITION = 1 << 4;
     }
 }
 

@@ -5,6 +5,8 @@
 #ifndef jit_riscv64_constant_Constant_riscv64_h
 #define jit_riscv64_constant_Constant_riscv64_h
 
+#include <type_traits>
+
 #include "jit/riscv64/constant/Base-constant-riscv.h"
 #include "jit/riscv64/constant/Constant-riscv-a.h"
 #include "jit/riscv64/constant/Constant-riscv-b.h"
@@ -14,6 +16,9 @@
 #include "jit/riscv64/constant/Constant-riscv-i.h"
 #include "jit/riscv64/constant/Constant-riscv-m.h"
 #include "jit/riscv64/constant/Constant-riscv-v.h"
+#include "jit/riscv64/constant/Constant-riscv-zfa.h"
+#include "jit/riscv64/constant/Constant-riscv-zfh.h"
+#include "jit/riscv64/constant/Constant-riscv-zicond.h"
 #include "jit/riscv64/constant/Constant-riscv-zicsr.h"
 #include "jit/riscv64/constant/Constant-riscv-zifencei.h"
 
@@ -49,6 +54,17 @@ static_assert(kCJalOffsetBits == kOffset12);
 static_assert(kCBranchOffsetBits == kOffset9);
 static_assert(kJumpOffsetBits == kOffset21);
 static_assert(kBranchOffsetBits == kOffset13);
+
+template <typename T>
+concept OpcodeRISCV =
+    std::is_same_v<OpcodeRISCVA, T> || std::is_same_v<OpcodeRISCVB, T> ||
+    std::is_same_v<OpcodeRISCVC, T> || std::is_same_v<OpcodeRISCVD, T> ||
+    std::is_same_v<OpcodeRISCVF, T> || std::is_same_v<OpcodeRISCV32I, T> ||
+    std::is_same_v<OpcodeRISCVM, T> || std::is_same_v<OpcodeRISCVV, T> ||
+    std::is_same_v<OpcodeRISCVZFA, T> || std::is_same_v<OpcodeRISCVZFH, T> ||
+    std::is_same_v<OpcodeRISCVZICOND, T> ||
+    std::is_same_v<OpcodeRISCVZICSR, T> ||
+    std::is_same_v<OpcodeRISCVIFENCEI, T>;
 
 }  // namespace jit
 }  // namespace js

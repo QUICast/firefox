@@ -34,7 +34,6 @@ plugins {
     alias(libs.plugins.android.library) apply false
     alias(libs.plugins.dependency.analysis)
     alias(libs.plugins.detekt)
-    alias(libs.plugins.kotlin.android) apply false
     alias(libs.plugins.kotlin.compose) apply false
     alias(libs.plugins.ksp)
     alias(libs.plugins.spotless)
@@ -208,7 +207,16 @@ def getVersionName() {
 
 // Mimic Python: open(os.path.join(buildconfig.topobjdir, 'buildid.h')).readline().split()[2]
 def getBuildId() {
-    return file("${topobjdir}/buildid.h").getText('utf-8').split()[2]
+    def buildidFile = file("${topobjdir}/buildid.h")
+    if (!buildidFile.exists()) {
+        throw new GradleException(
+            "A required build file is missing from the object directory:\n" +
+                "  - ${buildidFile}\n\n" +
+                "This file is produced by a full build, not by Gradle.\n" +
+                "Run `./mach build` from the source directory first, then retry your Gradle build."
+        )
+    }
+    return buildidFile.getText('utf-8').split()[2]
 }
 
 def getVersionNumber() {

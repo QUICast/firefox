@@ -4,20 +4,15 @@
 
 #include "GeckoEditableSupport.h"
 
+#include <android/api-level.h>
+#include <android/input.h>
+#include <android/log.h>
+
 #include "AndroidBridgeUtilities.h"
 #include "AndroidRect.h"
 #include "KeyEvent.h"
 #include "PuppetWidget.h"
-#include "nsIContent.h"
-#include "nsITransferable.h"
-#include "nsStringStream.h"
-#include "nsWindow.h"
-
-#include "mozilla/dom/ContentChild.h"
 #include "mozilla/IMEStateManager.h"
-#include "mozilla/java/GeckoEditableChildWrappers.h"
-#include "mozilla/java/GeckoServiceChildProcessWrappers.h"
-#include "mozilla/jni/NativesInlines.h"
 #include "mozilla/Logging.h"
 #include "mozilla/MiscEvents.h"
 #include "mozilla/Preferences.h"
@@ -27,11 +22,16 @@
 #include "mozilla/TextEvents.h"
 #include "mozilla/ToString.h"
 #include "mozilla/dom/BrowserChild.h"
+#include "mozilla/dom/ContentChild.h"
+#include "mozilla/java/GeckoEditableChildWrappers.h"
+#include "mozilla/java/GeckoServiceChildProcessWrappers.h"
+#include "mozilla/jni/NativesInlines.h"
 #include "mozilla/widget/GeckoViewSupport.h"
-
-#include <android/api-level.h>
-#include <android/input.h>
-#include <android/log.h>
+#include "nsComponentManagerUtils.h"
+#include "nsIContent.h"
+#include "nsITransferable.h"
+#include "nsStringStream.h"
+#include "nsWindow.h"
 
 #ifdef NIGHTLY_BUILD
 static mozilla::LazyLogModule sGeckoEditableSupportLog("IMEHandler");

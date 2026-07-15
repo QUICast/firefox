@@ -5,12 +5,12 @@
 #include "GpuProcessD3D11TextureMap.h"
 
 #include "libyuv.h"
+#include "mozilla/ProfilerMarkers.h"
+#include "mozilla/SharedThreadPool.h"
 #include "mozilla/layers/CompositorThread.h"
 #include "mozilla/layers/D3D11ZeroCopyTextureImage.h"
 #include "mozilla/layers/HelpersD3D11.h"
 #include "mozilla/layers/TextureHostWrapperD3D11.h"
-#include "mozilla/ProfilerMarkers.h"
-#include "mozilla/SharedThreadPool.h"
 #include "mozilla/webrender/RenderThread.h"
 
 namespace mozilla {

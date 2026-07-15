@@ -70,3 +70,13 @@ about-private-browsing-cookie-banners-promo-body = We now automatically refuse m
 about-private-browsing-felt-privacy-v1-info-header = Leave no traces on this device
 about-private-browsing-felt-privacy-v1-info-body = { -brand-short-name} deletes your cookies, history, and site data when you close all your private windows.
 about-private-browsing-felt-privacy-v1-info-link = Who might be able to see my activity?
+
+## Strings for the Nova redesign of about:privatebrowsing
+
+# "You're off the record" is an English idiom meant to communicate that you
+# are not being recorded. If there is not a comparable phrase in the locale,
+# fall back to "Your browsing will be deleted"
+about-private-browsing-nova-info-header = You’re off the record
+about-private-browsing-nova-info-subheader = We’ll erase every search and sign-in when you close this window. { -brand-short-name }’s built-in protections are on here too, like blocking trackers.
+about-private-browsing-nova-info-body = Closing all your private windows deletes your cookies, history and site data.
+about-private-browsing-nova-info-link = Who might still be able to see my activity?

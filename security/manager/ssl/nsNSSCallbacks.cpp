@@ -38,7 +38,6 @@
 #include "nsNSSCertHelper.h"
 #include "nsNSSCertificate.h"
 #include "nsNSSComponent.h"
-#include "nsNSSHelper.h"
 #include "nsNSSIOLayer.h"
 #include "nsNetUtil.h"
 #include "nsProxyRelease.h"
@@ -1129,7 +1128,9 @@ void HandshakeCallback(PRFileDesc* fd, void* client_data) {
   // 1=tls1, 2=tls1.1, 3=tls1.2, 4=tls1.3
   unsigned int versionEnum = channelInfo.protocolVersion & 0xFF;
   MOZ_ASSERT(versionEnum > 0);
-  glean::ssl_handshake::version.AccumulateSingleSample(versionEnum);
+  glean::tls_handshake::version
+      .EnumGet(static_cast<glean::tls_handshake::VersionLabel>(versionEnum - 1))
+      .Add();
 
   SSLCipherSuiteInfo cipherInfo;
   rv = SSL_GetCipherSuiteInfo(channelInfo.cipherSuite, &cipherInfo,

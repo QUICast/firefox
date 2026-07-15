@@ -2,26 +2,25 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "AppleUtils.h"
 #include "CoreTextFontList.h"
+
+#include "AppleUtils.h"
+#include "MainThreadUtils.h"
+#include "SharedFontList-impl.h"
 #include "gfxFontConstants.h"
 #include "gfxMacFont.h"
 #include "gfxUserFontSet.h"
-
 #include "harfbuzz/hb.h"
-
-#include "MainThreadUtils.h"
-
-#include "mozilla/dom/ContentChild.h"
-#include "mozilla/dom/ContentParent.h"
-#include "mozilla/gfx/2D.h"
 #include "mozilla/Logging.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/ProfilerLabels.h"
 #include "mozilla/Sprintf.h"
 #include "mozilla/StaticPrefs_gfx.h"
+#include "mozilla/Utf16.h"
+#include "mozilla/dom/ContentChild.h"
+#include "mozilla/dom/ContentParent.h"
+#include "mozilla/gfx/2D.h"
 #include "mozilla/glean/GfxMetrics.h"
-
 #include "nsAppDirectoryServiceDefs.h"
 #include "nsCharTraits.h"
 #include "nsComponentManagerUtils.h"
@@ -29,7 +28,6 @@
 #include "nsDirectoryServiceUtils.h"
 #include "nsIDirectoryEnumerator.h"
 #include "nsServiceManagerUtils.h"
-#include "SharedFontList-impl.h"
 
 using namespace mozilla;
 using namespace mozilla::gfx;
@@ -1322,13 +1320,13 @@ gfxFontEntry* CoreTextFontList::PlatformGlobalFontFallback(
   UniChar ch[2];
   CFIndex length = 1;
 
-  if (IS_IN_BMP(aCh)) {
+  if (mozilla::IsInBMP(aCh)) {
     ch[0] = aCh;
     str = CFStringCreateWithCharactersNoCopy(kCFAllocatorDefault, ch, 1,
                                              kCFAllocatorNull);
   } else {
-    ch[0] = H_SURROGATE(aCh);
-    ch[1] = L_SURROGATE(aCh);
+    ch[0] = mozilla::HighSurrogate(aCh);
+    ch[1] = mozilla::LowSurrogate(aCh);
     str = CFStringCreateWithCharactersNoCopy(kCFAllocatorDefault, ch, 2,
                                              kCFAllocatorNull);
     length = 2;
@@ -1418,7 +1416,7 @@ gfxFontEntry* CoreTextFontList::PlatformGlobalFontFallback(
   return fontEntry;
 }
 
-gfxFontEntry* CoreTextFontList::LookupLocalFont(
+already_AddRefed<gfxFontEntry> CoreTextFontList::LookupLocalFont(
     FontVisibilityProvider* aFontVisibilityProvider,
     const nsACString& aFontName, WeightRange aWeightForEntry,
     StretchRange aStretchForEntry, SlantStyleRange aStyleForEntry) {
@@ -1482,8 +1480,9 @@ gfxFontEntry* CoreTextFontList::LookupLocalFont(
     return nullptr;
   }
 
-  return new CTFontEntry(aFontName, fontRef, aWeightForEntry, aStretchForEntry,
-                         aStyleForEntry, false, true);
+  return MakeAndAddRef<CTFontEntry>(aFontName, fontRef, aWeightForEntry,
+                                    aStretchForEntry, aStyleForEntry, false,
+                                    true);
 }
 
 static void ReleaseData(void* info, const void* data, size_t size) {
@@ -1492,12 +1491,10 @@ static void ReleaseData(void* info, const void* data, size_t size) {
 
 MOZ_DEFINE_MALLOC_SIZE_OF_ON_ALLOC(UserFontMallocSizeOfOnAlloc)
 
-gfxFontEntry* CoreTextFontList::MakePlatformFont(const nsACString& aFontName,
-                                                 WeightRange aWeightForEntry,
-                                                 StretchRange aStretchForEntry,
-                                                 SlantStyleRange aStyleForEntry,
-                                                 const uint8_t* aFontData,
-                                                 uint32_t aLength) {
+already_AddRefed<gfxFontEntry> CoreTextFontList::MakePlatformFont(
+    const nsACString& aFontName, WeightRange aWeightForEntry,
+    StretchRange aStretchForEntry, SlantStyleRange aStyleForEntry,
+    const uint8_t* aFontData, uint32_t aLength) {
   NS_ASSERTION(aFontData, "MakePlatformFont called with null data");
 
   // create the font entry
@@ -1518,7 +1515,7 @@ gfxFontEntry* CoreTextFontList::MakePlatformFont(const nsACString& aFontName,
     return nullptr;
   }
 
-  auto newFontEntry = MakeUnique<CTFontEntry>(
+  RefPtr newFontEntry = MakeRefPtr<CTFontEntry>(
       NS_ConvertUTF16toUTF8(uniqueName), fontRef, aWeightForEntry,
       aStretchForEntry, aStyleForEntry, true, false);
 
@@ -1528,7 +1525,7 @@ gfxFontEntry* CoreTextFontList::MakePlatformFont(const nsACString& aFontName,
   newFontEntry->mComputedSizeOfUserFont =
       UserFontMallocSizeOfOnAlloc(aFontData);
 
-  return newFontEntry.release();
+  return newFontEntry.forget();
 }
 
 // Webkit code uses a system font meta name, so mimic that here
@@ -1693,18 +1690,18 @@ already_AddRefed<FontInfoData> CoreTextFontList::CreateFontInfoData() {
   return fi.forget();
 }
 
-gfxFontFamily* CoreTextFontList::CreateFontFamily(
+already_AddRefed<gfxFontFamily> CoreTextFontList::CreateFontFamily(
     const nsACString& aName, FontVisibility aVisibility) const {
-  return new CTFontFamily(aName, aVisibility);
+  return MakeAndAddRef<CTFontFamily>(aName, aVisibility);
 }
 
-gfxFontEntry* CoreTextFontList::CreateFontEntry(
+already_AddRefed<gfxFontEntry> CoreTextFontList::CreateFontEntry(
     fontlist::Face* aFace, const fontlist::Family* aFamily) {
-  CTFontEntry* fe = new CTFontEntry(
+  RefPtr fe = MakeRefPtr<CTFontEntry>(
       aFace->mDescriptor.AsString(SharedFontList()), aFace->mWeight, false,
       0.0);  // XXX standardFace, sizeHint
   fe->InitializeFrom(aFace, aFamily);
-  return fe;
+  return fe.forget();
 }
 
 void CoreTextFontList::AddFaceInitData(
@@ -1851,12 +1848,9 @@ void CoreTextFontList::ReadFaceNamesForFamily(
     // of the macOS UI font; see CTFontEntry::GetFontRef(). We pass 16.0 in
     // order to get a standard text-size face in this case, although it's
     // unlikely to matter for the purpose of just reading family names.
-    auto fe = MakeUnique<CTFontEntry>(name, WeightRange(FontWeight::NORMAL),
-                                      false, 16.0);
-    if (!fe) {
-      continue;
-    }
-    gfxFontEntry::AutoTable nameTable(fe.get(), kNAME);
+    RefPtr fe = MakeRefPtr<CTFontEntry>(name, WeightRange(FontWeight::NORMAL),
+                                        false, 16.0);
+    gfxFontEntry::AutoTable nameTable(fe, kNAME);
     if (!nameTable) {
       continue;
     }

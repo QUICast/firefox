@@ -5,9 +5,9 @@
 #include "NativeFontResourceGDI.h"
 
 #include "Logging.h"
-#include "mozilla/RefPtr.h"
 #include "ScaledFontWin.h"
 #include "UnscaledFontGDI.h"
+#include "mozilla/RefPtr.h"
 
 namespace mozilla {
 namespace gfx {
@@ -42,7 +42,7 @@ already_AddRefed<UnscaledFont> NativeFontResourceGDI::CreateUnscaledFont(
   }
 
   const LOGFONT* logFont = reinterpret_cast<const LOGFONT*>(aInstanceData);
-  RefPtr<UnscaledFont> unscaledFont = new UnscaledFontGDI(*logFont);
+  RefPtr unscaledFont = MakeRefPtr<UnscaledFontGDI>(*logFont);
   return unscaledFont.forget();
 }
 

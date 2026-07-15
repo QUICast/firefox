@@ -36,14 +36,6 @@
     <hbox flex="1" align="end" class="toolbar-items">
       <toolbartabstop/>
       <hbox id="TabsToolbar-customization-target" flex="1">
-        <toolbarbutton id="firefox-view-button"
-                       class="toolbarbutton-1 chromeclass-toolbar-additional"
-                       data-l10n-id="toolbar-button-firefox-view-2"
-                       role="button"
-                       aria-pressed="false"
-                       cui-areatype="toolbar"
-                       removable="true"/>
-
         <tabs id="tabbrowser-tabs"
               is="tabbrowser-tabs"
               aria-multiselectable="true"
@@ -64,7 +56,7 @@
           <splitter orient="vertical" id="vertical-pinned-tabs-splitter" resizebefore="sibling" resizeafter="none" hidden="true"/>
           <hbox class="tab-drop-indicator" hidden="true"/>
           <arrowscrollbox id="tabbrowser-arrowscrollbox" orient="horizontal" flex="1" clicktoscroll="" scrolledtostart="" scrolledtoend="">
-            <tab is="tabbrowser-tab" class="tabbrowser-tab" selected="true" visuallyselected="" fadein=""/>
+            <tab is="tabbrowser-tab" class="tabbrowser-tab" selected="" visuallyselected="" fadein=""/>
             <hbox id="tabbrowser-arrowscrollbox-periphery">
               <toolbartabstop/>
               <toolbarbutton id="tabs-newtab-button"
@@ -158,19 +150,11 @@
         <toolbarbutton id="reload-button" class="toolbarbutton-1"
                        data-l10n-id="toolbar-button-reload"
                        command="Browser:ReloadOrDuplicate"
-                       tooltip="dynamic-shortcut-tooltip">
-          <box class="toolbarbutton-animatable-box">
-            <image class="toolbarbutton-animatable-image"/>
-          </box>
-        </toolbarbutton>
+                       tooltip="dynamic-shortcut-tooltip"/>
         <toolbarbutton id="stop-button" class="toolbarbutton-1"
                        data-l10n-id="toolbar-button-stop"
                        command="Browser:Stop"
-                       tooltip="dynamic-shortcut-tooltip">
-          <box class="toolbarbutton-animatable-box">
-            <image class="toolbarbutton-animatable-image"/>
-          </box>
-        </toolbarbutton>
+                       tooltip="dynamic-shortcut-tooltip"/>
       </toolbaritem>
       <toolbarspring cui-areatype="toolbar" class="chromeclass-toolbar-additional"/>
       <toolbarspring cui-areatype="toolbar"
@@ -180,7 +164,6 @@
                    overflows="false"/>
       <toolbaritem id="urlbar-container"
                    class="urlbar-container"
-                   context="urlbarView-context-menu"
                    removable="false"
                    overflows="false">
         <menupopup id="urlbarView-context-menu">
@@ -381,7 +364,8 @@
                 <image class="urlbar-icon"/>
               </hbox>
             </hbox>
-            <hbox id="userContext-icons" hidden="true">
+            <hbox id="userContext-icons" hidden="true"
+                  role="button">
               <label id="userContext-label"/>
               <image id="userContext-indicator"/>
             </hbox>

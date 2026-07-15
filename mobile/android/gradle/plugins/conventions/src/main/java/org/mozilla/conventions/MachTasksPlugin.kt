@@ -4,6 +4,7 @@
 
 package org.mozilla.conventions
 
+import org.gradle.api.GradleException
 import org.gradle.api.Plugin
 import org.gradle.api.Project
 import org.gradle.api.file.RegularFile
@@ -77,20 +78,31 @@ class MachTasksPlugin : Plugin<Project> {
         // inadvertently become space-separated. We compute the normalized values once here and
         // apply them to each mach task to ensure that both the `./mach configure` and the Gradle
         // build's `machConfigure` entry points get identical envs.
-        val normalizedMachEnv: Provider<Map<String, String>> = project.provider {
-            val s = mozconfig["substs"] as Map<*, *>
+        val providers = project.providers
+        val substsForEnv = mozconfig["substs"] as Map<*, *>
+        val normalizedMachEnv: Provider<Map<String, String>> = providers.provider {
             buildMap {
-                s.forEach { (key, value) ->
-                    if (value is List<*> && key is String && System.getenv(key) != null) {
+                substsForEnv.forEach { (key, value) ->
+                    if (value is List<*> && key is String && providers.environmentVariable(key).isPresent) {
                         put(key, value.joinToString(","))
                     }
                 }
             }
         }
 
+        // Capture the env vars that gate the Make-invoking tasks at configuration time (as
+        // configuration-cache inputs) so the task onlyIf predicate is a plain map lookup at
+        // execution time rather than an untracked System.getenv / Task.project access.
+        val geckoOnlyIfEnv: Map<String, String?> = listOf(
+            "GRADLE_INVOKED_WITHIN_MACH_BUILD",
+            "AB_CD",
+            "MOZ_CHROME_MULTILOCALE",
+            "IS_LANGUAGE_REPACK",
+        ).associateWith { providers.environmentVariable(it).orNull }
+
         registerMachConfigure(project, mozconfig, mozconfigFileProvider, normalizedMachEnv, topsrcdir, topobjdir, substs)
-        registerMachBuildFaster(project, mozconfig, mozconfigServiceProvider, normalizedMachEnv, topsrcdir, topobjdir, substs)
-        registerMachStagePackage(project, mozconfig, mozconfigServiceProvider, normalizedMachEnv, topsrcdir, topobjdir, substs)
+        registerMachBuildFaster(project, mozconfig, mozconfigServiceProvider, normalizedMachEnv, geckoOnlyIfEnv, topsrcdir, topobjdir, substs)
+        registerMachStagePackage(project, mozconfig, mozconfigServiceProvider, normalizedMachEnv, geckoOnlyIfEnv, topsrcdir, topobjdir, substs)
     }
 
     private fun createMozconfigFileProvider(project: Project, topsrcdir: String): Provider<RegularFile> {
@@ -203,6 +215,7 @@ class MachTasksPlugin : Plugin<Project> {
         mozconfig: Map<*, *>,
         mozconfigServiceProvider: Provider<MozconfigService>,
         normalizedMachEnv: Provider<Map<String, String>>,
+        geckoOnlyIfEnv: Map<String, String?>,
         topsrcdir: String,
         topobjdir: String,
         substs: Map<*, *>
@@ -211,7 +224,7 @@ class MachTasksPlugin : Plugin<Project> {
             group = "mach"
             description = "Runs `./mach build faster`"
             usesService(mozconfigServiceProvider)
-            onlyIf { MachExec.geckoBinariesOnlyIf(this, mozconfigServiceProvider.get().getMozconfig()) }
+            onlyIf { MachExec.geckoBinariesOnlyIf(this, mozconfigServiceProvider.get().getMozconfig(), geckoOnlyIfEnv) }
             dependsOn(project.tasks.named("machConfigure"))
 
             workingDir(topsrcdir)
@@ -286,6 +299,7 @@ class MachTasksPlugin : Plugin<Project> {
         mozconfig: Map<*, *>,
         mozconfigServiceProvider: Provider<MozconfigService>,
         normalizedMachEnv: Provider<Map<String, String>>,
+        geckoOnlyIfEnv: Map<String, String?>,
         topsrcdir: String,
         topobjdir: String,
         substs: Map<*, *>
@@ -294,7 +308,7 @@ class MachTasksPlugin : Plugin<Project> {
             group = "mach"
             description = "Runs `./mach build stage-package`"
             usesService(mozconfigServiceProvider)
-            onlyIf { MachExec.geckoBinariesOnlyIf(this, mozconfigServiceProvider.get().getMozconfig()) }
+            onlyIf { MachExec.geckoBinariesOnlyIf(this, mozconfigServiceProvider.get().getMozconfig(), geckoOnlyIfEnv) }
             dependsOn(project.tasks.named("machBuildFaster"))
 
             workingDir(topobjdir)
@@ -305,6 +319,25 @@ class MachTasksPlugin : Plugin<Project> {
             args("${topsrcdir}/mach")
             args("build")
             args("stage-package")
+
+            val distBin = "${topobjdir}/dist/bin"
+            val dllPrefix = substs["DLL_PREFIX"] as String
+            val dllSuffix = substs["DLL_SUFFIX"] as String
+            val requiredGeckoLibs = listOf("xul", "mozglue").map {
+                "${distBin}/${dllPrefix}${it}${dllSuffix}"
+            }
+
+            doFirst {
+                val missing = requiredGeckoLibs.filter { !File(it).exists() }
+                if (missing.isNotEmpty()) {
+                    throw GradleException(
+                        "Required Gecko binaries are missing from the object directory:\n" +
+                            missing.joinToString("\n") { "  - $it" } +
+                            "\n\nThese native libraries are produced by a full build, not by Gradle.\n" +
+                            "Run `./mach build` from the source directory first, then retry your Gradle build."
+                    )
+                }
+            }
 
             inputs.files(project.tasks.named("machBuildFaster"))
 

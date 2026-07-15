@@ -449,19 +449,22 @@ mozilla::ipc::IPCResult MediaTransportChild::RecvOnEncryptedSending(
 }
 
 mozilla::ipc::IPCResult MediaTransportChild::RecvOnStateChange(
-    const string& transportId, const TransportLayer::State& state) {
+    const string& transportId, const TransportLayer::State& state,
+    nsTArray<nsTArray<uint8_t>>&& remoteCerts,
+    Maybe<dom::RTCErrorParams> error) {
   MutexAutoLock lock(mMutex);
   if (mUser) {
-    mUser->OnStateChange(transportId, state);
+    mUser->OnStateChange(transportId, state, std::move(remoteCerts), error);
   }
   return ipc::IPCResult::Ok();
 }
 
 mozilla::ipc::IPCResult MediaTransportChild::RecvOnRtcpStateChange(
-    const string& transportId, const TransportLayer::State& state) {
+    const string& transportId, const TransportLayer::State& state,
+    Maybe<dom::RTCErrorParams> error) {
   MutexAutoLock lock(mMutex);
   if (mUser) {
-    mUser->OnRtcpStateChange(transportId, state);
+    mUser->OnRtcpStateChange(transportId, state, error);
   }
   return ipc::IPCResult::Ok();
 }

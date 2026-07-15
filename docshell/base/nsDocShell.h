@@ -9,6 +9,7 @@
 #include "mozilla/Encoding.h"
 #include "mozilla/Maybe.h"
 #include "mozilla/NotNull.h"
+#include "mozilla/Result.h"
 #include "mozilla/ScrollbarPreferences.h"
 #include "mozilla/UniquePtr.h"
 #include "mozilla/WeakPtr.h"
@@ -176,13 +177,14 @@ class nsDocShell final : public nsDocLoader,
       mozilla::dom::BrowsingContext* aBrowsingContext,
       uint64_t aContentWindowID = 0);
 
-  nsresult Initialize(nsIOpenWindowInfo* aOpenWindowInfo,
-                      mozilla::dom::WindowGlobalChild* aWindowActor);
+  MOZ_CAN_RUN_SCRIPT nsresult
+  Initialize(nsIOpenWindowInfo* aOpenWindowInfo,
+             mozilla::dom::WindowGlobalChild* aWindowActor);
 
-  nsresult InitWindow(nsIWidget* aParentWidget, int32_t aX, int32_t aY,
-                      int32_t aWidth, int32_t aHeight,
-                      nsIOpenWindowInfo* aOpenWindowInfo,
-                      mozilla::dom::WindowGlobalChild* aWindowActor);
+  MOZ_CAN_RUN_SCRIPT_BOUNDARY nsresult
+  InitWindow(nsIWidget* aParentWidget, int32_t aX, int32_t aY, int32_t aWidth,
+             int32_t aHeight, nsIOpenWindowInfo* aOpenWindowInfo,
+             mozilla::dom::WindowGlobalChild* aWindowActor);
 
   NS_IMETHOD Stop() override {
     // Need this here because otherwise nsIWebNavigation::Stop
@@ -239,22 +241,8 @@ class nsDocShell final : public nsDocLoader,
                        mozilla::dom::UserNavigationInvolvement aUserInvolvement,
                        nsIPrincipal* aTriggeringPrincipal,
                        nsIPolicyContainer* aPolicyContainer);
-  /**
-   * Process a click on a link.
-   *
-   * Works the same as OnLinkClick() except it happens immediately rather than
-   * through an event.
-   *
-   * @param aContent the content object used for triggering the link.
-   * @param aDocShellLoadState the extended load info for this load.
-   * @param aNoOpenerImplied if the link implies "noopener"
-   * @param aTriggeringPrincipal, if not passed explicitly we fall back to
-   *        the document's principal.
-   */
-  nsresult OnLinkClickSync(nsIContent* aContent,
-                           nsDocShellLoadState* aLoadState,
-                           bool aNoOpenerImplied,
-                           nsIPrincipal* aTriggeringPrincipal);
+  nsresult OnFormSubmit(mozilla::dom::HTMLFormElement* aForm,
+                        nsDocShellLoadState* aLoadState);
 
   /**
    * Process a mouse-over a link.
@@ -556,14 +544,14 @@ class nsDocShell final : public nsDocLoader,
 
   void DestroyDocumentViewer();
 
-  nsresult CreateInitialDocumentViewer(
+  MOZ_CAN_RUN_SCRIPT nsresult CreateInitialDocumentViewer(
       nsIOpenWindowInfo* aOpenWindowInfo = nullptr,
       mozilla::dom::WindowGlobalChild* aWindowActor = nullptr);
 
   // aPrincipal can be passed in if the caller wants. If null is
   // passed in, the about:blank principal will end up being used.
   // aPolicyContainer, if any, will be used for the new about:blank load.
-  nsresult CreateAboutBlankDocumentViewer(
+  MOZ_CAN_RUN_SCRIPT nsresult CreateAboutBlankDocumentViewer(
       nsIPrincipal* aPrincipal, nsIPrincipal* aPartitionedPrincipal,
       nsIPolicyContainer* aPolicyContainer, nsIURI* aBaseURI,
       bool aIsInitialDocument,
@@ -586,6 +574,31 @@ class nsDocShell final : public nsDocLoader,
   nsresult SetupNewViewer(
       nsIDocumentViewer* aNewViewer,
       mozilla::dom::WindowGlobalChild* aWindowActor = nullptr);
+
+  // Finds the target browsing context for this load according to
+  // aLoadState->Target() and sets aLoadState->TargetBrowsingContext() to it.
+  nsresult ComputeNamedTargetBrowsingContext(nsDocShellLoadState* aLoadState);
+
+  /**
+   * Process a click on a link.
+   *
+   * Works the same as OnLinkClick() except it happens immediately rather than
+   * through an event.
+   *
+   * @param aContent the content object used for triggering the link.
+   * @param aDocShellLoadState the extended load info for this load.
+   * @param aNoOpenerImplied if the link implies "noopener"
+   * @param aTriggeringPrincipal, if not passed explicitly we fall back to
+   *        the document's principal.
+   */
+  nsresult OnLinkClickSync(nsIContent* aContent,
+                           nsDocShellLoadState* aLoadState,
+                           bool aNoOpenerImplied,
+                           nsIPrincipal* aTriggeringPrincipal);
+  /** Queue a task to run OnLinkClickSync. */
+  mozilla::Result<RefPtr<OnLinkClickEvent>, nsresult> OnLinkClickWithLoadState(
+      nsIContent* aContent, nsDocShellLoadState* aLoadState,
+      bool aNoOpenerImplied, nsIPrincipal* aTriggeringPrincipal);
 
   //
   // Session History
@@ -656,8 +669,8 @@ class nsDocShell final : public nsDocLoader,
   MOZ_CAN_RUN_SCRIPT nsresult PerformTrustedTypesPreNavigationCheck(
       nsDocShellLoadState* aLoadState, nsGlobalWindowInner* aWindow) const;
 
-  nsresult CompleteInitialAboutBlankLoad(nsDocShellLoadState* aLoadState,
-                                         nsILoadInfo* aLoadInfo);
+  MOZ_CAN_RUN_SCRIPT nsresult CompleteInitialAboutBlankLoad(
+      nsDocShellLoadState* aLoadState, nsILoadInfo* aLoadInfo);
 
   static nsresult AddHeadersToChannel(nsIInputStream* aHeadersData,
                                       nsIChannel* aChannel);
@@ -794,8 +807,8 @@ class nsDocShell final : public nsDocLoader,
    *        For HTTP channels, the response code (0 otherwise).
    */
   void AddURIVisit(nsIURI* aURI, nsIURI* aPreviousURI,
-                   uint32_t aChannelRedirectFlags,
-                   uint32_t aResponseStatus = 0);
+                   uint32_t aChannelRedirectFlags, uint32_t aResponseStatus = 0,
+                   bool aIsPost = false);
 
   /**
    * Internal helper funtion
@@ -803,7 +816,8 @@ class nsDocShell final : public nsDocLoader,
   static void InternalAddURIVisit(
       nsIURI* aURI, nsIURI* aPreviousURI, uint32_t aChannelRedirectFlags,
       uint32_t aResponseStatus, mozilla::dom::BrowsingContext* aBrowsingContext,
-      nsIWidget* aWidget, uint32_t aLoadType, bool aWasUpgraded);
+      nsIWidget* aWidget, uint32_t aLoadType, bool aWasUpgraded,
+      bool aIsPost = false);
 
   static already_AddRefed<nsIURIFixupInfo> KeywordToURI(
       const nsACString& aKeyword, bool aIsPrivateContext);
@@ -1156,6 +1170,8 @@ class nsDocShell final : public nsDocLoader,
 
   void SetCurrentURIInternal(nsIURI* aURI);
 
+  void StopPendingJavascriptURLNavigations();
+
   already_AddRefed<nsIWebProgressListener> BCWebProgressListener();
 
   // data members
@@ -1240,6 +1256,16 @@ class nsDocShell final : public nsDocLoader,
   // for which these objects are needed.
   nsCOMPtr<nsIURI> mFailedURI;
   nsCOMPtr<nsIChannel> mFailedChannel;
+
+  /**
+   * Scheduled form submission navigation.
+   * This is only a weak pointer, since we only want to hold onto it
+   * as long as the event is in the queue.
+   * https://html.spec.whatwg.org/#planned-navigation
+   * We only have one per navigable, not one per form as the spec wants,
+   * see https://github.com/whatwg/html/issues/12608
+   */
+  mozilla::WeakPtr<OnLinkClickEvent> mPlannedFormNavigation;
 
   mozilla::UniquePtr<mozilla::gfx::Matrix5x4> mColorMatrix;
 

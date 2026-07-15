@@ -11,7 +11,6 @@
 #include "TSFStaticSink.h"
 #include "TSFTextInputProcessorList.h"
 #include "TSFTextStore.h"
-
 #include "mozilla/RefPtr.h"
 #include "mozilla/Result.h"
 #include "mozilla/StaticPrefs_intl.h"

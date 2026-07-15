@@ -2,23 +2,21 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "GLBlitHelper.h"
-
 #include <d3d11.h>
 #include <d3d11_1.h>
 
+#include "GLBlitHelper.h"
 #include "GLContextEGL.h"
 #include "GLLibraryEGL.h"
 #include "GPUVideoImage.h"
 #include "ScopedGLHelpers.h"
-
+#include "mozilla/StaticPrefs_gl.h"
 #include "mozilla/layers/CompositeProcessD3D11FencesHolderMap.h"
 #include "mozilla/layers/D3D11ShareHandleImage.h"
-#include "mozilla/layers/D3D11ZeroCopyTextureImage.h"
 #include "mozilla/layers/D3D11YCbCrImage.h"
+#include "mozilla/layers/D3D11ZeroCopyTextureImage.h"
 #include "mozilla/layers/GpuProcessD3D11TextureMap.h"
 #include "mozilla/layers/TextureD3D11.h"
-#include "mozilla/StaticPrefs_gl.h"
 
 namespace mozilla {
 namespace gl {

@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.aspectRatio
@@ -21,6 +22,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.selection.selectable
@@ -38,16 +40,23 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import mozilla.components.compose.base.button.IconButton
+import mozilla.components.ui.colors.NovaColors
 import org.mozilla.fenix.R
+import org.mozilla.fenix.theme.FirefoxTheme
 import mozilla.components.feature.qr.R as qrR
 import mozilla.components.ui.icons.R as iconsR
 
 private val ShutterButtonSize = 64.dp
 private val ButtonSize = 48.dp
+private val TopBarPadding = 24.dp
+private val CloseButtonStartPadding = 12.dp
+private val TitleHorizontalPadding = ButtonSize + CloseButtonStartPadding
 private val ShutterBorderWidth = 3.dp
 private val ShutterBorderColor = Color.White.copy(alpha = 0.5f)
 
@@ -92,7 +101,8 @@ data class LensCameraState(
  * @param onModeChange Invoked when the user taps the mode toggle.
  * @param onClose Callback when the close button is tapped.
  * @param onShutter Callback when the shutter button is tapped (Lens mode only).
- * @param onGallery Callback when the gallery button is tapped (Lens mode only).
+ * @param onGallery Callback when the gallery button is tapped. Available in both Lens and
+ *   QR modes; the host distinguishes the two via the active camera mode at tap time.
  * @param textureViewProvider Factory that creates the [AutoFitTextureView]; the caller is
  *   responsible for retaining the returned reference for camera-session wiring.
  */
@@ -126,7 +136,7 @@ fun LensCameraScreen(
         if (state.showError) {
             Text(
                 text = stringResource(qrR.string.mozac_feature_qr_scanner_no_camera),
-                color = Color.White,
+                color = NovaColors.White,
                 modifier = Modifier.align(Alignment.Center),
             )
         }
@@ -135,20 +145,11 @@ fun LensCameraScreen(
             QrViewfinderOverlay()
         }
 
-        IconButton(
-            onClick = onClose,
-            contentDescription = stringResource(R.string.content_description_close_button),
-            modifier = Modifier
-                .align(Alignment.TopStart)
-                .padding(top = 48.dp, start = 12.dp)
-                .size(ButtonSize),
-        ) {
-            Icon(
-                painter = painterResource(iconsR.drawable.mozac_ic_cross_24),
-                contentDescription = null,
-                tint = Color.White,
-            )
-        }
+        CameraTopBar(
+            mode = state.mode,
+            onClose = onClose,
+            modifier = Modifier.align(Alignment.TopStart),
+        )
 
         Column(
             modifier = Modifier
@@ -158,9 +159,12 @@ fun LensCameraScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(BottomBarSpacing),
         ) {
-            if (state.mode == CameraMode.LENS) {
-                BottomControls(
+            when (state.mode) {
+                CameraMode.LENS -> BottomControls(
                     onShutter = onShutter,
+                    onGallery = onGallery,
+                )
+                CameraMode.QR -> QrBottomControls(
                     onGallery = onGallery,
                 )
             }
@@ -169,6 +173,50 @@ fun LensCameraScreen(
                 onModeChange = onModeChange,
             )
         }
+    }
+}
+
+@Composable
+private fun CameraTopBar(
+    mode: CameraMode,
+    onClose: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .windowInsetsPadding(WindowInsets.statusBars)
+            .padding(top = TopBarPadding)
+            .height(ButtonSize),
+    ) {
+        IconButton(
+            onClick = onClose,
+            contentDescription = stringResource(R.string.content_description_close_button),
+            modifier = Modifier
+                .align(Alignment.CenterStart)
+                .padding(start = CloseButtonStartPadding)
+                .size(ButtonSize),
+        ) {
+            Icon(
+                painter = painterResource(iconsR.drawable.mozac_ic_back_24),
+                contentDescription = null,
+                tint = NovaColors.White,
+            )
+        }
+        Text(
+            text = when (mode) {
+                CameraMode.LENS -> stringResource(R.string.lens_camera_title_lens)
+                CameraMode.QR -> stringResource(R.string.lens_camera_title_qr)
+            },
+            color = NovaColors.White,
+            style = FirefoxTheme.typography.headline5,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier
+                .align(Alignment.Center)
+                .padding(horizontal = TitleHorizontalPadding)
+                .semantics { heading() },
+        )
     }
 }
 
@@ -188,7 +236,7 @@ private fun ModeToggle(
     ) {
         ToggleHalf(
             selected = mode == CameraMode.LENS,
-            iconRes = iconsR.drawable.mozac_ic_image_24,
+            iconRes = iconsR.drawable.mozac_ic_logo_google_lens_24,
             contentDesc = stringResource(R.string.lens_camera_mode_lens),
             onClick = { onModeChange(CameraMode.LENS) },
         )
@@ -249,10 +297,10 @@ private fun QrViewfinderOverlay(modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun BottomControls(
-    onShutter: () -> Unit,
-    onGallery: () -> Unit,
+private fun BottomControlsScaffold(
     modifier: Modifier = Modifier,
+    horizontalArrangement: Arrangement.Horizontal = Arrangement.Start,
+    content: @Composable RowScope.() -> Unit,
 ) {
     Row(
         modifier = modifier
@@ -262,21 +310,56 @@ private fun BottomControls(
                 start = BottomControlsHorizontalPadding,
                 end = BottomControlsHorizontalPadding,
             ),
+        horizontalArrangement = horizontalArrangement,
         verticalAlignment = Alignment.CenterVertically,
+        content = content,
+    )
+}
+
+@Composable
+private fun GalleryButton(
+    onGallery: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    IconButton(
+        onClick = onGallery,
+        contentDescription = stringResource(R.string.content_description_gallery),
+        modifier = Modifier
+            .size(ButtonSize)
+            .then(modifier),
     ) {
-        IconButton(
-            onClick = onGallery,
-            contentDescription = stringResource(R.string.content_description_gallery),
-            modifier = Modifier
-                .size(ButtonSize)
-                .weight(1f),
-        ) {
-            Icon(
-                painter = painterResource(iconsR.drawable.mozac_ic_image_24),
-                contentDescription = null,
-                tint = Color.White,
-            )
-        }
+        Icon(
+            painter = painterResource(iconsR.drawable.mozac_ic_image_24),
+            contentDescription = null,
+            tint = NovaColors.White,
+        )
+    }
+}
+
+@Composable
+private fun QrBottomControls(
+    onGallery: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    BottomControlsScaffold(
+        modifier = modifier,
+        horizontalArrangement = Arrangement.Center,
+    ) {
+        GalleryButton(onGallery = onGallery)
+    }
+}
+
+@Composable
+private fun BottomControls(
+    onShutter: () -> Unit,
+    onGallery: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    BottomControlsScaffold(modifier = modifier) {
+        GalleryButton(
+            onGallery = onGallery,
+            modifier = Modifier.weight(1f),
+        )
 
         IconButton(
             onClick = onShutter,
@@ -287,7 +370,7 @@ private fun BottomControls(
                 .background(Color.White, CircleShape),
         ) {
             Icon(
-                painter = painterResource(iconsR.drawable.mozac_ic_camera_24),
+                painter = painterResource(iconsR.drawable.mozac_ic_search_24),
                 contentDescription = null,
                 tint = Color.Black,
             )

@@ -5,10 +5,10 @@
 #ifndef TSFUtils_h
 #define TSFUtils_h
 
-#include <ostream>
-
 #include <msctf.h>
 #include <textstor.h>
+
+#include <ostream>
 
 #include "mozilla/Maybe.h"
 #include "mozilla/RefPtr.h"

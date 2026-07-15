@@ -272,10 +272,10 @@ export class ReportBrokenSiteChild extends JSWindowActorChild {
       // Copy the full report data into additionalData, reformatting it nicely.
       const additionalData = {};
       for (const category of Object.values(webcompatInfo)) {
-        for (const [name, { do_not_preview, glean, value }] of Object.entries(
+        for (const [name, { doNotPreview, glean, value }] of Object.entries(
           category
         )) {
-          if (do_not_preview) {
+          if (doNotPreview) {
             continue;
           }
           let target = additionalData;
@@ -311,17 +311,19 @@ export class ReportBrokenSiteChild extends JSWindowActorChild {
 
       if (tabInfo) {
         const { antitracking, frameworks } = tabInfo;
-        const { consoleLog, screenshot, url } = webcompatInfo.tabInfo;
+        const { consoleLog, screenshot, url } = webcompatInfo.tabInfo ?? {};
 
         // If the user enters a URL unrelated to the current tab,
         // don't bother sending a screenshot or logs/etc
         let sendRecordedPageSpecificDetails = false;
-        const givenUri = URL.parse(reportUrl);
-        const recordedUri = URL.parse(url.value);
-        if (givenUri && recordedUri) {
-          sendRecordedPageSpecificDetails =
-            givenUri.origin == recordedUri.origin &&
-            givenUri.pathname == recordedUri.pathname;
+        if (url) {
+          const givenUri = URL.parse(reportUrl);
+          const recordedUri = URL.parse(url.value);
+          if (givenUri && recordedUri) {
+            sendRecordedPageSpecificDetails =
+              givenUri.origin == recordedUri.origin &&
+              givenUri.pathname == recordedUri.pathname;
+          }
         }
 
         if (sendRecordedPageSpecificDetails) {

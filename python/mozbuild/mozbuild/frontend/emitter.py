@@ -15,6 +15,7 @@ import mozpack.path as mozpath
 import toml
 from mach.mixin.logging import LoggingMixin
 from mozpack.chrome.manifest import Manifest
+from mozshellutil import quote
 
 from mozbuild.base import ExecutionSummary
 from mozbuild.util import HierarchicalStringList
@@ -1484,6 +1485,21 @@ class TreeMetadataEmitter(LoggingMixin):
                 else:
                     processed_moz_src_files += [file]
 
+        if context.get("PP_FILES_EXTRA_DEPS") and not any(
+            context.get(v)
+            for v in (
+                "FINAL_TARGET_PP_FILES",
+                "OBJDIR_PP_FILES",
+                "LOCALIZED_PP_FILES",
+            )
+        ):
+            raise SandboxValidationError(
+                "PP_FILES_EXTRA_DEPS is set but no preprocessed files "
+                "(FINAL_TARGET_PP_FILES, OBJDIR_PP_FILES, LOCALIZED_PP_FILES, "
+                "or an EXTRA_PP_* variant) are defined in this directory.",
+                context,
+            )
+
         components = []
         for var, cls in (
             ("EXPORTS", Exports),
@@ -1552,12 +1568,16 @@ class TreeMetadataEmitter(LoggingMixin):
                                 context,
                             )
                     else:
+                        # The file is matched against GENERATED_FILES by its
+                        # source name, which is unaffected by a rename at install
+                        # time (a (source, target_basename) tuple).
+                        source_basename = mozpath.basename(f.full_path)
                         # TODO: Bug 1254682 - The '/' check is to allow
                         # installing files generated from other directories,
                         # which is done occasionally for tests. However, it
                         # means we don't fail early if the file isn't actually
                         # created by the other moz.build file.
-                        if f.target_basename not in generated_files and "/" not in f:
+                        if source_basename not in generated_files and "/" not in f:
                             raise SandboxValidationError(
                                 (
                                     "Objdir file listed in %s not in "
@@ -1570,7 +1590,7 @@ class TreeMetadataEmitter(LoggingMixin):
                         if var.startswith("LOCALIZED_"):
                             # Further require that LOCALIZED_FILES are from
                             # LOCALIZED_GENERATED_FILES.
-                            if f.target_basename not in localized_generated_files:
+                            if source_basename not in localized_generated_files:
                                 raise SandboxValidationError(
                                     (
                                         "Objdir file listed in %s not in "
@@ -1581,7 +1601,7 @@ class TreeMetadataEmitter(LoggingMixin):
                                 )
                         # Additionally, don't allow LOCALIZED_GENERATED_FILES to be used
                         # in anything *but* LOCALIZED_FILES.
-                        elif f.target_basename in localized_generated_files:
+                        elif source_basename in localized_generated_files:
                             raise SandboxValidationError(
                                 (
                                     "Outputs of LOCALIZED_GENERATED_FILES cannot "
@@ -1608,7 +1628,23 @@ class TreeMetadataEmitter(LoggingMixin):
                     context,
                 )
 
-            yield cls(context, all_files)
+            kwargs = {}
+            if cls in (
+                FinalTargetPreprocessedFiles,
+                LocalizedPreprocessedFiles,
+                ObjdirPreprocessedFiles,
+            ):
+                pp_extra_deps = context.get("PP_FILES_EXTRA_DEPS") or []
+                for d in pp_extra_deps:
+                    if isinstance(d, SourcePath) and not os.path.exists(d.full_path):
+                        raise SandboxValidationError(
+                            f"Path specified in PP_FILES_EXTRA_DEPS does not "
+                            f"exist: {d} (resolved to {d.full_path})",
+                            context,
+                        )
+                kwargs["extra_deps"] = list(pp_extra_deps)
+
+            yield cls(context, all_files, **kwargs)
 
         for c in components:
             if c.endswith(".manifest"):
@@ -1654,7 +1690,7 @@ class TreeMetadataEmitter(LoggingMixin):
         if context.get("USE_INTEGRATED_CLANGCL_AS") is True:
             if context.config.substs.get("CC_TYPE") != "clang-cl":
                 raise SandboxValidationError("clang-cl is not available", context)
-            passthru.variables["AS"] = context.config.substs.get("CC")
+            passthru.variables["AS"] = quote(*context.config.substs.get("CC"))
             passthru.variables["AS_DASH_C_FLAG"] = "-c"
             passthru.variables["ASOUTOPTION"] = "-o "
 

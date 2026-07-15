@@ -13,6 +13,10 @@
  */
 
 import { searchBrowsingHistory as implSearchBrowsingHistory } from "moz-src:///browser/components/aiwindow/models/SearchBrowsingHistory.sys.mjs";
+import {
+  manageTabsAction,
+  TAB_ACTIONS,
+} from "moz-src:///browser/components/aiwindow/models/ManageTabs.sys.mjs";
 import { WCSMerinoClient } from "moz-src:///browser/components/aiwindow/models/WCSMerinoClient.sys.mjs";
 import { PageExtractorParent } from "resource://gre/actors/PageExtractorParent.sys.mjs";
 import {
@@ -23,6 +27,10 @@ import {
   sanitizeUntrustedContent,
   isNewPageUrl,
 } from "moz-src:///browser/components/aiwindow/models/ChatUtils.sys.mjs";
+import {
+  FEATURE_MAJOR_VERSIONS,
+  MODEL_FEATURES,
+} from "moz-src:///browser/components/aiwindow/models/Utils.sys.mjs";
 
 const lazy = {};
 ChromeUtils.defineESModuleGetters(lazy, {
@@ -35,6 +43,8 @@ ChromeUtils.defineESModuleGetters(lazy, {
     "moz-src:///browser/components/aiwindow/models/memories/MemoriesManager.sys.mjs",
   SmartWindowNavigationInfo:
     "moz-src:///browser/components/aiwindow/models/SmartWindowNavigationInfo.sys.mjs",
+  ToolUITelemetry:
+    "moz-src:///browser/components/aiwindow/ui/modules/ToolUITelemetry.sys.mjs",
   // @todo Bug 2009194
   // PageDataService:
   //   "moz-src:///browser/components/pagedata/PageDataService.sys.mjs",
@@ -56,7 +66,7 @@ ChromeUtils.defineLazyGetter(lazy, "console", () =>
 // We also make this limited in a non-configurable way so that it reduces the risk
 // of exfiltration for private data. While most users only have a few tabs open at a time,
 // some users can have thousands of tabs open at once.
-const MAX_TABS = 15;
+export const MAX_TABS = 30;
 
 // Allow list of URL protocols for tabs and pages exposed to the LLM. Only http/https are
 // permitted; internal (about:, chrome:, moz-extension:, file:, data:, etc.)
@@ -92,8 +102,10 @@ export const GET_PAGE_CONTENT = "get_page_content";
 export const RUN_SEARCH = "run_search";
 export const GET_USER_MEMORIES = "get_user_memories";
 export const GET_NAVIGATION_INFO = "get_navigation_info";
+export const MANAGE_TABS = "manage_tabs";
 export const WORLD_CUP_MATCHES = "world_cup_matches";
 export const WORLD_CUP_LIVE = "world_cup_live";
+export const ADD_MEMORY = "add_memory";
 
 // Tools gated behind a feature pref. Filtered out of the model's tool list
 // in Chat.sys.mjs when the pref is off.
@@ -107,8 +119,10 @@ export const TOOLS = [
   RUN_SEARCH,
   GET_USER_MEMORIES,
   GET_NAVIGATION_INFO,
+  MANAGE_TABS,
   WORLD_CUP_MATCHES,
   WORLD_CUP_LIVE,
+  ADD_MEMORY,
 ];
 
 export const RUN_SEARCH_VERBATIM_QUERY_DESCRIPTION =
@@ -314,6 +328,85 @@ export const toolsConfig = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: MANAGE_TABS,
+      description:
+        "Perform a management action on a list of selected open tabs. You can " +
+        "set ask_confirmation to true to request user confirmation and allow " +
+        "them to confirm the selected list before the action is finalized.",
+      parameters: {
+        type: "object",
+        properties: {
+          action: {
+            type: "string",
+            description: "The action to be performed on the tabs.",
+            enum: TAB_ACTIONS,
+          },
+          ask_confirmation: {
+            type: "boolean",
+            description:
+              "Whether to show the user the list of tabs and require their confirmation " +
+              "before executing the action. Default to true. Only set to false when " +
+              "the user's request unambiguously identifies the specific tabs to act on, " +
+              "and the action does not affect all (or nearly all) of the user's open tabs. " +
+              "When in doubt, set to true.",
+          },
+          url_tokens: {
+            type: "array",
+            items: {
+              type: "string",
+              description: "A URL token corresponding to an open tab",
+            },
+            minItems: 1,
+            description:
+              "List of URL tokens identifying the tabs the action should be taken on.",
+          },
+          label: {
+            type: "string",
+            description:
+              "Optional concise label (1-3 words) for the new tab group. " +
+              "Only used when action is 'group_tabs'. Derive from the common " +
+              "theme of the selected tabs. Omit when no clear theme exists.",
+          },
+        },
+        required: ["action", "ask_confirmation", "url_tokens"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: ADD_MEMORY,
+      description:
+        "Save a memory when the user explicitly asks to be remembered something " +
+        '(e.g. "remember that I prefer Walmart for shopping"). Transform the ' +
+        "request into a concise third-person summary of the preference or fact " +
+        '(e.g. "Prefers Walmart for shopping"). Do NOT save personally ' +
+        "identifiable or financial information such as names, addresses, phone " +
+        "numbers, emails, SSNs, account or card numbers.",
+      parameters: {
+        type: "object",
+        properties: {
+          memorySummary: {
+            type: "string",
+            maxLength: 100,
+            description:
+              "A concise summary of what to remember, transformed from the user's request.",
+          },
+          containsPersonallyIdentifiableInfo: {
+            type: "boolean",
+            description:
+              "True if the request contains personally identifiable or financial " +
+              "information (names, addresses, phone numbers, emails, SSNs, account " +
+              "or card numbers, etc.).",
+          },
+        },
+        required: ["memorySummary", "containsPersonallyIdentifiableInfo"],
+      },
+    },
+  },
 ];
 
 /**
@@ -424,44 +517,37 @@ export async function searchBrowsingHistory(toolParams, conversation) {
   });
 
   conversation.addSeenUrls(result.results.map(({ url }) => url));
+  // Set history result on convsersation so it can be
+  // sent to the content page.
+  conversation.addHistoryResults(
+    result.results.map(
+      ({ url, title, favicon, thumbnail, visitDate, visitCount }) => ({
+        url,
+        title,
+        favicon,
+        thumbnail,
+        visitDate,
+        visitCount,
+      })
+    )
+  );
+
+  // The model only needs link metadata. thumbnail is a heavy, page-controlled
+  // field the UI renders from the history grid above, so keep it out of the
+  // model-facing payload.
+  result.results = result.results.map(
+    ({ url, title, visitDate, visitCount, relevanceScore }) => ({
+      url,
+      title,
+      visitDate,
+      visitCount,
+      relevanceScore,
+    })
+  );
+
   conversation.securityProperties.setPrivateData();
   lazy.console.log("[Tool] searchBrowsingHistory", result);
   return result;
-}
-
-/**
- * Strips heavy or unnecessary fields from a browser history search result.
- *
- * @param {string} result
- *  A JSON string representing the history search response.
- * @returns {string}
- *  The sanitized JSON string with large fields (e.g., favicon, thumbnail)
- *  removed, or the original string if parsing fails.
- */
-export function stripSearchBrowsingHistoryFields(result) {
-  try {
-    const data = JSON.parse(result);
-    if (
-      data.error ||
-      !Array.isArray(data.results) ||
-      data.results.length === 0
-    ) {
-      return result;
-    }
-
-    // Remove large or unnecessary fields to save tokens
-    const OMIT_KEYS = ["favicon", "thumbnail"];
-    for (const item of data.results) {
-      if (item && typeof item === "object") {
-        for (const k of OMIT_KEYS) {
-          delete item[k];
-        }
-      }
-    }
-    return JSON.stringify(data);
-  } catch {
-    return result;
-  }
 }
 
 /**
@@ -680,6 +766,7 @@ export class RunSearch {
 
     await lazy.AIWindow.performSearch(query, win);
     await navigationPromise;
+    await lazy.AIWindow.focusSidebar(win);
 
     // Allow JS rendering to settle
     await new Promise(r => lazy.setTimeout(r, RunSearch.CONTENT_SETTLE_MS));
@@ -963,6 +1050,44 @@ export async function getUserMemories(conversation) {
 }
 
 /**
+ * Saves a memory the user explicitly asked to be remembered. If the model-inferred
+ * containsPersonallyIdentifiableInfo flag is true, the memory will not be saved
+ *  and an error message will be returned.
+ *
+ * @param {object} toolParams
+ * @param {string} toolParams.memorySummary
+ * @param {boolean} toolParams.containsPersonallyIdentifiableInfo
+ * @param {ChatConversation} conversation
+ * @returns {Promise<string>}
+ */
+export async function addMemory(
+  { memorySummary, containsPersonallyIdentifiableInfo },
+  conversation
+) {
+  // Until UI confirmation is implemented, we will not allow saving memories when untrusted
+  //  input is present in the conversation. This is to mitigate writes of attacker-influenced content
+  // into durable storage that is later re-injected into the user's future conversations as trusted context.
+  if (conversation.securityProperties.untrustedInput) {
+    return "Memory cannot be saved when untrusted content is present in the conversation.";
+  }
+  if (containsPersonallyIdentifiableInfo) {
+    return "Error: Failed to save memory: Memory contains personally identifiable information.";
+  }
+  const result = await lazy.MemoriesManager.saveRequestedMemory(memorySummary);
+  if (!result.ok) {
+    return `Error: Failed to save memory: ${result.reason}`;
+  }
+
+  lazy.MemoriesManager.enrichExistingMemory(
+    result.memory.id,
+    memorySummary
+  ).catch(e => lazy.console.error("[Tool] addMemory classify failed", e));
+
+  lazy.console.log("[Tool] addMemory", result.memory, "Action:", result.action);
+  return `Memory ${result.action}: "${result.memory.memory_summary}"`;
+}
+
+/**
  * Strips fields the language model doesn't need (icons, colors) from a
  * single match payload.
  *
@@ -1058,6 +1183,157 @@ export async function worldCupLive(toolParams, conversation) {
   return trimmed;
 }
 
+/**
+ * Counts open http(s) tabs across all active AI windows. Used for
+ * browser_action_submit telemetry.
+ *
+ * @returns {number}
+ */
+function countOpenAIWindowTabs() {
+  let count = 0;
+  for (const win of lazy.BrowserWindowTracker.orderedWindows) {
+    if (!lazy.AIWindow.isAIWindowActive(win) || win.closed || !win.gBrowser) {
+      continue;
+    }
+    for (const tab of win.gBrowser.tabs) {
+      const url = tab.linkedBrowser?.currentURI?.spec;
+      if (isAllowedURL(url) && !isNewPageUrl(url)) {
+        count += 1;
+      }
+    }
+  }
+  return count;
+}
+
+/**
+ * Determines the telemetry action_type for a manage_tabs invocation.
+ *
+ * @param {ChatConversation} conversation
+ * @param {string} action
+ * @returns {"unsupported" | "tab_mention" | "description"}
+ */
+function getActionType(conversation, action) {
+  if (!TAB_ACTIONS.includes(action)) {
+    return "unsupported";
+  }
+
+  const mentions = conversation.getLatestUserMentionCount();
+  return mentions > 0 ? "tab_mention" : "description";
+}
+
+/**
+ * Tool entrypoint for manage_tabs. Dispatches to a per-action handler
+ * based on `action`.
+ *
+ * @param {object} toolParams
+ * @param {ChatConversation} conversation
+ * @param {string} [mode] - Location/mode of the AI Window for telemetry
+ * @param {string} [model] - Identifier of the model that invoked the tool
+ * @param {string} [toolCallId] - Id of the tool call, used to register the
+ *   confirmation's token -> permanentKey map
+ * @returns {Promise<{ toolResult: object, uiData: ?object }>}
+ *   `toolResult` is appended as the body of the `role: "tool"` message sent
+ *   to the model. `uiData` is attached to the assistant message for UI
+ *   rendering, or `null` to skip the UI attachment.
+ */
+export async function manageTabs(
+  toolParams,
+  conversation,
+  mode = "",
+  model = "",
+  toolCallId = ""
+) {
+  const params = toolParams && typeof toolParams === "object" ? toolParams : {};
+  const {
+    action,
+    ask_confirmation = true,
+    url_tokens = [],
+    label = "",
+  } = params;
+
+  const actionType = getActionType(conversation, action);
+
+  if (conversation) {
+    conversation.lastBrowserActionType = actionType;
+  }
+
+  const promptVersion = String(FEATURE_MAJOR_VERSIONS[MODEL_FEATURES.CHAT]);
+
+  const baseTelemetryInfo = {
+    location: mode,
+    chat_id: conversation?.id || "",
+    message_seq: conversation?.messageCount ?? 0,
+    model,
+    prompt_version: promptVersion,
+    action_type: actionType,
+  };
+
+  lazy.ToolUITelemetry.recordBrowserActionSubmit({
+    ...baseTelemetryInfo,
+    tabs_open: countOpenAIWindowTabs(),
+    mentions: conversation.getLatestUserMentionCount(),
+    submit_type: conversation?.lastSubmitType || "",
+  });
+
+  if (actionType === "unsupported") {
+    lazy.ToolUITelemetry.recordBrowserActionComplete({
+      ...baseTelemetryInfo,
+      result: "error",
+      tabs_affected: 0,
+      undo_available: false,
+      error: "unsupported_action",
+    });
+    return {
+      toolResult: `Error: Unsupported manage_tabs action "${action}".`,
+      uiData: null,
+    };
+  }
+
+  if (!Array.isArray(url_tokens)) {
+    lazy.ToolUITelemetry.recordBrowserActionComplete({
+      ...baseTelemetryInfo,
+      result: "error",
+      tabs_affected: 0,
+      undo_available: false,
+      error: "invalid_url_tokens",
+    });
+    return {
+      toolResult: "Error: url_tokens must be an array.",
+      uiData: null,
+    };
+  }
+
+  const validUrls = new Set(
+    url_tokens.filter(u => typeof u === "string" && isAllowedURL(u))
+  );
+
+  if (!validUrls.size) {
+    lazy.ToolUITelemetry.recordBrowserActionComplete({
+      ...baseTelemetryInfo,
+      result: "no_match",
+      tabs_affected: 0,
+      undo_available: false,
+      error: "no_valid_urls",
+    });
+    return {
+      toolResult: "Error: No valid URLs were provided to manage_tabs.",
+      uiData: null,
+    };
+  }
+
+  return manageTabsAction(
+    {
+      action,
+      validUrls,
+      ask_confirmation,
+      label,
+      baseTelemetryInfo,
+      toolCallId,
+    },
+    conversation
+  );
+}
+
 export const toolFns = {
   getOpenTabs,
   searchBrowsingHistory,
@@ -1065,4 +1341,6 @@ export const toolFns = {
   getNavigationInfo,
   worldCupMatches,
   worldCupLive,
+  manageTabs,
+  addMemory,
 };

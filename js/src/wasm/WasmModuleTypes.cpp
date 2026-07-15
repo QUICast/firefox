@@ -113,6 +113,17 @@ bool CacheableName::fromUTF8Chars(const char* utf8Chars, CacheableName* name) {
   return true;
 }
 
+/* static */
+bool CacheableName::fromUTF8Bytes(mozilla::Span<const char> utf8Bytes,
+                                  CacheableName* name) {
+  UTF8Bytes bytes;
+  if (!bytes.append(utf8Bytes.data(), utf8Bytes.Length())) {
+    return false;
+  }
+  *name = CacheableName(std::move(bytes));
+  return true;
+}
+
 MOZ_RUNINIT BranchHintVector BranchHintCollection::invalidVector_;
 
 JSString* CacheableName::toJSString(JSContext* cx) const {
@@ -183,6 +194,48 @@ uint32_t Export::tableIndex() const {
 
 size_t Export::sizeOfExcludingThis(MallocSizeOf mallocSizeOf) const {
   return fieldName_.sizeOfExcludingThis(mallocSizeOf);
+}
+
+bool Limits::matches(Limits src, Limits dst) {
+  if (src.addressType != dst.addressType) {
+    return false;
+  }
+  if (src.initial < dst.initial) {
+    return false;
+  }
+
+  // If dst has a maximum size, then src.maximum must exist and be <=
+  // dst.maximum.
+  if (dst.maximum.isSome() &&
+      (src.maximum.isNothing() || *src.maximum > *dst.maximum)) {
+    return false;
+  }
+
+  return true;
+}
+
+bool TableType::matches(TableType src, TableType dst) {
+  return src.elemType == dst.elemType &&
+         Limits::matches(src.limits, dst.limits);
+}
+
+bool MemoryDesc::matches(const MemoryDesc& src, const MemoryDesc& dst) {
+  return src.addressType() == dst.addressType() &&
+         src.isShared() == dst.isShared() && src.pageSize() == dst.pageSize() &&
+         Limits::matches(src.limits, dst.limits);
+}
+
+bool GlobalDesc::matches(const GlobalDesc& src, const GlobalDesc& dst) {
+  if (src.isMutable() != dst.isMutable()) {
+    return false;
+  }
+  if (src.isMutable() && src.type() != dst.type()) {
+    return false;
+  }
+  if (!src.isMutable() && !ValType::isSubTypeOf(src.type(), dst.type())) {
+    return false;
+  }
+  return true;
 }
 
 size_t GlobalDesc::sizeOfExcludingThis(MallocSizeOf mallocSizeOf) const {

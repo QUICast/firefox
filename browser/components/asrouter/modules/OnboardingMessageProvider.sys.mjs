@@ -64,8 +64,8 @@ const BASE_MESSAGES = () => [
   {
     id: "MENU_MESSAGE_DEFAULT_CTA_ILLUSTRATION_LAYOUT",
     template: "menu_message",
-    layout: "column",
     content: {
+      layout: "column",
       messageType: "default_cta",
       imageURL:
         "chrome://browser/content/asrouter/assets/fox-with-checkmark.svg",
@@ -98,7 +98,7 @@ const BASE_MESSAGES = () => [
       },
     },
     targeting:
-      "source == 'app_menu' && os.isWindows && os.windowsVersion >= 10 && !isDefaultBrowserUncached && !hasActiveEnterprisePolicies && 'browser.newtabpage.activity-stream.asrouter.userprefs.cfr.features' | preferenceValue != false",
+      "'browser.nova.enabled'|preferenceValue != true && source == 'app_menu' && os.isWindows && os.windowsVersion >= 10 && !isDefaultBrowserUncached && !hasActiveEnterprisePolicies && 'browser.newtabpage.activity-stream.asrouter.userprefs.cfr.features' | preferenceValue != false",
     trigger: {
       id: "menuOpened",
     },
@@ -108,8 +108,8 @@ const BASE_MESSAGES = () => [
   {
     id: "MENU_MESSAGE_DEFAULT_CTA_ILLUSTRATION_LAYOUT",
     template: "menu_message",
-    layout: "column",
     content: {
+      layout: "column",
       imageURL:
         "chrome://browser/content/asrouter/assets/fox-with-checkmark.svg",
       imageWidth: 68,
@@ -145,7 +145,103 @@ const BASE_MESSAGES = () => [
       },
     },
     targeting:
-      "source == 'app_menu' && os.isMac && !isDefaultBrowserUncached && !hasActiveEnterprisePolicies && 'browser.newtabpage.activity-stream.asrouter.userprefs.cfr.features' | preferenceValue != false",
+      "'browser.nova.enabled'|preferenceValue != true && source == 'app_menu' && os.isMac && !isDefaultBrowserUncached && !hasActiveEnterprisePolicies && 'browser.newtabpage.activity-stream.asrouter.userprefs.cfr.features' | preferenceValue != false",
+    trigger: {
+      id: "menuOpened",
+    },
+    groups: [],
+    skip_in_tests: "it's covered by browser_asrouter_menu_messages.js",
+  },
+  // Nova variant of MENU_MESSAGE_DEFAULT_CTA messaging:
+  {
+    id: "MENU_MESSAGE_DEFAULT_CTA_ILLUSTRATION_LAYOUT",
+    template: "menu_message",
+    content: {
+      layout: "split",
+      imageURL: "chrome://browser/content/asrouter/assets/kit-checkmark.svg",
+      rtlImageURL:
+        "chrome://browser/content/asrouter/assets/kit-checkmark-flipped.svg",
+      imageWidth: 91,
+      imageVerticalBottomOffset: -12,
+      imagePosition: "bottom",
+      messageType: "default_cta",
+      primaryText: {
+        string_id: "set-default-menu-message-split-layout-title",
+      },
+      secondaryText: {
+        string_id: "set-default-menu-message-split-layout-subtitle",
+      },
+      primaryActionText: {
+        string_id: "set-default-menu-message-primary-button-short-variant",
+      },
+      primaryAction: {
+        type: "MULTI_ACTION",
+        data: {
+          actions: [
+            {
+              type: "SET_DEFAULT_BROWSER",
+            },
+          ],
+        },
+      },
+      closeAction: {
+        type: "BLOCK_MESSAGE",
+        data: {
+          id: "MENU_MESSAGE_DEFAULT_CTA_ILLUSTRATION_LAYOUT",
+        },
+      },
+    },
+    targeting:
+      "'browser.nova.enabled'|preferenceValue == true && source == 'app_menu' && os.isWindows && os.windowsVersion >= 10 && !isDefaultBrowserUncached && !hasActiveEnterprisePolicies && 'browser.newtabpage.activity-stream.asrouter.userprefs.cfr.features'| preferenceValue != false",
+    trigger: {
+      id: "menuOpened",
+    },
+    groups: [],
+    skip_in_tests: "it's covered by browser_asrouter_menu_messages.js",
+  },
+  {
+    id: "MENU_MESSAGE_DEFAULT_CTA_ILLUSTRATION_LAYOUT",
+    template: "menu_message",
+    content: {
+      layout: "split",
+      imageURL: "chrome://browser/content/asrouter/assets/kit-checkmark.svg",
+      rtlImageURL:
+        "chrome://browser/content/asrouter/assets/kit-checkmark-flipped.svg",
+      imageWidth: 91,
+      imageVerticalBottomOffset: -12,
+      imagePosition: "bottom",
+      messageType: "default_cta",
+      primaryText: {
+        string_id: "set-default-menu-message-split-layout-title",
+      },
+      secondaryText: {
+        string_id: "set-default-menu-message-split-layout-subtitle",
+      },
+      primaryActionText: {
+        string_id: "set-default-menu-message-primary-button-short-variant",
+      },
+      primaryAction: {
+        type: "MULTI_ACTION",
+        data: {
+          actions: [
+            {
+              type: "SET_DEFAULT_BROWSER",
+            },
+            {
+              type: "PIN_FIREFOX_TO_TASKBAR",
+            },
+          ],
+        },
+      },
+      closeAction: {
+        type: "BLOCK_MESSAGE",
+        data: {
+          id: "MENU_MESSAGE_DEFAULT_CTA_ILLUSTRATION_LAYOUT",
+        },
+      },
+    },
+    targeting:
+      "'browser.nova.enabled'|preferenceValue == true && source == 'app_menu' && os.isMac && !isDefaultBrowserUncached && !hasActiveEnterprisePolicies && 'browser.newtabpage.activity-stream.asrouter.userprefs.cfr.features'| preferenceValue != false",
     trigger: {
       id: "menuOpened",
     },
@@ -304,6 +400,8 @@ const BASE_MESSAGES = () => [
           force_hide_steps_indicator: true,
           content: {
             position: "center",
+            zap_border: true,
+            zap_shadow: true,
             screen_style: {
               width: "650px",
               height: "500px",
@@ -354,7 +452,7 @@ const BASE_MESSAGES = () => [
                   type: "backup",
                   icon: {
                     background:
-                      "center / contain no-repeat url('https://firefox-settings-attachments.cdn.mozilla.net/main-workspace/ms-images/733144c8-a453-49eb-aff7-27a10786fbc1.svg')",
+                      "center / contain no-repeat url('https://firefox-settings-attachments.cdn.mozilla.net/main-workspace/ms-images/20260630170407--kit-meditate-clouds--d5c6cb35-ef96-499e-8d55-4868d90c0b69.svg')",
                     width: "133.9601px",
                     height: "90.1186px",
                     marginBlockStart: "8px",
@@ -366,8 +464,6 @@ const BASE_MESSAGES = () => [
                     text: {
                       string_id: "create-backup-screen-1-flair",
                       fontSize: "0.625em",
-                      fontWeight: "600",
-                      top: "revert",
                       lineHeight: "normal",
                     },
                   },
@@ -419,7 +515,7 @@ const BASE_MESSAGES = () => [
                   type: "backup",
                   icon: {
                     background:
-                      "center / contain no-repeat url('https://firefox-settings-attachments.cdn.mozilla.net/main-workspace/ms-images/112b3d3c-5f6b-42c1-b56b-c70b08a6e4ad.svg')",
+                      "center / contain no-repeat url('https://firefox-settings-attachments.cdn.mozilla.net/main-workspace/ms-images/20260630170315--kit-house--cda7d830-d152-44ce-b7c2-fc636a02ece3.svg')",
                     width: "114.475px",
                     height: "90.1186px",
                     marginBlockStart: "8px",
@@ -526,6 +622,8 @@ const BASE_MESSAGES = () => [
           force_hide_steps_indicator: true,
           content: {
             position: "center",
+            zap_border: true,
+            zap_shadow: true,
             screen_style: {
               width: "650px",
               height: "560px",
@@ -555,7 +653,7 @@ const BASE_MESSAGES = () => [
                   type: "backup",
                   icon: {
                     background:
-                      "center / contain no-repeat url('https://firefox-settings-attachments.cdn.mozilla.net/main-workspace/ms-images/1741e2ae-2423-4b74-9f3b-b22dcd48d3b3.svg')",
+                      "center / contain no-repeat url('https://firefox-settings-attachments.cdn.mozilla.net/main-workspace/ms-images/20260630170537--kit-tail-folder-bookmarks--9d2688f2-9e5f-46a2-9cad-e043eaef45fb.svg')",
                     width: "54px",
                     height: "54px",
                     marginBlockStart: "22px",
@@ -640,7 +738,7 @@ const BASE_MESSAGES = () => [
                   type: "backup",
                   icon: {
                     background:
-                      "center / contain no-repeat url('https://firefox-settings-attachments.cdn.mozilla.net/main-workspace/ms-images/0ddfd632-b9c4-45d6-86c3-b89f94797110.svg')",
+                      "center / contain no-repeat url('https://firefox-settings-attachments.cdn.mozilla.net/main-workspace/ms-images/20260630170514--kit-sparkle-ai--5fe0137d-e5c4-42f5-8b32-e1a448c2e88c.svg')",
                     width: "54px",
                     height: "54px",
                     marginBlockStart: "22px",
@@ -746,9 +844,11 @@ const BASE_MESSAGES = () => [
           force_hide_steps_indicator: true,
           targeting: "!isEncryptedBackup",
           content: {
+            zap_border: true,
+            zap_shadow: true,
             logo: {
               imageURL:
-                "https://firefox-settings-attachments.cdn.mozilla.net/main-workspace/ms-images/0706f067-eaf8-4537-a9e1-6098d990f511.svg",
+                "https://firefox-settings-attachments.cdn.mozilla.net/main-workspace/ms-images/20260630170437--kit-sleep-lock-chest--e568cedf-5160-4824-91d3-4aec7fa44057.svg",
               height: "110px",
             },
             title: {
@@ -795,10 +895,12 @@ const BASE_MESSAGES = () => [
           force_hide_steps_indicator: true,
           targeting: "isEncryptedBackup",
           content: {
+            zap_border: true,
+            zap_shadow: true,
             isEncryptedBackup: true,
             logo: {
               imageURL:
-                "https://firefox-settings-attachments.cdn.mozilla.net/main-workspace/ms-images/0706f067-eaf8-4537-a9e1-6098d990f511.svg",
+                "https://firefox-settings-attachments.cdn.mozilla.net/main-workspace/ms-images/20260630170437--kit-sleep-lock-chest--e568cedf-5160-4824-91d3-4aec7fa44057.svg",
               height: "110px",
             },
             title: {
@@ -843,6 +945,8 @@ const BASE_MESSAGES = () => [
           force_hide_steps_indicator: true,
           targeting: "isEncryptedBackup",
           content: {
+            zap_border: true,
+            zap_shadow: true,
             isEncryptedBackup: true,
             title: {
               string_id: "create-backup-screen-3-title",
@@ -857,7 +961,7 @@ const BASE_MESSAGES = () => [
             },
             logo: {
               imageURL:
-                "https://firefox-settings-attachments.cdn.mozilla.net/main-workspace/ms-images/0fb332a4-6b15-4d6e-bbd5-0558ac3e004f.svg",
+                "https://firefox-settings-attachments.cdn.mozilla.net/main-workspace/ms-images/20260630170340--kit-lock-hold--ee927c95-6161-4aa0-9b3a-12dec66b7cad.svg",
               height: "130px",
             },
             tiles: {
@@ -892,13 +996,15 @@ const BASE_MESSAGES = () => [
           force_hide_steps_indicator: true,
           targeting: "!isEncryptedBackup",
           content: {
+            zap_border: true,
+            zap_shadow: true,
             screen_style: {
               width: "664px",
               height: "580px",
             },
             logo: {
               imageURL:
-                "chrome://browser/content/asrouter/assets/fox-with-checkmark.svg",
+                "https://firefox-settings-attachments.cdn.mozilla.net/main-workspace/ms-images/20260630170238--kit-checkmark-tail--5e9fb572-37af-426a-bd85-f7f71dd6c3a5.svg",
               height: "96px",
             },
             title: {
@@ -994,6 +1100,8 @@ const BASE_MESSAGES = () => [
           force_hide_steps_indicator: true,
           targeting: "isEncryptedBackup",
           content: {
+            zap_border: true,
+            zap_shadow: true,
             isEncryptedBackup: true,
             screen_style: {
               width: "664px",
@@ -1001,7 +1109,7 @@ const BASE_MESSAGES = () => [
             },
             logo: {
               imageURL:
-                "chrome://browser/content/asrouter/assets/fox-with-checkmark.svg",
+                "https://firefox-settings-attachments.cdn.mozilla.net/main-workspace/ms-images/20260630170238--kit-checkmark-tail--5e9fb572-37af-426a-bd85-f7f71dd6c3a5.svg",
               height: "96px",
             },
             title: {
@@ -2100,7 +2208,7 @@ const BASE_MESSAGES = () => [
             position: "split",
             split_content_padding_block: "166px",
             background:
-              "url('chrome://activity-stream/content/data/content/assets/fox-doodle-backup.svg') var(--mr-secondary-position) no-repeat var(--mr-screen-background-color)",
+              "url('chrome://activity-stream/content/data/content/assets/br-backup-fox-outside-box.svg') var(--mr-secondary-position) no-repeat var(--mr-screen-background-color)",
             logo: {},
             title: {
               string_id: "restored-from-backup-success-title",
@@ -2145,7 +2253,7 @@ const BASE_MESSAGES = () => [
           content: {
             position: "split",
             background:
-              "url('chrome://activity-stream/content/data/content/assets/fox-doodle-backup.svg') var(--mr-secondary-position) no-repeat var(--mr-screen-background-color)",
+              "url('chrome://activity-stream/content/data/content/assets/br-backup-fox-outside-box.svg') var(--mr-secondary-position) no-repeat var(--mr-screen-background-color)",
             logo: {},
             title: {
               string_id: "restored-from-backup-success-title",
@@ -2250,7 +2358,7 @@ const BASE_MESSAGES = () => [
           content: {
             position: "split",
             background:
-              "url('chrome://activity-stream/content/data/content/assets/fox-doodle-backup.svg') var(--mr-secondary-position) no-repeat var(--mr-screen-background-color)",
+              "url('chrome://activity-stream/content/data/content/assets/br-backup-fox-outside-box.svg') var(--mr-secondary-position) no-repeat var(--mr-screen-background-color)",
             logo: {},
             title: {
               string_id: "restored-from-backup-success-title",
@@ -2333,7 +2441,7 @@ const BASE_MESSAGES = () => [
           content: {
             position: "split",
             background:
-              "url('chrome://activity-stream/content/data/content/assets/fox-doodle-backup.svg') var(--mr-secondary-position) no-repeat var(--mr-screen-background-color)",
+              "url('chrome://activity-stream/content/data/content/assets/br-backup-fox-outside-box.svg') var(--mr-secondary-position) no-repeat var(--mr-screen-background-color)",
             logo: {},
             title: {
               string_id: "restored-from-backup-success-title",
@@ -2670,7 +2778,6 @@ const BASE_MESSAGES = () => [
                   action: {
                     type: "SHOW_MIGRATION_WIZARD",
                   },
-                  showExternalLinkIcon: true,
                 },
                 {
                   id: "action-checklist-explore-extensions",
@@ -2702,7 +2809,6 @@ const BASE_MESSAGES = () => [
                       ],
                     },
                   },
-                  showExternalLinkIcon: true,
                 },
                 {
                   id: "action-checklist-sign-in",
@@ -2722,227 +2828,81 @@ const BASE_MESSAGES = () => [
                       },
                     },
                   },
-                  showExternalLinkIcon: true,
                 },
               ],
             },
-            dismiss_button: {
-              action: {
-                type: "MULTI_ACTION",
-                dismiss: true,
-                data: {
-                  actions: [
-                    {
-                      type: "SET_PREF",
-                      data: {
-                        pref: {
-                          name: "easyChecklist.open",
-                          value: false,
-                        },
-                      },
-                    },
-                  ],
-                },
-              },
-            },
-          },
-        },
-      ],
-    },
-    priority: 3,
-    targeting:
-      "'messaging-system-action.easyChecklist.open' | preferenceValue == true",
-    trigger: {
-      id: "preferenceObserver",
-      params: ["messaging-system-action.easyChecklist.open"],
-    },
-  },
-  {
-    id: "FINISH_SETUP_CHECKLIST",
-    template: "feature_callout",
-    content: {
-      id: "FINISH_SETUP_CHECKLIST",
-      template: "multistage",
-      backdrop: "transparent",
-      transitions: false,
-      disableHistoryUpdates: true,
-      screens: [
-        {
-          id: "FINISH_SETUP_CHECKLIST",
-          anchors: [
-            {
-              selector: "#fxms-bmb-button",
-              panel_position: {
-                anchor_attachment: "bottomcenter",
-                callout_attachment: "topright",
-                offset_y: 4,
-              },
-              no_open_on_anchor: true,
-            },
-            {
-              selector: "#FINISH_SETUP_BUTTON",
-              panel_position: {
-                anchor_attachment: "bottomcenter",
-                callout_attachment: "topright",
-                offset_y: 4,
-              },
-              no_open_on_anchor: true,
-            },
-            {
-              selector: "#PersonalToolbar",
-              panel_position: {
-                anchor_attachment: "bottomright",
-                callout_attachment: "topright",
-                offset_x: -24,
-                offset_y: 24,
-              },
-              no_open_on_anchor: true,
-              hide_arrow: true,
-            },
-          ],
-          content: {
-            page_event_listeners: [
-              {
-                params: {
-                  type: "tourend",
-                },
-                action: {
-                  type: "SET_PREF",
-                  data: {
-                    pref: {
-                      name: "messaging-system-action.easyChecklist.open",
-                      value: "false",
-                    },
-                  },
-                },
-              },
-            ],
-            position: "callout",
-            title: {
-              string_id: "onboarding-checklist-title",
-              marginInline: "3px 40px",
-              fontWeight: "600",
-              fontSize: "16px",
-            },
-            title_logo: {
-              alignment: "top",
-              imageURL: "chrome://branding/content/about-logo.png",
-            },
-            action_checklist_subtitle: {
-              string_id: "onboarding-checklist-subtitle",
-            },
-            tiles: {
-              type: "action_checklist",
-              data: [
+            more_button: {
+              submenu: [
                 {
-                  id: "action-checklist-set-to-default",
-                  targeting: "isDefaultBrowserUncached",
-                  label: {
-                    string_id: "onboarding-checklist-set-default",
-                  },
-                  action: {
-                    type: "SET_DEFAULT_BROWSER",
-                  },
-                },
-                {
-                  id: "action-checklist-pin-to-taskbar",
-                  targeting: "!doesAppNeedPinUncached",
-                  label: {
-                    string_id: "onboarding-checklist-pin",
-                  },
+                  type: "action",
+                  label: { string_id: "onboarding-checklist-minimize" },
                   action: {
                     type: "MULTI_ACTION",
-                    data: {
-                      actions: [
-                        {
-                          type: "PIN_FIREFOX_TO_TASKBAR",
-                        },
-                        {
-                          type: "PIN_FIREFOX_TO_START_MENU",
-                        },
-                      ],
-                    },
-                  },
-                },
-                {
-                  id: "action-checklist-import-data",
-                  targeting:
-                    "hasMigratedBookmarks || hasMigratedCSVPasswords || hasMigratedHistory || hasMigratedPasswords",
-                  label: {
-                    string_id: "onboarding-checklist-import",
-                  },
-                  action: {
-                    type: "SHOW_MIGRATION_WIZARD",
-                  },
-                  showExternalLinkIcon: true,
-                },
-                {
-                  id: "action-checklist-explore-extensions",
-                  targeting:
-                    "'messaging-system-action.hasOpenedExtensions'|preferenceValue || addonsInfo.hasInstalledAddons",
-                  label: {
-                    string_id: "onboarding-checklist-extension",
-                  },
-                  action: {
-                    type: "MULTI_ACTION",
+                    dismiss: true,
+                    sendDismissTelemetry: true,
                     data: {
                       actions: [
                         {
                           type: "SET_PREF",
                           data: {
                             pref: {
-                              name: "messaging-system-action.hasOpenedExtensions",
-                              value: "true",
+                              name: "messaging-system-action.easyChecklist.open",
+                              value: false,
                             },
-                          },
-                        },
-                        {
-                          type: "OPEN_URL",
-                          data: {
-                            args: "https://addons.mozilla.org/en-US/firefox/collections/4757633/b4d5649fb087446aa05add5f0258c3/?page=1&collection_sort=-popularity",
-                            where: "current",
                           },
                         },
                       ],
                     },
                   },
-                  showExternalLinkIcon: true,
+                  id: "minimize",
                 },
                 {
-                  id: "action-checklist-sign-in",
-                  targeting: "isFxASignedIn",
+                  type: "action",
                   label: {
-                    string_id: "onboarding-checklist-sign-up",
+                    string_id: "onboarding-checklist-remove",
                   },
                   action: {
-                    type: "FXA_SIGNIN_FLOW",
+                    type: "MULTI_ACTION",
+                    dismiss: true,
                     data: {
-                      entrypoint: "fx-onboarding-checklist",
-                      extraParams: {
-                        utm_content: "migration-onboarding",
-                        utm_source: "fx-new-device-sync",
-                        utm_medium: "firefox-desktop",
-                        utm_campaign: "migration",
-                      },
+                      actions: [
+                        {
+                          type: "BLOCK_MESSAGE",
+                          data: {
+                            id: "FINISH_SETUP_CHECKLIST",
+                          },
+                        },
+                        {
+                          type: "DESTROY_UIWIDGET",
+                          data: {
+                            widget_id: "fxms-bmb-button",
+                          },
+                        },
+                      ],
                     },
                   },
-                  showExternalLinkIcon: true,
+                  id: "remove_checklist",
                 },
               ],
             },
-            dismiss_button: {
+            remove_checklist_button: {
+              label: { string_id: "onboarding-checklist-remove-2" },
+              source_id: "remove_checklist_button",
               action: {
                 type: "MULTI_ACTION",
                 dismiss: true,
                 data: {
                   actions: [
                     {
-                      type: "SET_PREF",
+                      type: "BLOCK_MESSAGE",
                       data: {
-                        pref: {
-                          name: "easyChecklist.open",
-                          value: false,
-                        },
+                        id: "FINISH_SETUP_CHECKLIST",
+                      },
+                    },
+                    {
+                      type: "DESTROY_UIWIDGET",
+                      data: {
+                        widget_id: "fxms-bmb-button",
                       },
                     },
                   ],
@@ -2956,9 +2916,13 @@ const BASE_MESSAGES = () => [
     priority: 3,
     targeting:
       "'messaging-system-action.easyChecklist.open' | preferenceValue == true",
-    trigger: {
-      id: "messagesLoaded",
-    },
+    triggers: [
+      {
+        id: "preferenceObserver",
+        params: ["messaging-system-action.easyChecklist.open"],
+      },
+      { id: "messagesLoaded" },
+    ],
   },
   {
     id: "MULTIPROFILE_DATA_COLLECTION_CHANGED_INFOBAR",
@@ -3090,6 +3054,7 @@ const BASE_MESSAGES = () => [
           content: {
             position: "callout",
             width: "280px",
+            padding: "16px",
             logo: {
               imageURL:
                 "chrome://browser/content/asrouter/assets/hero-relay-email-masks.svg",
@@ -3201,7 +3166,6 @@ const BASE_MESSAGES = () => [
             position: "center",
             screen_style: {
               width: "560px",
-              maxHeight: "495px",
               overflow: "auto",
             },
             dismiss_button: { size: "small", action: { dismiss: true } },
@@ -3212,6 +3176,33 @@ const BASE_MESSAGES = () => [
                 subtitle: { string_id: "aiwindow-feedback-what-worked-well" },
                 style: { marginBlock: "0" },
                 data: { id: "feedback-text", rows: 4, character_limit: 1000 },
+              },
+              {
+                type: "textbox",
+                style: { marginBlock: "8px 0" },
+                header: {
+                  title: { string_id: "aiwindow-feedback-preview-report" },
+                  alternateTitle: {
+                    string_id: "aiwindow-feedback-preview-report",
+                  },
+                },
+                data: {
+                  id: "chat-log-preview",
+                  content: "",
+                  style: {
+                    backgroundColor: "var(--background-color-box)",
+                    maxHeight: "130px",
+                  },
+                },
+              },
+              {
+                type: "content-toggle",
+                data: {
+                  id: "page-content-toggle",
+                  label: {
+                    string_id: "aiwindow-feedback-include-page-content",
+                  },
+                },
               },
             ],
             above_button_content: [
@@ -3240,6 +3231,7 @@ const BASE_MESSAGES = () => [
               action: {
                 type: "MULTI_ACTION",
                 collectTextInput: true,
+                collectContentToggleState: true,
                 navigate: true,
                 data: { actions: [] },
               },
@@ -3274,7 +3266,6 @@ const BASE_MESSAGES = () => [
             position: "center",
             screen_style: {
               width: "560px",
-              maxHeight: "495px",
               overflow: "auto",
             },
             dismiss_button: { size: "small", action: { dismiss: true } },
@@ -3332,6 +3323,33 @@ const BASE_MESSAGES = () => [
                 style: { marginBlock: "0" },
                 data: { id: "feedback-text", rows: 4, character_limit: 1000 },
               },
+              {
+                type: "textbox",
+                style: { marginBlock: "8px 0" },
+                header: {
+                  title: { string_id: "aiwindow-feedback-preview-report" },
+                  alternateTitle: {
+                    string_id: "aiwindow-feedback-preview-report",
+                  },
+                },
+                data: {
+                  id: "chat-log-preview",
+                  content: "",
+                  style: {
+                    backgroundColor: "var(--background-color-box)",
+                    maxHeight: "130px",
+                  },
+                },
+              },
+              {
+                type: "content-toggle",
+                data: {
+                  id: "page-content-toggle",
+                  label: {
+                    string_id: "aiwindow-feedback-include-page-content",
+                  },
+                },
+              },
             ],
             above_button_content: [
               {
@@ -3360,6 +3378,7 @@ const BASE_MESSAGES = () => [
                 type: "MULTI_ACTION",
                 collectSelect: true,
                 collectTextInput: true,
+                collectContentToggleState: true,
                 navigate: true,
                 data: { actions: [] },
               },

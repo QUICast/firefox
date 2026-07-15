@@ -3,6 +3,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "BlobSurfaceProvider.h"
+
 #include "AutoRestoreSVGState.h"
 #include "ImageRegion.h"
 #include "SVGDocumentWrapper.h"
@@ -274,8 +275,10 @@ Maybe<BlobImageKeyData> BlobSurfaceProvider::RecordDrawing(
   wr::BlobImageKey key = aBlobKey
                              ? aBlobKey.value()
                              : wr::BlobImageKey{wrBridge->GetNextImageKey()};
-  wr::ImageDescriptor descriptor(imageRect.Size(), 0, SurfaceFormat::OS_RGBA,
-                                 wr::OpacityType::HasAlphaChannel);
+  wr::ImageDescriptor descriptor(
+      imageRect.Size(), 0,
+      *wr::SurfaceFormatToImageFormat(SurfaceFormat::OS_RGBA),
+      wr::OpacityType::HasAlphaChannel);
 
   auto visibleRect = ImageIntRect::FromUnknownRect(imageRectOrigin);
   if (aBlobKey) {

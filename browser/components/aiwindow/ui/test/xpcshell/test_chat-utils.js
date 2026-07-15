@@ -37,7 +37,7 @@ class RowStub {
       return this.data[key];
     }
 
-    throw new Error("NS_ERROR_NOT_AVAILABLE");
+    throw new Error(`NS_ERROR_NOT_AVAILABLE: could not find key: ${key}`);
   }
 }
 
@@ -117,6 +117,12 @@ add_task(function test_missingField_parseConversationRow() {
 
 add_task(function test_parseConversationRow() {
   const now = Date.now();
+
+  const tool_results = JSON.stringify({
+    0: [{ toolCallId: "t1", uiType: "ai-action-result" }], // 0 == TOOL_RESULT_TYPE.TOOL_UI
+    1: [{ url: "history url 1" }, { url: "history url 2" }], // 1 == TOOL_RESULT_TYPE.HISTORY_RESULTS
+  });
+
   const testRow = new RowStub({
     message_id: "123456789012",
     created_date: now,
@@ -137,7 +143,7 @@ add_task(function test_parseConversationRow() {
     memories_applied: '{ "some": "memories" }',
     web_search_queries: '{ "some": "web search queries" }',
     page_history_deleted: false,
-    tool_ui_data: '{ "toolCallId": "t1", "uiType": "ai-action-result" }',
+    tool_results,
   });
 
   const rows = parseMessageRows([testRow]);
@@ -169,6 +175,10 @@ add_task(function test_parseConversationRow() {
       toolCallId: "t1",
       uiType: "ai-action-result",
     });
+    soft.deepEqual(message.historyResults, [
+      { url: "history url 1" },
+      { url: "history url 2" },
+    ]);
   });
 });
 
@@ -248,7 +258,7 @@ add_task(function test_parseChatHistoryViewRows() {
     title: "conv 1",
     created_date: 116952982,
     updated_date: 116952982,
-    urls: "https://www.firefox.com,https://www.mozilla.com",
+    urls: '["https://www.firefox.com","https://www.mozilla.com"]',
   });
 
   const row2 = new RowStub({
@@ -256,7 +266,7 @@ add_task(function test_parseChatHistoryViewRows() {
     title: "conv 2",
     created_date: 117189198,
     updated_date: 117189198,
-    urls: "https://www.mozilla.org",
+    urls: '["https://www.mozilla.org"]',
   });
 
   const row3 = new RowStub({
@@ -264,10 +274,18 @@ add_task(function test_parseChatHistoryViewRows() {
     title: "conv 3",
     created_date: 168298919,
     updated_date: 168298919,
-    urls: "https://www.firefox.com",
+    urls: '["https://www.firefox.com"]',
   });
 
-  const rows = [row1, row2, row3];
+  const row4 = new RowStub({
+    conv_id: "4",
+    title: "conv 4",
+    created_date: 200000000,
+    updated_date: 200000000,
+    urls: '["https://example.com/#::text=Student,financial%20aid%20workshops%2C%20and%20take%20part%20in"]',
+  });
+
+  const rows = [row1, row2, row3, row4];
 
   const viewRows = parseChatHistoryViewRows(rows);
 
@@ -292,6 +310,16 @@ add_task(function test_parseChatHistoryViewRows() {
     soft.equal(viewRows[2].createdDate, 168298919);
     soft.equal(viewRows[2].updatedDate, 168298919);
     soft.deepEqual(viewRows[2].urls, [new URL("https://www.firefox.com")]);
+
+    soft.equal(viewRows[3].convId, "4");
+    soft.equal(viewRows[3].title, "conv 4");
+    soft.equal(viewRows[3].createdDate, 200000000);
+    soft.equal(viewRows[3].updatedDate, 200000000);
+    soft.deepEqual(viewRows[3].urls, [
+      new URL(
+        "https://example.com/#::text=Student,financial%20aid%20workshops%2C%20and%20take%20part%20in"
+      ),
+    ]);
   });
 });
 

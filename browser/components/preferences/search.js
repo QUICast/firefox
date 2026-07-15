@@ -30,6 +30,7 @@ const lazy = XPCOMUtils.declareLazy({
   },
   UrlbarPrefs: "moz-src:///browser/components/urlbar/UrlbarPrefs.sys.mjs",
   UrlbarUtils: "moz-src:///browser/components/urlbar/UrlbarUtils.sys.mjs",
+  UrlbarShared: "chrome://browser/content/urlbar/UrlbarShared.mjs",
   UserSearchEngine:
     "moz-src:///toolkit/components/search/UserSearchEngine.sys.mjs",
 });
@@ -333,6 +334,7 @@ class EngineStore {
     return lazy.SearchService.moveEngine(
       aEngine.originalEngine,
       aNewIndex,
+      null,
       true
     );
   }
@@ -420,7 +422,7 @@ class EngineStore {
         this.engines.splice(i, 0, e);
         let engine = e.originalEngine;
         engine.hidden = false;
-        await lazy.SearchService.moveEngine(engine, i, true);
+        await lazy.SearchService.moveEngine(engine, i, null, true);
         added++;
       }
     }
@@ -890,7 +892,7 @@ class EngineView {
     let localModes = lazy.UrlbarUtils.LOCAL_SEARCH_MODES;
     if (!lazy.UrlbarPrefs.get("scotchBonnet.enableOverride")) {
       localModes = localModes.filter(
-        mode => mode.source != lazy.UrlbarUtils.RESULT_SOURCE.ACTIONS
+        mode => mode.source != lazy.UrlbarShared.RESULT_SOURCE.ACTIONS
       );
     }
     return this._engineStore.engines.length + localModes.length;

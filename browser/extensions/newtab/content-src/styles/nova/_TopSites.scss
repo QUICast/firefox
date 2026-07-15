@@ -40,9 +40,34 @@
   }
 }
 
+// Hover/focus expands the tile and reveals its pin + menu chrome (and Nova drops
+// the outer hover background). Gated to :not(.dnd-active) so a drag never
+// triggers it: macOS freezes :hover on the dragged tile, and we can't block it
+// with pointer-events because the placeholder is the drop target.
 // @nova-cleanup(remove-conditional): Nova gets rid of outer hover background
-.nova-enabled .top-sites-list:not(.dnd-active) .top-site-outer:is(.active, :focus-within, :hover) {
+.nova-enabled .top-sites-list:not(.dnd-active) .top-site-outer:is(.active, :has(.top-site-inner:is(:hover, :focus-within))) {
   background: none;
+
+  .tile {
+    // Only expand the tile on hover for users without a reduced-motion preference
+    @media (prefers-reduced-motion: no-preference) {
+      /* stylelint-disable-next-line stylelint-plugin-mozilla/use-design-tokens */
+      width: var(--col-width);
+      /* stylelint-disable-next-line stylelint-plugin-mozilla/use-design-tokens */
+      height: var(--col-width);
+    }
+
+    border-color: var(--button-border-color-ghost-hover);
+  }
+
+  .icon-pin-small,
+  .context-menu-button {
+    opacity: 1;
+
+    @media (prefers-reduced-motion: no-preference) {
+      transition: opacity 100ms ease-out 50ms;
+    }
+  }
 }
 
 .nova-enabled .top-site-outer {
@@ -60,31 +85,21 @@
     align-self: end;
     box-shadow: var(--card-box-shadow);
     border: var(--border-width) solid var(--button-border-color-ghost);
-    transition: width 100ms ease-out, height 100ms ease-out;
-  }
+    // Bug 2044205 grew the radius scale so "large" is now 16px. The tile was
+    // designed against the old 12px "large", so use "medium" (12px) to keep it.
+    border-radius: var(--border-radius-medium);
 
-  &:is(:hover, :focus-within, .active) {
-    .tile {
-      /* stylelint-disable-next-line stylelint-plugin-mozilla/use-design-tokens */
-      width: var(--col-width);
-      /* stylelint-disable-next-line stylelint-plugin-mozilla/use-design-tokens */
-      height: var(--col-width);
-      border-color: var(--button-border-color-ghost-hover);
+    @media (prefers-reduced-motion: no-preference) {
+      transition: width 100ms ease-out, height 100ms ease-out;
     }
 
-    .icon-pin-small,
-    .context-menu-button {
-      opacity: 1;
-      transition: opacity 100ms ease-out 50ms;
+    .top-site-icon {
+      border-radius: var(--border-radius-small);
     }
   }
 
   &:active .tile {
     border-color: var(--button-border-color-ghost-active);
-  }
-
-  &.add-button .tile {
-    color-scheme: initial;
   }
 
   .top-site-inner > a:focus .tile {
@@ -142,10 +157,6 @@
     }
   }
 
-  &.add-button .tile {
-    background: var(--newtab-background-card);
-  }
-
   .title {
     .title-label {
       padding: 0;
@@ -161,6 +172,20 @@
   }
 }
 
+// Under reduced motion the tile never expands, so reposition the pin and
+// context menu relative to its smaller resting size.
+@media (prefers-reduced-motion: reduce) {
+  .nova-enabled .top-site-outer .context-menu-button {
+    inset-inline-end: calc(var(--space-xsmall) + var(--space-xxsmall) / 2);
+    inset-block-start: var(--space-small);
+  }
+
+  .nova-enabled .top-site-outer .icon-pin-small {
+    inset-block-start: calc(var(--space-medium) + var(--space-xxsmall));
+    inset-inline-start: var(--space-small);
+  }
+}
+
 @media (forced-colors: active) {
   .nova-enabled .top-site-outer .tile {
     background-color: var(--button-background-color);
@@ -170,20 +195,11 @@
     background-color: var(--button-background-color);
   }
 
-  .nova-enabled .top-site-outer:is(:hover, :focus-within, .active) .tile {
+  .nova-enabled .top-site-outer:is(.active, :has(.top-site-inner:is(:hover, :focus-within))) .tile {
     background-color: var(--button-background-color-hover);
   }
 
   .nova-enabled .top-site-outer .sponsored-label {
     color: var(--text-color);
-  }
-
-  .nova-enabled .top-site-outer.add-button .tile .icon-wrapper {
-    color: var(--button-text-color-ghost);
-    fill: var(--button-icon-fill);
-  }
-
-  .nova-enabled .top-site-outer.add-button:hover .tile .icon-wrapper {
-    color: var(--button-text-color-ghost-hover);
   }
 }

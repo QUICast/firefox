@@ -15,7 +15,7 @@ use crate::composite::CompositeState;
 use crate::profiler::TransactionProfile;
 use crate::renderer::GpuBufferBuilder;
 use crate::spatial_tree::{SpatialTree, SpatialNodeIndex};
-use crate::clip::{ClipChainInstance, ClipTree};
+use crate::clip::{ClipChainInstance, ClipTree, ClipNodeId};
 use crate::composite::CompositorSurfaceKind;
 use crate::frame_builder::FrameBuilderConfig;
 use crate::picture::{PictureCompositeMode, ClusterFlags, SurfaceInfo};
@@ -24,17 +24,15 @@ use crate::picture::{PictureScratch, SurfaceIndex, RasterConfig};
 use crate::tile_cache::SubSliceIndex;
 use crate::prim_store::{ClipTaskIndex, PictureIndex, PrimitiveKind, SegmentInstanceIndex};
 use crate::prim_store::{PrimitiveStore, PrimitiveInstance, PrimitiveInstanceIndex};
-use crate::prim_store::backdrop::BackdropRenderScratch;
-use crate::prim_store::borders::{ImageBorderScratch, NormalBorderScratch};
+use crate::prim_store::borders::ImageBorderScratch;
 use crate::prim_store::image::ImageScratch;
-use crate::prim_store::line_dec::LineDecorationScratch;
 use crate::prim_store::storage;
 use crate::prim_store::text_run::TextRunScratch;
 use crate::render_backend::{DataStores, ScratchBuffer};
 use crate::render_task_graph::RenderTaskGraphBuilder;
 use crate::resource_cache::ResourceCache;
 use crate::scene::SceneProperties;
-use crate::space::SpaceMapper;
+use crate::space::{SpaceMapper, SpaceSnapper};
 use crate::util::MaxRect;
 
 pub struct FrameVisibilityContext<'a> {
@@ -51,7 +49,7 @@ pub struct FrameVisibilityState<'a> {
     pub clip_store: &'a mut ClipStore,
     pub resource_cache: &'a mut ResourceCache,
     pub frame_gpu_data: &'a mut GpuBufferBuilder,
-    pub data_stores: &'a mut DataStores,
+    pub data_stores: &'a DataStores,
     pub clip_tree: &'a mut ClipTree,
     pub composite_state: &'a mut CompositeState,
     pub rg_builder: &'a mut RenderTaskGraphBuilder,
@@ -124,31 +122,16 @@ pub enum DrawState {
 #[cfg_attr(feature = "capture", derive(Serialize))]
 pub enum KindScratchHandle {
     None,
-    LineDecoration(storage::Index<LineDecorationScratch>),
-    NormalBorder(storage::Index<NormalBorderScratch>),
     ImageBorder(storage::Index<ImageBorderScratch>),
     Image(storage::Index<ImageScratch>),
     TextRun(storage::Index<TextRunScratch>),
     Picture(storage::Index<PictureScratch>),
-    BackdropRender(storage::Index<BackdropRenderScratch>),
 }
 
 impl KindScratchHandle {
-    /// Extract the LineDecoration scratch index. Panics if the variant
-    /// doesn't match — readers in the LineDecoration arm of the
+    /// Extract the specific scratch index. Panics if the variant
+    /// doesn't match — readers in the specific arm of the
     /// PrimitiveKind match know the variant by construction.
-    pub fn unwrap_line_decoration(&self) -> storage::Index<LineDecorationScratch> {
-        match *self {
-            KindScratchHandle::LineDecoration(h) => h,
-            _ => panic!("kind_scratch mismatch: expected LineDecoration, got {:?}", self),
-        }
-    }
-    pub fn unwrap_normal_border(&self) -> storage::Index<NormalBorderScratch> {
-        match *self {
-            KindScratchHandle::NormalBorder(h) => h,
-            _ => panic!("kind_scratch mismatch: expected NormalBorder, got {:?}", self),
-        }
-    }
     pub fn unwrap_image_border(&self) -> storage::Index<ImageBorderScratch> {
         match *self {
             KindScratchHandle::ImageBorder(h) => h,
@@ -171,12 +154,6 @@ impl KindScratchHandle {
         match *self {
             KindScratchHandle::Picture(h) => h,
             _ => panic!("kind_scratch mismatch: expected Picture, got {:?}", self),
-        }
-    }
-    pub fn unwrap_backdrop_render(&self) -> storage::Index<BackdropRenderScratch> {
-        match *self {
-            KindScratchHandle::BackdropRender(h) => h,
-            _ => panic!("kind_scratch mismatch: expected BackdropRender, got {:?}", self),
         }
     }
 }
@@ -229,10 +206,9 @@ pub struct PrimitiveDrawHeader {
     pub compositor_surface_kind: CompositorSurfaceKind,
 
     /// Local-space rect of the primitive after device-pixel snapping has
-    /// been applied. Populated for every prim each frame by
-    /// `frame_snap::snap_frame_rects` (snapping
-    /// `PrimitiveInstance.unsnapped_prim_rect` against the current spatial
-    /// tree) before any visibility / prepare consumer reads it.
+    /// been applied. Populated for every prim each frame by the visibility
+    /// pass (snapping `PrimitiveInstance.unsnapped_prim_rect` against the
+    /// surface raster node) before any visibility / prepare consumer reads it.
     pub snapped_local_rect: LayoutRect,
 }
 
@@ -337,6 +313,15 @@ pub fn update_prim_visibility(
     );
     let visibility_spatial_node_index = surface.visibility_spatial_node_index;
 
+    // Snappers into this surface's raster space (the space its content is
+    // rasterized in), reused across all clusters/prims in this surface (and a
+    // no-op for surfaces that don't snap). `snapper` is re-targeted once per
+    // cluster and snaps prim/clip-leaf rects (all prims in a cluster share its
+    // spatial node, so it stays a cache hit); `clip_snapper` snaps the per-prim
+    // clip chain.
+    let mut snapper = SpaceSnapper::new(surface, frame_context.spatial_tree);
+    let mut clip_snapper = snapper.clone();
+
     for cluster in &pic.prim_list.clusters {
         profile_scope!("cluster");
 
@@ -368,7 +353,43 @@ pub fn update_prim_visibility(
             frame_context.spatial_tree,
         );
 
+        // Snap each prim's rect and clip-leaf rect from this cluster's
+        // spatial-node space into the surface's raster space, before any
+        // visibility / prepare / batch consumer reads them.
+        snapper.set_target_spatial_node(cluster.spatial_node_index, frame_context.spatial_tree);
+
         for prim_instance_index in cluster.prim_range() {
+            // A prim's snap policy is folded into its clip leaf: device-space
+            // prims (text) carry the `INVALID` sentinel and snap nothing - their
+            // rect and clips stay at exact sub-pixel positions so a fractional
+            // clip edge is an AA boundary through the glyphs (bug 2050692).
+            // Everyone else snaps their rect and own clips to the device grid.
+            // How the rect itself is rounded (nearest / round-out for unsnapped
+            // text / thickness-preserving for decoration lines) is decided by
+            // `PrimitiveInstance::snap_rounding`.
+            let prim_instance = &frame_state.prim_instances[prim_instance_index];
+            let leaf_id = prim_instance.clip_leaf_id;
+            let snaps = frame_state.clip_tree.get_leaf(leaf_id).prim_clip_root
+                != ClipNodeId::INVALID;
+
+            let rounding = prim_instance.snap_rounding(snaps, frame_state.data_stores);
+            let snapped_local_rect =
+                snapper.snap_rect_rounded(&prim_instance.unsnapped_prim_rect, rounding);
+            frame_state.scratch.primitive.frame.draws[prim_instance_index].snapped_local_rect =
+                snapped_local_rect;
+
+            // Picture / tile-cache leaves carry `max_rect` (snapping it would
+            // overflow the snap transform) and device-space leaves don't snap;
+            // both pass through. Other prims snap their own leaf clip for crisp
+            // fill/border edges.
+            let leaf = frame_state.clip_tree.get_leaf_mut(leaf_id);
+            let unsnapped = leaf.unsnapped_local_clip_rect;
+            if unsnapped == LayoutRect::max_rect() || !snaps {
+                leaf.snapped_local_clip_rect = unsnapped;
+            } else {
+                leaf.snapped_local_clip_rect = snapper.snap_rect(&unsnapped);
+            }
+
             if let PrimitiveKind::Picture { pic_index, .. } = frame_state.prim_instances[prim_instance_index].kind {
                 if !store.pictures[pic_index.0].is_visible(frame_context.spatial_tree) {
                     continue;
@@ -428,6 +449,7 @@ pub fn update_prim_visibility(
                 cluster.spatial_node_index,
                 map_local_to_picture.ref_spatial_node_index,
                 visibility_spatial_node_index,
+                &mut clip_snapper,
                 prim_instance.clip_leaf_id,
                 &frame_context.spatial_tree,
                 &frame_state.data_stores.clip,
@@ -444,7 +466,7 @@ pub fn update_prim_visibility(
                     &mut frame_state.frame_gpu_data.f32,
                     frame_state.resource_cache,
                     &surface_culling_rect,
-                    &mut frame_state.data_stores.clip,
+                    &frame_state.data_stores.clip,
                     frame_state.rg_builder,
                     true,
                 );
@@ -455,6 +477,26 @@ pub fn update_prim_visibility(
                     continue;
                 }
             };
+
+            let is_mix_blend_picture = |prim_instance: &PrimitiveInstance| {
+                if let PrimitiveKind::Picture { pic_index, .. } = prim_instance.kind {
+                    let pic = &store.pictures[pic_index.0];
+
+                    matches!(
+                        pic.composite_mode,
+                        Some(PictureCompositeMode::MixBlend(_))
+                    )
+                } else {
+                    false
+                }
+            };
+
+            if is_root_tile_cache && is_mix_blend_picture(prim_instance) {
+                let prim_clip_chain = &frame_state.scratch.primitive.frame.draws[prim_instance_index].clip_chain;
+                if let Some(tile_cache) = tile_cache {
+                    tile_cache.mix_blend_pic_rects.push(prim_clip_chain.pic_coverage_rect);
+                }
+            }
 
             {
                 let prim_surface_index = frame_state.surface_stack.last().unwrap().1;

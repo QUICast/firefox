@@ -7,15 +7,15 @@
 
 #include <cstdint>
 
-#include "mozilla/net/neqo_glue_ffi_generated.h"
 #include "mozilla/Maybe.h"
+#include "mozilla/UniquePtr.h"
+#include "mozilla/net/neqo_glue_ffi_generated.h"
 #include "nsError.h"
 #include "nsHashKeys.h"
 #include "nsString.h"
+#include "nsTArray.h"
 #include "nsTHashMap.h"
 #include "nsTHashSet.h"
-#include "nsTArray.h"
-#include "mozilla/UniquePtr.h"
 
 namespace mozilla::net {
 

@@ -656,7 +656,12 @@ void js::TraceManuallyBarrieredGenericPointerEdge(JSTracer* trc, Cell** thingp,
 
 void js::TraceGCCellPtrRoot(JSTracer* trc, JS::GCCellPtr* thingp,
                             const char* name) {
+#ifdef JS_GC_CONCURRENT_MARKING
+  Cell* thing = thingp->atomicGet().asCell();
+#else
   Cell* thing = thingp->asCell();
+#endif
+
   if (!thing) {
     return;
   }
@@ -673,7 +678,12 @@ void js::TraceGCCellPtrRoot(JSTracer* trc, JS::GCCellPtr* thingp,
 
 void js::TraceManuallyBarrieredGCCellPtr(JSTracer* trc, JS::GCCellPtr* thingp,
                                          const char* name) {
+#ifdef JS_GC_CONCURRENT_MARKING
+  Cell* thing = thingp->atomicGet().asCell();
+#else
   Cell* thing = thingp->asCell();
+#endif
+
   if (!thing) {
     return;
   }
@@ -695,22 +705,30 @@ void js::TraceManuallyBarrieredGCCellPtr(JSTracer* trc, JS::GCCellPtr* thingp,
 
 template <typename T>
 inline bool TraceTaggedPtrEdge(JSTracer* trc, T* thingp, const char* name) {
+  T thing;
+#ifdef JS_GC_CONCURRENT_MARKING
+  // Conservatively perform an atomic load even when marking is not concurrent.
+  thing = thingp->atomicGet();
+#else
+  thing = *thingp;
+#endif
+
   // Return true by default. For some types the lambda below won't be called.
   bool ret = true;
-  auto thing = MapGCThingTyped(*thingp, [&](auto thing) {
-    if (!TraceEdgeInternal(trc, &thing, name)) {
+  auto result = MapGCThingTyped(thing, [&](auto ptr) {
+    if (!TraceEdgeInternal(trc, &ptr, name)) {
       ret = false;
       return TaggedPtr<T>::empty();
     }
 
-    return TaggedPtr<T>::wrap(thing);
+    return TaggedPtr<T>::wrap(ptr);
   });
 
   // Only update *thingp if the value changed, to avoid TSan false positives for
   // template objects when using DumpHeapTracer or UbiNode tracers while Ion
   // compiling off-thread.
-  if (thing.isSome() && thing.value() != *thingp) {
-    *thingp = thing.value();
+  if (result.isSome() && result.value() != thing) {
+    *thingp = result.value();
   }
 
   return ret;
@@ -766,11 +784,22 @@ void MarkingTracerT<opts>::markEphemeronEdges(EphemeronEdgeVector& edges,
   // 'edges' to be appended to while iterating.
   MOZ_ASSERT(edges.length() == initialLength);
 
-  // This is not just an optimization. When nuking a CCW, we conservatively
-  // mark through the related edges and then lose the CCW->target connection
+  // During the black marking Zone::enterWeakMarkingMode, erase black ephemerons
+  // whose sources are black. These have now been handled and are no longer
+  // needed.
+  //
+  // This is required for correctness because (1) nuking a CCW conservatively
+  // marks through the related edges and then loses the CCW->target connection
   // that induces a sweep group edge. As a result, it is possible for the
-  // delegate zone to get marked later, look up an edge in this table, and
-  // then try to mark something in a Zone that is no longer marking.
+  // delegate zone to get marked later, look up an edge in this table, and then
+  // try to mark something in a Zone that is no longer marking.
+  //
+  // (2), the gray pass only wants to visit things that will be marked gray. If
+  // a gray src in a black ephemeron got barrier-marked black, then we'd end up
+  // visiting a value that should be marked black. We could skip such things,
+  // but since they need to be removed anyway as per (1), we rely on that
+  // removal and assert above that we don't need to mark darker than the current
+  // mark color.
   if (srcColor == MarkColor::Black && markColor() == MarkColor::Black) {
     edges.eraseIf([](auto& edge) { return edge.color() == MarkColor::Black; });
   }
@@ -816,11 +845,15 @@ void MarkingTracerT<opts>::markImplicitEdges(T* markedThing) {
   // marking values that are in a different compartment.
   AutoClearTracingSource acts(this);
 
-  MarkColor thingColor = markColor();
-  MOZ_ASSERT(CellColor(thingColor) ==
-             gc::detail::GetEffectiveColor(gcMarker(), markedThing));
+  // If markedThing is now gray, then it won't be on the black mark stack, so we
+  // won't see it while marking black. But we could have the other way around:
+  // markedThing was gray when it was pushed on the (gray) mark stack, but was
+  // later marked black, and we're marking gray.
+  MOZ_ASSERT(CellColor(markColor()) <= markedThing->color());
 
-  markEphemeronEdges(edges, thingColor);
+  // No need to consider EffectiveColor; we know it's on the mark stack, so it
+  // must be in a collected zone (asserted above).
+  markEphemeronEdges(edges, AsMarkColor(markedThing->color()));
 
   if (edges.empty()) {
     ephemeronTable.remove(p);
@@ -866,7 +899,13 @@ static inline void MaybeUnmarkGraySymbol(JSRuntime* runtime,
 template <uint32_t opts>
 template <typename T>
 bool MarkingTracerT<opts>::onEdge(T** thingp, const char* name) {
-  T* thing = *thingp;
+  T* thing;
+  if constexpr (bool(opts & MarkingOptions::ConcurrentMarking)) {
+    thing = __atomic_load_n(thingp, __ATOMIC_RELAXED);
+  } else {
+    thing = *thingp;
+  }
+
   if (!thing) {
     return true;
   }
@@ -1394,11 +1433,13 @@ bool MarkingTracerT<opts>::doMarking(SliceBudget& budget,
 
   // This method leaves the mark color as it found it.
 
-  if (marker->hasBlackEntries() && !markOneColor<MarkColor::Black>(budget)) {
-    return false;
+  if (marker->hasBlackEntries() || gc.hasDeferredWeakMaps(MarkColor::Black)) {
+    if (!markOneColor<MarkColor::Black>(budget)) {
+      return false;
+    }
   }
 
-  if (marker->hasGrayEntries()) {
+  if (marker->hasGrayEntries() || gc.hasDeferredWeakMaps(MarkColor::Gray)) {
     mozilla::Maybe<gcstats::AutoPhase> ap;
     if (reportTime) {
       auto& stats = this->runtime()->gc.stats();
@@ -1434,13 +1475,36 @@ bool MarkingTracerT<opts>::markOneColor(SliceBudget& budget) {
 template <uint32_t opts>
 bool MarkingTracerT<opts>::markCurrentColor(SliceBudget& budget) {
   GCMarker* marker = gcMarker();
-  while (processMarkStackTop(budget)) {
-    if (marker->stack.isEmpty()) {
-      return true;
+  while (true) {
+    if (marker->hasEntriesForCurrentColor()) {
+      if (!processMarkStackTop(budget)) {
+        return false;
+      }
+    } else {
+      if constexpr (hasOption(MarkingOptions::ConcurrentMarking)) {
+        // Deferred weak maps will be marked synchronously on the main thread.
+        return true;
+      } else {
+        marker->markDeferredWeakMapChildren(
+            marker->runtime()->gc.deferredMapsList(marker->markColor()));
+        if (!marker->hasEntriesForCurrentColor()) {
+          return true;
+        }
+      }
     }
   }
+}
 
-  return false;
+void GCMarker::markDeferredWeakMapChildren(WeakMapList& deferred) {
+  // Even if this is called while parallel marking, there will only be one
+  // thread running at this time.
+  enterSingleThreadedMode();
+  while (js::WeakMapBase* map = deferred.popFirst()) {
+    (void)map->markEntries(this);
+    MOZ_ASSERT(!map->isSystem());
+    map->zone()->gcMarkedUserWeakMaps().pushBack(map);
+  }
+  leaveSingleThreadedMode();
 }
 
 bool GCMarker::markCurrentColorInParallel(ParallelMarkTask* task,
@@ -1468,21 +1532,25 @@ bool GCMarker::markCurrentColorInParallel(ParallelMarkTask* task,
 }
 
 #ifdef DEBUG
-bool GCMarker::markOneObjectForTest(JSObject* obj) {
+void GCMarker::markOneObjectForTest(JSObject* obj) {
+  MOZ_ASSERT(this == &runtime()->gc.marker());
   MOZ_ASSERT(obj->zone()->isGCMarking());
   MOZ_ASSERT(!obj->isMarked(markColor()));
 
-  return matchTracer([this, obj](auto& trc) {
+  // Mark the object and put it on the stack for traversal. Note that if obj is
+  // a weakmap, it will be added to the deferred maps list instead.
+  matchTracer([this, obj](auto& trc) {
     size_t oldPosition = stack.position();
     trc.markAndTraverse(obj);
+    MOZ_ASSERT(obj->isMarked(markColor()));
     if (stack.position() == oldPosition) {
-      return false;
+      return;
     }
 
+    // Process the top of the mark stack, ie the object that was just pushed.
     AutoUpdateMarkStackRanges updateRanges(*this);
     SliceBudget unlimited = SliceBudget::unlimited();
     trc.processMarkStackTop(unlimited);
-    return true;
   });
 }
 #endif
@@ -1575,19 +1643,6 @@ static inline void CheckForCompartmentMismatch(JSObject* obj, JSObject* obj2) {
 #endif
 }
 
-static inline size_t NumUsedFixedSlots(NativeObject* obj) {
-  // Concurrent marking: this can happen concurrently with a shape change by the
-  // mutator. This is safe because 1) the total number of fixed slots cannot
-  // change and 2) if the slot span changes new/deleted slots still get marked
-  // because of the snapshot at the beginning invariant. We do need to ensure we
-  // only read object fields once though.
-  Shape* shape = obj->shape();
-  ObjectSlots* slotsHeader = obj->getSlotsHeader();
-  return std::min(NumNativeObjectFixedSlots(shape),
-                  NativeObjectSlotSpan(shape, slotsHeader));
-}
-
-#ifndef JS_GC_CONCURRENT_MARKING
 static inline size_t NumUsedDynamicSlots(NativeObject* obj) {
   size_t nfixed = obj->numFixedSlots();
   size_t nslots = obj->slotSpan();
@@ -1597,11 +1652,11 @@ static inline size_t NumUsedDynamicSlots(NativeObject* obj) {
 
   return nslots - nfixed;
 }
-#endif
 
 void GCMarker::updateRangesAtStartOfSlice() {
   MOZ_ASSERT(!stack.elementsRangesAreValid);
 
+  JSTracer* trc = tracer();
   for (MarkStackIter iter(stack); !iter.done(); iter.next()) {
     if (iter.isSlotsOrElementsRange()) {
       MarkStack::SlotsOrElementsRange range = iter.slotsOrElementsRange();
@@ -1609,8 +1664,13 @@ void GCMarker::updateRangesAtStartOfSlice() {
       MOZ_ASSERT(obj->is<NativeObject>());
       if (range.kind() == SlotsOrElementsKind::Elements) {
         NativeObject* nobj = &obj->as<NativeObject>();
+        HeapSlot* elementsPtr = nobj->elements_.getForTracing();
+        ObjectElements* elementsHeader =
+            ObjectElements::fromElements(elementsPtr);
+        MemoryAcquireFence(trc);  // Elements reallocation fence.
+        uint32_t flags = elementsHeader->getFlagsForTracing();
+        size_t numShifted = ObjectElements::numShiftedElementsFromFlags(flags);
         size_t index = range.start();
-        size_t numShifted = nobj->getElementsHeader()->numShiftedElements();
         index -= std::min(numShifted, index);
         range.setStart(index);
         iter.setSlotsOrElementsRange(range);
@@ -1626,12 +1686,19 @@ void GCMarker::updateRangesAtStartOfSlice() {
 void GCMarker::updateRangesAtEndOfSlice() {
   MOZ_ASSERT(stack.elementsRangesAreValid);
 
+  JSTracer* trc = tracer();
   for (MarkStackIter iter(stack); !iter.done(); iter.next()) {
     if (iter.isSlotsOrElementsRange()) {
       MarkStack::SlotsOrElementsRange range = iter.slotsOrElementsRange();
       if (range.kind() == SlotsOrElementsKind::Elements) {
-        NativeObject* obj = &range.ptr().asRangeObject()->as<NativeObject>();
-        size_t numShifted = obj->getElementsHeader()->numShiftedElements();
+        JSObject* obj = range.ptr().asRangeObject();
+        NativeObject* nobj = &obj->as<NativeObject>();
+        HeapSlot* elementsPtr = nobj->elements_.getForTracing();
+        ObjectElements* elementsHeader =
+            ObjectElements::fromElements(elementsPtr);
+        MemoryAcquireFence(trc);  // Elements reallocation fence.
+        uint32_t flags = elementsHeader->getFlagsForTracing();
+        size_t numShifted = ObjectElements::numShiftedElementsFromFlags(flags);
         range.setStart(range.start() + numShifted);
         iter.setSlotsOrElementsRange(range);
       }
@@ -1678,25 +1745,48 @@ inline bool MarkingTracerT<opts>::processMarkStackTop(SliceBudget& budget) {
     switch (kind) {
       case SlotsOrElementsKind::FixedSlots: {
         base = nobj->fixedSlots();
-        end = NumUsedFixedSlots(nobj);
+        MemoryAcquireFence<opts>(this->runtime());  // for shape initialization
+        Shape* shape = nobj->headerPtrForTracing();
+        Shape::ImmutableFlags shapeFlags = shape->immutableFlagsForTracing();
+        ObjectSlots* slotsHeader =
+            ObjectSlots::fromSlots(nobj->slots_.getForTracing());
+
+        // Concurrent marking: this can happen concurrently with a shape change
+        // by the mutator. This is safe because:
+        //
+        //  1) the total number of fixed slots cannot change and
+        //  2) if the slot span changes new/deleted slots still get marked
+        //     because of the snapshot at the beginning invariant.
+        //
+        // We do need to ensure we only read object fields once though and that
+        // reads are atomic.
+        //
+        // TODO: This explanation doesn't take account of changing between
+        // dictionary/non-dictionary mode.
+        end = NumNativeObjectUsedFixedSlotsForTracing(nobj, shapeFlags,
+                                                      slotsHeader);
         break;
       }
 
       case SlotsOrElementsKind::DynamicSlots: {
-        base = nobj->slots_;
-#ifdef JS_GC_CONCURRENT_MARKING
-        // TODO: Investigate whether we can safely restrict this to the number
-        // of used slots.
-        end = ObjectSlots::fromSlots(base)->capacity();
-#else
-        end = NumUsedDynamicSlots(nobj);
-#endif
+        base = nobj->slots_.getForTracing();
+        if constexpr (hasOption(MarkingOptions::ConcurrentMarking)) {
+          // TODO: Investigate whether we can safely restrict this to the number
+          // of used slots.
+
+          // Initialization fence.
+          MemoryAcquireFence<opts>(gcMarker()->runtime());
+          end = ObjectSlots::fromSlots(base)->capacity_.getForTracing();
+        } else {
+          end = NumUsedDynamicSlots(nobj);
+        }
         break;
       }
 
       case SlotsOrElementsKind::Elements: {
-        base = nobj->getDenseElements();
-        end = nobj->getDenseInitializedLength();
+        base = nobj->elements_.getForTracing();
+        end = ObjectElements::fromElements(base)
+                  ->initializedLength.getForTracing();
         break;
       }
 
@@ -1753,6 +1843,7 @@ inline bool MarkingTracerT<opts>::processMarkStackTop(SliceBudget& budget) {
   return true;
 
 scan_value_range:
+  // Initialization fence for slots/elements contents.
   MemoryAcquireFence<opts>(this->runtime());
 
   while (index < end) {
@@ -1764,12 +1855,15 @@ scan_value_range:
       return false;
     }
 
-    Value v = base[index];
+    Value v = base[index].getForTracing();
     index++;
 
     if (!v.isGCThing()) {
       continue;
     }
+
+    // Initialization fence for value referent.
+    MemoryAcquireFence<opts>(this->runtime());
 
     if (v.isString()) {
       markAndTraverseEdge(obj, v.toString());
@@ -1812,14 +1906,17 @@ scan_obj: {
   AssertShouldMarkInZone(marker, obj);
 
   maybeMarkImplicitEdges(obj);
-  markAndTraverseEdge(obj, obj->shape());
 
-  const JSClass* clasp = obj->getClass();
+  Shape* shape = obj->headerPtrForTracing();
+  markAndTraverseEdge(obj, shape);
+
+  BaseShape* baseShape = shape->headerPtrForTracing();
+  const JSClass* clasp = baseShape->headerPtrForTracing();
   if (clasp->hasTrace() && !callOrDelayTraceHook(obj, clasp, budget)) {
     return false;
   }
 
-  if (!obj->is<NativeObject>()) {
+  if (!clasp->isNativeObject()) {
     return true;
   }
 
@@ -1833,32 +1930,46 @@ scan_obj: {
   // For concurrent marking, we need to read all object fields at most once to
   // prevent the possibility of seeing different values each time.
   NativeObject* nobj = &obj->as<NativeObject>();
-  Shape* shape = nobj->shape();
-  HeapSlot* slotsPtr = nobj->slots_;
-  HeapSlot* elementsPtr = nobj->elements_;
+  HeapSlot* slotsPtr = nobj->slots_.getForTracing();
+  HeapSlot* elementsPtr = nobj->elements_.getForTracing();
+
+  // Memory fence for concurrent marking to ensure we see the initialized
+  // contents of slots and elements. This matches the release fences in
+  // vm/NativeObject.cpp.
+  MemoryAcquireFence<opts>(this->runtime());
+
+  // Keep this logic in line with NativeObjectSlotSpan.
 
   // Get number of slots using previously read shape and slots pointers.
   ObjectSlots* slotsHeader = ObjectSlots::fromSlots(slotsPtr);
-  unsigned nslots = NativeObjectSlotSpan(shape, slotsHeader);
-  unsigned nfixed = NumNativeObjectFixedSlots(shape);
+  Shape::ImmutableFlags shapeFlags = shape->immutableFlagsForTracing();
+  unsigned minSlots =
+      NativeObjectSmallSlotSpanForTracing(shapeFlags, slotsHeader);
+  unsigned nfixed = NumNativeObjectFixedSlots(shapeFlags);
 
-  if (IsNativeObjectDynamicSlots(slotsPtr)) {
-    MarkTenuredBuffer(nobj->zone(), slotsHeader);
+  Zone* zone = nobj->asTenured().zone();
+  uint64_t uid = slotsHeader->maybeUniqueId_.getForTracing();
+  if (uid != ObjectSlots::NoUniqueIdInSharedEmptySlots) {
+    MarkTenuredBuffer(zone, slotsHeader);
   }
 
   ObjectElements* elementsHeader = ObjectElements::fromElements(elementsPtr);
-  if (IsNativeObjectDynamicElements(elementsPtr)) {
-    void* unshiftedHeader = elementsHeader->getUnshiftedHeader();
-    MarkTenuredBuffer(nobj->zone(), unshiftedHeader);
+  uint32_t elementsFlags = elementsHeader->getFlagsForTracing();
+  if (IsNativeObjectDynamicElements(elementsPtr, elementsFlags)) {
+    uint32_t numShifted =
+        ObjectElements::numShiftedElementsFromFlags(elementsFlags);
+    void* unshiftedHeader =
+        reinterpret_cast<HeapSlot*>(elementsHeader) - numShifted;
+    MarkTenuredBuffer(zone, unshiftedHeader);
   }
 
   if (!IsNativeObjectEmptyElements(elementsPtr)) {
     base = elementsPtr;
     kind = SlotsOrElementsKind::Elements;
     index = 0;
-    end = elementsHeader->getInitializedLength();
+    end = elementsHeader->initializedLength.getForTracing();
 
-    if (!nslots) {
+    if (minSlots == 0) {
       // No slots at all. Scan elements immediately.
       goto scan_value_range;
     }
@@ -1870,13 +1981,12 @@ scan_obj: {
   kind = SlotsOrElementsKind::FixedSlots;
   index = 0;
 
-  if (nslots > nfixed) {
-    // Push dynamic slots for later scan.
-    marker->pushValueRange(nobj, SlotsOrElementsKind::DynamicSlots, 0,
-                           nslots - nfixed);
+  if (minSlots > nfixed) {
+    // Push dynamic slots for later scan. We don't need the exact number here.
+    marker->stack.infalliblePush(nobj, SlotsOrElementsKind::DynamicSlots, 0);
     end = nfixed;
   } else {
-    end = nslots;
+    end = minSlots;
   }
 
   // Scan any fixed slots.
@@ -1987,7 +2097,7 @@ inline JSObject* MarkStack::TaggedPtr::asRangeObject() const {
 
 inline JSRope* MarkStack::TaggedPtr::asTempRope() const {
   MOZ_ASSERT(tag() == TempRopeTag);
-  return &ptr()->as<JSString>()->asRope();
+  return static_cast<JSRope*>(ptr()->as<JSString>());
 }
 
 inline MarkStack::SlotsOrElementsRange::SlotsOrElementsRange(
@@ -2481,7 +2591,6 @@ void GCMarker::start() {
   MOZ_ASSERT(state == NotActive);
   MOZ_ASSERT(stack.isEmpty());
   state = RegularMarking;
-  haveAllImplicitEdges = true;
   setMarkColor(MarkColor::Black);
 }
 
@@ -2489,6 +2598,21 @@ static void ClearEphemeronEdges(JSRuntime* rt) {
   for (GCZonesIter zone(rt); !zone.done(); zone.next()) {
     zone->gcEphemeronEdges().clearAndCompact();
   }
+}
+
+void GCMarker::deactivate() {
+  if (haveSwappedStacks) {
+    swapMarkStacks();
+  }
+  MOZ_ASSERT(markColor() == MarkColor::Black);
+  MOZ_ASSERT(!haveSwappedStacks);
+
+  state = NotActive;
+
+  MOZ_ASSERT(isDrained());
+  ClearEphemeronEdges(runtime());
+  otherStack.clearAndFreeStack();
+  unmarkGrayStack.clearAndFree();
 }
 
 void GCMarker::stop() {
@@ -2499,37 +2623,32 @@ void GCMarker::stop() {
     MOZ_ASSERT(!haveSwappedStacks);
     return;
   }
-  state = NotActive;
 
-  if (haveSwappedStacks) {
-    swapMarkStacks();
+  deactivate();
+}
+
+void GCRuntime::resetDeferredWeakMaps() {
+  for (auto* list : {&blackDeferredMaps, &grayDeferredMaps}) {
+    // Move deferred weakmaps back to their per-Zone lists.
+    while (auto* map = list->ref().popFirst()) {
+      MOZ_ASSERT(!map->isSystem());
+      map->zone()->gcMarkedUserWeakMaps().pushBack(map);
+    }
   }
-  otherStack.clearAndFreeStack();
-  ClearEphemeronEdges(runtime());
-  unmarkGrayStack.clearAndFree();
 }
 
 void GCMarker::reset() {
   state = NotActive;
 
-  setMarkColor(MarkColor::Black);
-  if (haveSwappedStacks) {
-    swapMarkStacks();
-  }
-
   stack.clearAndResetCapacity();
-  otherStack.clearAndFreeStack();
-  ClearEphemeronEdges(runtime());
+  setMarkColor(MarkColor::Black);
 
 #ifdef JS_GC_CONCURRENT_MARKING
   blackMainThreadBuffer_.ref().clearAndFree();
   grayMainThreadBuffer_.ref().clearAndFree();
 #endif
 
-  MOZ_ASSERT(isDrained());
-  MOZ_ASSERT(!haveSwappedStacks);
-
-  unmarkGrayStack.clearAndFree();
+  deactivate();
 }
 
 void GCMarker::setMarkColor(gc::MarkColor newColor) {
@@ -2604,6 +2723,20 @@ void GCMarker::leaveConcurrentMarkingMode() {
   setMarkingStateAndTracer<MarkingTracer>(ConcurrentMarking, RegularMarking);
 }
 
+void GCMarker::enterSingleThreadedMode() {
+  if (state == ParallelMarking) {
+    setMarkingStateAndTracer<ParallelMarkingTracer>(
+        ParallelMarking, ParallelMarkingSingleThread);
+  }
+}
+
+void GCMarker::leaveSingleThreadedMode() {
+  if (state == ParallelMarkingSingleThread) {
+    setMarkingStateAndTracer<ParallelMarkingTracer>(ParallelMarkingSingleThread,
+                                                    ParallelMarking);
+  }
+}
+
 // It may not be worth the overhead of donating very few mark stack entries. For
 // some (non-parallelizable) workloads this could lead to constantly
 // interrupting marking work and makes parallel marking slower than single
@@ -2635,7 +2768,7 @@ void GCMarker::setMarkingStateAndTracer(MarkingState prev, MarkingState next) {
 
 bool GCMarker::enterWeakMarkingMode() {
   MOZ_ASSERT(tracer()->weakMapAction() == JS::WeakMapTraceAction::Expand);
-  if (!haveAllImplicitEdges) {
+  if (!runtime()->gc.haveAllImplicitEdges()) {
     return false;
   }
 
@@ -2712,7 +2845,7 @@ void GCMarker::leaveWeakMarkingMode() {
 }
 
 void GCMarker::abortLinearWeakMarking() {
-  haveAllImplicitEdges = false;
+  runtime()->gc.clearHaveAllImplicitEdges();
   if (state == WeakMarking) {
     leaveWeakMarkingMode();
   }
@@ -2794,7 +2927,7 @@ void GCRuntime::processDelayedMarkingList(MarkColor color) {
         markDelayedChildren(arena, color);
       }
     }
-    if (marker().hasEntriesForCurrentColor()) {
+    if (marker().hasEntriesForCurrentColor() || hasDeferredWeakMaps(color)) {
       MOZ_ALWAYS_TRUE(marker().matchTracer([](auto& trc) {
         SliceBudget budget = SliceBudget::unlimited();
         return trc.markCurrentColor(budget);
@@ -2803,11 +2936,14 @@ void GCRuntime::processDelayedMarkingList(MarkColor color) {
   } while (delayedMarkingWorkAdded);
 
   MOZ_ASSERT(marker().isDrained());
+  MOZ_ASSERT(blackDeferredMaps.ref().isEmpty());
+  MOZ_ASSERT_IF(color == MarkColor::Gray, grayDeferredMaps.ref().isEmpty());
 }
 
 void GCRuntime::markAllDelayedChildren(ShouldReportMarkTime reportTime) {
   MOZ_ASSERT(CurrentThreadIsMainThread() || CurrentThreadIsPerformingGC());
-  MOZ_ASSERT(marker().isMarkStackEmpty());
+  MOZ_ASSERT(marker().isDrained());
+  MOZ_ASSERT(!hasAnyDeferredWeakMaps());
   MOZ_ASSERT(hasDelayedMarking());
 
   mozilla::Maybe<gcstats::AutoPhase> ap;
@@ -2826,6 +2962,7 @@ void GCRuntime::markAllDelayedChildren(ShouldReportMarkTime reportTime) {
   }
 
   MOZ_ASSERT(!hasDelayedMarking());
+  MOZ_ASSERT(!hasAnyDeferredWeakMaps());
 }
 
 void GCRuntime::rebuildDelayedMarkingList() {
@@ -3159,7 +3296,8 @@ class js::gc::UnmarkGrayTracer final
   // collector will fix up any color mismatches involving weakmaps when it runs.
   explicit UnmarkGrayTracer(BarrierTracer* barrierTracer)
       : Base(barrierTracer->runtime(), JS::TracerKind::UnmarkGray,
-             JS::WeakMapTraceAction::Skip),
+             JS::TraceOptions(JS::WeakMapTraceAction::Skip,
+                              JS::WeakEdgeTraceAction::Skip)),
         unmarkedAny(false),
         oom(false),
         barrierTracer(barrierTracer),

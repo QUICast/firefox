@@ -2,8 +2,6 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-import { PrefFlipsFeature } from "resource://nimbus/lib/PrefFlipsFeature.sys.mjs";
-
 const lazy = {};
 
 ChromeUtils.defineESModuleGetters(lazy, {
@@ -16,6 +14,7 @@ ChromeUtils.defineESModuleGetters(lazy, {
   NimbusFeatures: "resource://nimbus/ExperimentAPI.sys.mjs",
   NimbusTelemetry: "resource://nimbus/lib/Telemetry.sys.mjs",
   NormandyUtils: "resource://normandy/lib/NormandyUtils.sys.mjs",
+  PrefFlipsFeature: "resource://nimbus/lib/PrefFlipsFeature.sys.mjs",
   PrefUtils: "moz-src:///toolkit/modules/PrefUtils.sys.mjs",
   EnrollmentsContext:
     "resource://nimbus/lib/RemoteSettingsExperimentLoader.sys.mjs",
@@ -328,7 +327,7 @@ export class ExperimentManager {
 
     this._prefs = new Map();
     this._prefsBySlug = new Map();
-    this._prefFlips = new PrefFlipsFeature({ manager: this });
+    this._prefFlips = new lazy.PrefFlipsFeature({ manager: this });
 
     await this.store.ready();
     this.extraContext = extraContext;
@@ -1175,6 +1174,7 @@ export class ExperimentManager {
         UnenrollReason.TARGETING_MISMATCH,
         UnenrollReason.ROLLOUTS_OPT_OUT,
         UnenrollReason.STUDIES_OPT_OUT,
+        UnenrollReason.RECIPE_NOT_SEEN,
       ].includes(enrollment.unenrollReason)
     ) {
       // We only re-enroll if we match targeting and bucketing and the unenroll
@@ -1508,13 +1508,6 @@ export class ExperimentManager {
             // If there is another enrollment that has already set the pref we
             // care about, we use its stored originalValue.
             originalValue = conflictingPref.originalValue;
-          } else if (
-            prefBranch === "user" &&
-            !Services.prefs.prefHasUserValue(prefName)
-          ) {
-            // If there is a default value set, then attempting to read the user
-            // branch would result in returning the default branch value.
-            originalValue = null;
           } else {
             // If there is an active prefFlips experiment for this pref on this
             // branch, we must use its originalValue.
@@ -1525,9 +1518,10 @@ export class ExperimentManager {
             if (typeof prefFlipValue !== "undefined") {
               originalValue = prefFlipValue;
             } else {
-              originalValue = lazy.PrefUtils.getPref(prefName, {
-                branch: prefBranch,
-              });
+              originalValue = lazy.PrefUtils.getPrefStrict(
+                prefName,
+                prefBranch
+              );
             }
           }
 
@@ -1974,7 +1968,7 @@ export class ExperimentManager {
     const cause = UnenrollmentCause.ChangedPref(
       {
         name: pref.name,
-        branch: PrefFlipsFeature.determinePrefChangeBranch(
+        branch: lazy.PrefFlipsFeature.determinePrefChangeBranch(
           pref.name,
           pref.branch,
           feature.value[pref.variable]

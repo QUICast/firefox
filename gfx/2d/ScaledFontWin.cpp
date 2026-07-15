@@ -3,17 +3,14 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "ScaledFontWin.h"
-#include "UnscaledFontGDI.h"
 
 #include "AutoHelpersWin.h"
-#include "Logging.h"
-#include "nsString.h"
-
-#include "skia/include/ports/SkTypeface_win.h"
-
-#include "cairo-win32.h"
-
 #include "HelpersWinFonts.h"
+#include "Logging.h"
+#include "UnscaledFontGDI.h"
+#include "cairo-win32.h"
+#include "nsString.h"
+#include "skia/include/ports/SkTypeface_win.h"
 
 namespace mozilla {
 namespace gfx {
@@ -40,7 +37,7 @@ bool UnscaledFontGDI::GetFontFileData(FontFileDataOutput aDataCallback,
     }
   }
 
-  UniquePtr<uint8_t[]> fontData(new uint8_t[tableSize]);
+  auto fontData = MakeUnique<uint8_t[]>(tableSize);
 
   uint32_t sizeGot =
       ::GetFontData(dc.GetDC(), table, 0, fontData.get(), tableSize);
@@ -83,7 +80,7 @@ already_AddRefed<UnscaledFont> UnscaledFontGDI::CreateFromFontDescriptor(
   }
 
   const LOGFONT* logFont = reinterpret_cast<const LOGFONT*>(aData);
-  RefPtr<UnscaledFont> unscaledFont = new UnscaledFontGDI(*logFont);
+  RefPtr unscaledFont = MakeRefPtr<UnscaledFontGDI>(*logFont);
   return unscaledFont.forget();
 }
 

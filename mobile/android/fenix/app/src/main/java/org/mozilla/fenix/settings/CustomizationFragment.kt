@@ -30,10 +30,10 @@ import org.mozilla.fenix.GleanMetrics.ToolbarSettings
 import org.mozilla.fenix.R
 import org.mozilla.fenix.components.toolbar.ToolbarPosition
 import org.mozilla.fenix.e2e.SystemInsetsPaddedFragment
+import org.mozilla.fenix.ext.components
 import org.mozilla.fenix.ext.isTallWindow
 import org.mozilla.fenix.ext.isWideWindow
 import org.mozilla.fenix.ext.requireComponents
-import org.mozilla.fenix.ext.settings
 import org.mozilla.fenix.ext.showToolbar
 import org.mozilla.fenix.utils.Settings
 import org.mozilla.fenix.utils.view.addToRadioGroup
@@ -137,12 +137,18 @@ class CustomizationFragment : PreferenceFragmentCompat(), SystemInsetsPaddedFrag
         val category = requirePreference<PreferenceCategory>(
             R.string.pref_key_customization_category_toolbar_shortcut,
         )
-        val settings = requireContext().settings()
+        val settings = requireComponents.settings
         val isExpandedToolbarEnabled = settings.shouldUseExpandedToolbar && isTallWindow() && !isWideWindow()
         val isAnyShortcutSelectedForSimpleToolbar = settings.toolbarSimpleShortcutKey != ShortcutType.NONE.value
 
         val shortcutPreference = if (isExpandedToolbarEnabled) {
             buildExpandedToolbarCustomButtonSetting()
+        } else if (settings.isTabStripEnabled) {
+            if (settings.toolbarTabStripShortcutKey != ShortcutType.NONE.value) {
+                buildTabStripToolbarWithCustomButtonSelectedSetting()
+            } else {
+                buildTabStripToolbarWithNoCustomButtonSelectedSetting()
+            }
         } else if (isAnyShortcutSelectedForSimpleToolbar) {
             buildSimpleToolbarWithCustomButtonSelectedSetting()
         } else {
@@ -176,6 +182,28 @@ class CustomizationFragment : PreferenceFragmentCompat(), SystemInsetsPaddedFrag
     private fun buildSimpleToolbarWithNoCustomButtonSelectedSetting() =
         ToolbarSimpleNoShortcutPreference(requireContext()).apply {
             key = getString(R.string.pref_key_toolbar_simple_no_shortcut)
+            layoutResource = R.layout.preference_toolbar_shortcut
+            optionChangedListener = { newOption ->
+                if (newOption == null || newOption.key.value != ShortcutType.NONE.value) {
+                    updateToolbarShortcut()
+                }
+            }
+        }
+
+    private fun buildTabStripToolbarWithCustomButtonSelectedSetting() =
+        ToolbarTabStripShortcutPreference(requireContext()).apply {
+            key = getString(R.string.pref_key_toolbar_tab_strip_shortcut)
+            layoutResource = R.layout.preference_toolbar_shortcut
+            optionChangedListener = { newOption ->
+                if (newOption == null || newOption.key.value == ShortcutType.NONE.value) {
+                    updateToolbarShortcut()
+                }
+            }
+        }
+
+    private fun buildTabStripToolbarWithNoCustomButtonSelectedSetting() =
+        ToolbarTabStripNoShortcutPreference(requireContext()).apply {
+            key = getString(R.string.pref_key_toolbar_tab_strip_no_shortcut)
             layoutResource = R.layout.preference_toolbar_shortcut
             optionChangedListener = { newOption ->
                 if (newOption == null || newOption.key.value != ShortcutType.NONE.value) {
@@ -264,7 +292,7 @@ class CustomizationFragment : PreferenceFragmentCompat(), SystemInsetsPaddedFrag
             updateToolbarLayoutIcons()
         }
 
-        val toolbarPosition = requireContext().settings().toolbarPosition
+        val toolbarPosition = requireComponents.settings.toolbarPosition
         topPreference.setCheckedWithoutClickListener(toolbarPosition == ToolbarPosition.TOP)
         bottomPreference.setCheckedWithoutClickListener(toolbarPosition == ToolbarPosition.BOTTOM)
 
@@ -279,9 +307,10 @@ class CustomizationFragment : PreferenceFragmentCompat(), SystemInsetsPaddedFrag
 
         tabStripSwitch.setOnPreferenceChangeListener { _, newValue ->
             val enabled = newValue as Boolean
-            context.settings().isTabStripEnabled = enabled
+            context.components.settings.isTabStripEnabled = enabled
             updateToolbarCategoryBasedOnTabStrip(enabled)
             setupToolbarLayout()
+            updateToolbarShortcut()
             true
         }
     }
@@ -300,7 +329,7 @@ class CustomizationFragment : PreferenceFragmentCompat(), SystemInsetsPaddedFrag
 
     private fun updateToolbarLayoutIcons() {
         (requirePreference(R.string.pref_key_toolbar_expanded) as ToggleRadioButtonPreference).apply {
-            if (requireContext().settings().shouldUseBottomToolbar) {
+            if (requireComponents.settings.shouldUseBottomToolbar) {
                 updateIcon(R.drawable.ic_toolbar_bottom_expanded, R.drawable.ic_toolbar_bottom_simple)
             } else {
                 updateIcon(R.drawable.ic_toolbar_top_expanded, R.drawable.ic_toolbar_top_simple)
@@ -315,24 +344,24 @@ class CustomizationFragment : PreferenceFragmentCompat(), SystemInsetsPaddedFrag
     ) {
         requirePreference<SwitchPreferenceCompat>(R.string.pref_key_website_pull_to_refresh).apply {
             isVisible = FeatureFlags.PULL_TO_REFRESH_ENABLED
-            isChecked = context.settings().isPullToRefreshEnabledInBrowser
+            isChecked = context.components.settings.isPullToRefreshEnabledInBrowser
             onPreferenceChangeListener = SharedPreferenceUpdater()
         }
         requirePreference<SwitchPreferenceCompat>(R.string.pref_key_dynamic_toolbar).apply {
-            isChecked = context.settings().isDynamicToolbarEnabled
+            isChecked = context.components.settings.isDynamicToolbarEnabled
             onPreferenceChangeListener = SharedPreferenceUpdater()
         }
         requirePreference<SwitchPreferenceCompat>(R.string.pref_key_swipe_toolbar_switch_tabs).apply {
-            isChecked = context.settings().isSwipeToolbarToSwitchTabsEnabled
+            isChecked = context.components.settings.isSwipeToolbarToSwitchTabsEnabled
             isVisible = isSwipeToolbarToSwitchTabsVisible
             onPreferenceChangeListener = SharedPreferenceUpdater()
         }
         requirePreference<SwitchPreferenceCompat>(R.string.pref_key_swipe_toolbar_show_tabs).apply {
-            isChecked = context.settings().isSwipeToolbarToShowTabsEnabled
+            isChecked = context.components.settings.isSwipeToolbarToShowTabsEnabled
             onPreferenceChangeListener = SharedPreferenceUpdater()
         }
         requirePreference<SwitchPreferenceCompat>(R.string.pref_key_shake_gesture_enabled).apply {
-            isVisible = context.settings().shakeToSummarizeFeatureFlagEnabled &&
+            isVisible = context.components.settings.shakeToSummarizeFeatureFlagEnabled &&
                     isSummarizationEnabled
             isChecked = isSummarizationGestureEnabled
             onPreferenceChangeListener = { _, newValue ->
@@ -348,10 +377,10 @@ class CustomizationFragment : PreferenceFragmentCompat(), SystemInsetsPaddedFrag
     override fun onPreferenceTreeClick(preference: Preference): Boolean {
         when (preference.key) {
             resources.getString(R.string.pref_key_website_pull_to_refresh) -> {
-                PullToRefreshInBrowser.enabled.set(requireContext().settings().isPullToRefreshEnabledInBrowser)
+                PullToRefreshInBrowser.enabled.set(requireComponents.settings.isPullToRefreshEnabledInBrowser)
             }
             resources.getString(R.string.pref_key_dynamic_toolbar) -> {
-                CustomizationSettings.dynamicToolbar.set(requireContext().settings().isDynamicToolbarEnabled)
+                CustomizationSettings.dynamicToolbar.set(requireComponents.settings.isDynamicToolbarEnabled)
             }
         }
         return super.onPreferenceTreeClick(preference)

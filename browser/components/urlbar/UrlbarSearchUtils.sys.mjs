@@ -10,7 +10,7 @@
  */
 
 /**
- * @typedef {typeof import("./UrlbarUtils.sys.mjs").UrlbarUtils.RESULT_SOURCE} RESULT_SOURCE
+ * @import {UrlbarShared} from "chrome://browser/content/urlbar/UrlbarShared.mjs"
  * @import {SearchEngine} from "moz-src:///toolkit/components/search/SearchEngine.sys.mjs"
  */
 
@@ -177,8 +177,11 @@ class SearchUtils {
       return [];
     }
 
+    let engines = await lazy.SearchService.getVisibleEngines();
+    let orderedEngines = this.#orderEnginesForAliases(engines);
+
     let tokenAliasEngines = [];
-    for (let engine of await lazy.SearchService.getVisibleEngines()) {
+    for (let engine of orderedEngines) {
       let tokenAliases = this._aliasesForEngine(engine).filter(a =>
         a.startsWith("@")
       );
@@ -291,7 +294,7 @@ class SearchUtils {
    *
    * @param {UrlbarResult} result
    *   The result to evaluate
-   * @param {Values<typeof lazy.UrlbarUtils.RESULT_SOURCE>[]} [allowedSources]
+   * @param {Values<typeof UrlbarShared.RESULT_SOURCE>[]} [allowedSources]
    *   Array of allowed result sources. if defined, the result must be from one
    *   of these sources to be evaluated as a SERP, otherwise this will return
    *   false.
@@ -326,25 +329,27 @@ class SearchUtils {
     Services.obs.addObserver(this, SEARCH_ENGINE_TOPIC, true);
   }
 
-  async _refreshEnginesByAlias() {
-    // See the comment at the top of this file.  The only reason we need this
-    // class is for O(1) case-insensitive lookup for search aliases, which is
-    // facilitated by _enginesByAlias.
-    this._enginesByAlias = new Map();
+  /**
+   * Orders engines into the precedence used to resolve duplicate engine aliases.
+   * This specific order is used so that if there are duplicates, we try and
+   * reflect what the user would expect.
+   *
+   * 1) The default engine
+   * 2) The private default
+   * 3) Application-provided engines
+   * 4) Any remaining engines (Add-on, OpenSearch, User)
+   *
+   * @param {SearchEngine[]} engines
+   *   The engines to order, typically the visible engines from the search
+   *   service.
+   * @returns {IterableIterator<SearchEngine>}
+   *   The engines ordered by alias precedence.
+   */
+  #orderEnginesForAliases(engines) {
+    let orderedEngines = new Set();
 
-    // The alias map is built using a specific order, so that if there are
-    // duplicates, we try and reflect what the user would expect. In the sections
-    // below, if a duplicate is found later, then it is skipped.
-
-    // First add the default engines to the map.
-    let defaultEngine = lazy.SearchService.defaultEngine;
-    this.#addAliasesForEngine(defaultEngine);
-    let defaultPrivateEngine = lazy.SearchService.defaultPrivateEngine;
-    if (defaultPrivateEngine) {
-      this.#addAliasesForEngine(defaultPrivateEngine);
-    }
-
-    let engines = await lazy.SearchService.getVisibleEngines();
+    orderedEngines.add(lazy.SearchService.defaultEngine);
+    orderedEngines.add(lazy.SearchService.defaultPrivateEngine);
 
     // Now add the application provided engines. Generally if there's a duplicate
     // within these, it will be because the duplicate was added by an add-on or
@@ -352,20 +357,29 @@ class SearchUtils {
     // the other engine has been set as duplicate.
     for (let engine of engines) {
       if (engine instanceof lazy.AppProvidedConfigEngine) {
-        this.#addAliasesForEngine(engine);
+        orderedEngines.add(engine);
       }
     }
 
-    // For any other engines, we add them to the map if the alias doesn't exist
+    // For any other engines, we add them if the alias doesn't exist
     // yet.
     for (let engine of engines) {
-      if (
-        !(engine instanceof lazy.AppProvidedConfigEngine) &&
-        engine != defaultEngine &&
-        engine != defaultPrivateEngine
-      ) {
-        this.#addAliasesForEngine(engine);
-      }
+      orderedEngines.add(engine);
+    }
+
+    return orderedEngines.values();
+  }
+
+  async _refreshEnginesByAlias() {
+    // See the comment at the top of this file.  The only reason we need this
+    // class is for O(1) case-insensitive lookup for search aliases, which is
+    // facilitated by _enginesByAlias.
+    this._enginesByAlias = new Map();
+    let engines = await lazy.SearchService.getVisibleEngines();
+    let orderedEngines = this.#orderEnginesForAliases(engines);
+
+    for (let engine of orderedEngines) {
+      this.#addAliasesForEngine(engine);
     }
   }
 

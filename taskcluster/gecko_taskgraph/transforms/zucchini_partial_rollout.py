@@ -5,7 +5,8 @@
 from taskgraph.transforms.base import TransformSequence
 from taskgraph.util.dependencies import get_primary_dependency
 
-transforms = TransformSequence()
+zucchini_transforms = TransformSequence()
+partials_transforms = TransformSequence()
 
 # Projects that will use the legacy "partials" implementation as upstream.
 # These stable release channels continue using the proven implementation while
@@ -17,12 +18,24 @@ transforms = TransformSequence()
 LEGACY_PARTIALS_PROJECTS = {
     "mozilla-release",
     "mozilla-esr115",
-    "mozilla-esr128",
     "mozilla-esr140",
 }
 
 
-@transforms.add
+@partials_transforms.add
+def filter_legacy_partials_by_project(config, tasks):
+    """Only generate legacy "partials" tasks on legacy release channels.
+
+    partials-zucchini is used on every other project, so on non-legacy projects
+    we skip generating the legacy "partials" tasks entirely. This is the inverse
+    of the filtering applied by the zucchini_transforms below.
+    """
+    if config.params["project"] not in LEGACY_PARTIALS_PROJECTS:
+        return
+    yield from tasks
+
+
+@zucchini_transforms.add
 def filter_partials_by_project(config, tasks):
     """Control the rollout of partials-zucchini across release channels.
 

@@ -156,6 +156,17 @@ void nsIContent::UnbindFromTree(nsINode* aNewParent,
   UnbindFromTree(context);
 }
 
+HTMLSlotElement* nsIContent::GetAssignedSlotForSelection() const {
+  HTMLSlotElement* const assignedSlot = GetAssignedSlot();
+  if (!assignedSlot) {
+    return nullptr;
+  }
+  ShadowRoot* const containingShadowRoot = assignedSlot->GetContainingShadow();
+  return containingShadowRoot && !containingShadowRoot->IsUAWidget()
+             ? assignedSlot
+             : nullptr;
+}
+
 // https://dom.spec.whatwg.org/#dom-slotable-assignedslot
 HTMLSlotElement* nsIContent::GetAssignedSlotByMode() const {
   /**
@@ -287,6 +298,18 @@ nsresult nsIContent::LookupNamespaceURIInternal(
     }
   }
   return NS_ERROR_FAILURE;
+}
+
+nsIContent* nsIContent::GetInclusiveEditableAncestor() const {
+  if (IsEditable()) {
+    return const_cast<nsIContent*>(this);
+  }
+  for (auto* const content : AncestorsOfType<nsIContent>()) {
+    if (content->IsEditable()) {
+      return content;
+    }
+  }
+  return nullptr;
 }
 
 nsAtom* nsIContent::GetLang() const {

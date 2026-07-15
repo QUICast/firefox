@@ -5,16 +5,18 @@
 #ifndef DMABufSurface_h_
 #define DMABufSurface_h_
 
-#include <functional>
 #include <stdint.h>
-#include "mozilla/widget/va_drmcommon.h"
+
+#include <functional>
+
 #include "GLTypes.h"
 #include "ImageContainer.h"
-#include "nsISupportsImpl.h"
-#include "mozilla/gfx/Types.h"
 #include "mozilla/Mutex.h"
+#include "mozilla/gfx/Types.h"
 #include "mozilla/webgpu/ffi/wgpu.h"
 #include "mozilla/widget/DMABufFormats.h"
+#include "mozilla/widget/va_drmcommon.h"
+#include "nsISupportsImpl.h"
 
 typedef void* EGLImageKHR;
 typedef void* EGLSyncKHR;
@@ -227,7 +229,7 @@ class DMABufSurface {
 
 #ifdef MOZ_LOGGING
   virtual void Clear(unsigned int aValue) {};
-  virtual void DumpToFile(const char* pFile) {};
+  virtual void DumpToFile(const char* pFile) = 0;
 #endif
 
 #ifdef MOZ_WAYLAND
@@ -499,6 +501,10 @@ class DMABufSurfaceYUV final : public DMABufSurface {
 
 #ifdef MOZ_WAYLAND
   wl_buffer* CreateWlBuffer() override;
+#endif
+
+#ifdef MOZ_LOGGING
+  void DumpToFile(const char* pFile) override;
 #endif
 
  private:

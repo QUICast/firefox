@@ -10,8 +10,8 @@ origin:
 
   url: https://xiph.org/vorbis/
 
-  release: 1c5f57a2c42ddac91e5c5bb70eb4c56099d442a9 (2026-05-16T18:21:44.000+00:00).
-  revision: 1c5f57a2c42ddac91e5c5bb70eb4c56099d442a9
+  release: e3c9861ff096d52378e131ff8c334552e09cdffa (2026-06-08T13:57:34.000+00:00).
+  revision: e3c9861ff096d52378e131ff8c334552e09cdffa
 
 
   license: BSD-3-Clause

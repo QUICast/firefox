@@ -63,12 +63,12 @@ sysroot-x86_64-linux-gnu-x11:
         arguments:
             - amd64
 
-sysroot-wasm32-wasi-clang-17:
+sysroot-wasm32-wasi-clang-19:
     description: "Sysroot for wasi"
     attributes:
         local-toolchain: true
     treeherder:
-        symbol: TL(sysroot-wasi-17)
+        symbol: TL(sysroot-wasi-19)
     run:
         script: build-sysroot-wasi.sh
         arguments:
@@ -79,32 +79,11 @@ sysroot-wasm32-wasi-clang-17:
         toolchain-artifact: public/build/sysroot-wasm32-wasi.tar.zst
     fetches:
         fetch:
-            - clang-17
+            - clang-19
             - wasi-sdk
         toolchain:
-            - linux64-clang-17-raw
-            - wasm32-wasi-compiler-rt-17
-
-sysroot-wasm32-wasi-clang-20:
-    description: "Sysroot for wasi"
-    attributes:
-        local-toolchain: true
-    treeherder:
-        symbol: TL(sysroot-wasi-20)
-    run:
-        script: build-sysroot-wasi.sh
-        arguments:
-            - wasi-sdk.patch
-        resources:
-            - taskcluster/scripts/misc/wasi-sdk.patch
-        toolchain-artifact: public/build/sysroot-wasm32-wasi.tar.zst
-    fetches:
-        fetch:
-            - clang-20
-            - wasi-sdk
-        toolchain:
-            - linux64-clang-20-stage1
-            - wasm32-wasi-compiler-rt-20
+            - linux64-clang-19-raw
+            - wasm32-wasi-compiler-rt-19
 
 sysroot-wasm32-wasi-clang-21:
     description: "Sysroot for wasi"
@@ -237,6 +216,8 @@ linux64-toolchain-sysroot:
             - libicu-dev
             # For libdmg-hfsplus
             - liblzma-dev
+            # For socorro-cli
+            - libdbus-1-dev
 
 linux64-toolchain-sysroot-gcc10:
     description: "Sysroot for linux64 toolchain builds"
@@ -275,3 +256,5 @@ linux64-aarch64-toolchain-sysroot:
             # For clang
             - binutils-dev
             - libxml2-dev
+            # For socorro-cli
+            - libdbus-1-dev

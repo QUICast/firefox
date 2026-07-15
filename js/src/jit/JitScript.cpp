@@ -141,6 +141,9 @@ bool JSScript::createJitScript(JSContext* cx) {
       jit::OptimizationInfo::baseWarmUpThresholdForScript(cx, this);
   jitScript->setIonThreshold(baseWarmUpThreshold);
 
+  // Ensure concurrent marking doesn't see uninitialized jitScript.
+  MemoryReleaseFence(cx->zone());
+
   warmUpData_.initJitScript(jitScript.release());
   AddCellMemory(this, allocSize.value(), MemoryUse::JitScript);
 
@@ -195,17 +198,17 @@ void JitScript::trace(JSTracer* trc) {
 
   icScript_.trace(trc);
 
-  if (hasBaselineScript()) {
-    baselineScript()->trace(trc);
+  BaselineScript* baselineScript = baselineScript_.getForTracing();
+  if (baselineScript && IsBaselineScript(baselineScript)) {
+    baselineScript->trace(trc);
   }
 
-  if (hasIonScript()) {
-    ionScript()->trace(trc);
+  IonScript* ionScript = ionScript_.getForTracing();
+  if (ionScript && IsIonScript(ionScript)) {
+    ionScript->trace(trc);
   }
 
-  if (templateEnv_.isSome()) {
-    TraceEdge(trc, templateEnv_.ptr(), "jitscript-template-env");
-  }
+  TraceEdge(trc, &templateEnv_, "jitscript-template-env");
 
   if (hasInliningRoot()) {
     inliningRoot()->trace(trc);
@@ -419,6 +422,7 @@ void JitScript::prepareForDestruction(Zone* zone) {
   owningScript_ = nullptr;
   baselineScript_.set(zone, nullptr);
   ionScript_.set(zone, nullptr);
+  templateEnv_ = nullptr;
 }
 
 struct FallbackStubs {
@@ -581,13 +585,15 @@ void ICScript::purgeStubs(Zone* zone, ICStubSpace& newStubSpace) {
 
 bool JitScript::ensureHasCachedBaselineJitData(JSContext* cx,
                                                HandleScript script) {
-  if (templateEnv_.isSome()) {
+  if (flags_.initializedTemplateEnv) {
     return true;
   }
 
+  MOZ_ASSERT(!templateEnv_);
+
   if (!script->function() ||
       !script->function()->needsFunctionEnvironmentObjects()) {
-    templateEnv_.emplace();
+    flags_.initializedTemplateEnv = true;
     return true;
   }
 
@@ -608,7 +614,8 @@ bool JitScript::ensureHasCachedBaselineJitData(JSContext* cx,
     }
   }
 
-  templateEnv_.emplace(templateEnv);
+  templateEnv_ = templateEnv;
+  flags_.initializedTemplateEnv = true;
   return true;
 }
 

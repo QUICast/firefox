@@ -89,8 +89,8 @@ class ProjectPlugin : Plugin<Project> {
     private fun configureJniKeepDebugSymbols(project: Project) {
         val action = Action<AppliedPlugin> {
             val android = project.extensions.getByName("android")
-            val packagingOptions = android.javaClass.getMethod("getPackagingOptions").invoke(android)
-            val jniLibs = packagingOptions.javaClass.getMethod("getJniLibs").invoke(packagingOptions)
+            val packaging = android.javaClass.getMethod("getPackaging").invoke(android)
+            val jniLibs = packaging.javaClass.getMethod("getJniLibs").invoke(packaging)
             val keepDebugSymbols = jniLibs.javaClass.getMethod("getKeepDebugSymbols").invoke(jniLibs)
             (keepDebugSymbols as MutableSet<String>).add("**/*.so")
         }
@@ -98,6 +98,8 @@ class ProjectPlugin : Plugin<Project> {
         project.pluginManager.withPlugin("com.android.application", action)
     }
 
+    // Querying whether :geckoview is part of the build composition; no project-isolation-safe alternative.
+    @Suppress("GradleProjectIsolation")
     private fun configureAppServicesSubstitution(
         project: Project,
         extraProperties: org.gradle.api.plugins.ExtraPropertiesExtension,
@@ -248,6 +250,8 @@ class ProjectPlugin : Plugin<Project> {
         }
     }
 
+    // Reads rootProject extra properties; IsolatedProject does not expose extensions/extraProperties.
+    @Suppress("GradleProjectIsolation")
     private fun configureKotlinJvmToolchain(project: Project) {
         // Wait for Android plugin first to ensure Java plugin extension exists
         project.pluginManager.withPlugin("com.android.base") {
@@ -314,7 +318,7 @@ class ProjectPlugin : Plugin<Project> {
     private fun configureKtlint(project: Project, mozilla: ProjectExtension) {
         val sourcePaths = mozilla.ktlintSourcePaths
 
-        val ktlintConfig = project.configurations.create("ktlint")
+        val ktlintConfig = project.configurations.register("ktlint")
 
         val ktlintDep = project.provider {
             val versionCatalogs = project.extensions.getByType(VersionCatalogsExtension::class.java)
@@ -327,7 +331,8 @@ class ProjectPlugin : Plugin<Project> {
             }
             dep
         }
-        ktlintConfig.dependencies.addLater(ktlintDep)
+        ktlintConfig.configure { dependencies.addLater(ktlintDep) }
+        val ktlintClasspath = project.files(ktlintConfig)
 
         // Resolve the include/exclude globs (with leading "!" meaning exclude)
         // into a FileTree rooted at projectDir, so Gradle can use the actual
@@ -345,7 +350,7 @@ class ProjectPlugin : Plugin<Project> {
         project.tasks.register("ktlint", JavaExec::class.java) {
             group = "verification"
             description = "Check Kotlin code style."
-            classpath = ktlintConfig
+            classpath = ktlintClasspath
             mainClass.set("com.pinterest.ktlint.Main")
             onlyIf { sourcePaths.get().isNotEmpty() }
             sourcePaths.get().forEach { args(it) }
@@ -363,7 +368,7 @@ class ProjectPlugin : Plugin<Project> {
         project.tasks.register("ktlintFormat", JavaExec::class.java) {
             group = "formatting"
             description = "Fix Kotlin code style deviations."
-            classpath = ktlintConfig
+            classpath = ktlintClasspath
             mainClass.set("com.pinterest.ktlint.Main")
             onlyIf { sourcePaths.get().isNotEmpty() }
             args("-F")
@@ -402,8 +407,8 @@ class ProjectPlugin : Plugin<Project> {
     private fun configurePackagingResourcesExcludes(project: Project) {
         val action = Action<AppliedPlugin> {
             val android = project.extensions.getByName("android")
-            val packagingOptions = android.javaClass.getMethod("getPackagingOptions").invoke(android)
-            val resources = packagingOptions.javaClass.getMethod("getResources").invoke(packagingOptions)
+            val packaging = android.javaClass.getMethod("getPackaging").invoke(android)
+            val resources = packaging.javaClass.getMethod("getResources").invoke(packaging)
             val excludes = resources.javaClass.getMethod("getExcludes").invoke(resources) as MutableSet<String>
             excludes.addAll(listOf("META-INF/LICENSE.md", "META-INF/LICENSE-notice.md"))
         }
@@ -414,48 +419,83 @@ class ProjectPlugin : Plugin<Project> {
     @Suppress("UNCHECKED_CAST")
     private fun registerPrintVariantsTask(project: Project) {
         project.pluginManager.withPlugin("com.android.application") {
-            val android = project.extensions.getByName("android")
             val outputFile = project.file("build/printVariants.json")
+            val variants = mutableListOf<Map<String, Any?>>()
 
-            project.tasks.register("printVariants") {
-                val variants = project.provider {
-                    val applicationVariants = android.javaClass
-                        .getMethod("getApplicationVariants").invoke(android) as Iterable<*>
+            // Only collect variant metadata when printVariants is actually being run. onVariants is a
+            // configuration-time callback (unlike the legacy applicationVariants collection, which we could
+            // wrap in a lazy provider resolved at execution), so gating its registration keeps the
+            // reflection out of every other build that configures this project.
+            val wantsPrintVariants = project.gradle.startParameter.taskNames.any {
+                it.substringAfterLast(':') == "printVariants"
+            }
+            if (wantsPrintVariants) {
+                val androidComponents = project.extensions.getByName("androidComponents")
+                val android = project.extensions.getByName("android")
+                val buildTypes = android.javaClass.getMethod("getBuildTypes").invoke(android)
 
-                    applicationVariants.map { variant ->
-                        val outputs = variant!!.javaClass
-                            .getMethod("getOutputs").invoke(variant) as Iterable<*>
-                        val buildType = variant.javaClass
-                            .getMethod("getBuildType").invoke(variant)
-                        val buildTypeName = buildType!!.javaClass
-                            .getMethod("getName").invoke(buildType) as String
-                        val variantName = variant.javaClass
-                            .getMethod("getName").invoke(variant) as String
+                // Collect variant metadata via the new androidComponents.onVariants API (the legacy
+                // applicationVariants API is removed in AGP 9). We go through reflection because this
+                // convention plugin has no runtime dependency on the Android Gradle plugin; its types are
+                // loaded from the consuming project's classloader. The APK file name is reconstructed from
+                // the flavor/ABI/build type since the new VariantOutput no longer exposes the output file.
+                val collectVariant = { variant: Any ->
+                    val variantName = variant.javaClass.getMethod("getName").invoke(variant) as String
+                    val buildType = variant.javaClass.getMethod("getBuildType").invoke(variant) as String?
+                    val flavorName = variant.javaClass.getMethod("getFlavorName").invoke(variant) as String?
+                    val flavorPrefix = if (!flavorName.isNullOrEmpty()) "$flavorName-" else ""
+                    // AGP appends "-unsigned" to APKs whose build type has no signing config.
+                    val signed = buildTypes.javaClass.getMethod("getByName", String::class.java)
+                        .invoke(buildTypes, buildType)
+                        .let { it.javaClass.getMethod("getSigningConfig").invoke(it) != null }
+                    val signedSuffix = if (signed) "" else "-unsigned"
+                    val outputs = variant.javaClass.getMethod("getOutputs").invoke(variant) as Iterable<*>
 
-                        mapOf(
-                            "apks" to outputs.map { output ->
-                                val filterMethod = output!!.javaClass.getMethod(
-                                    "getFilter", String::class.java
-                                )
-                                val abi = filterMethod.invoke(output, "ABI") as String?
-                                    ?: "universal"
-                                val outputFileObj = output.javaClass
-                                    .getMethod("getOutputFile").invoke(output) as java.io.File
-                                mapOf(
-                                    "abi" to abi,
-                                    "fileName" to outputFileObj.name
-                                )
-                            },
-                            "build_type" to buildTypeName,
-                            "name" to variantName
-                        )
-                    }.toMutableList()
+                    val apks = outputs.map { output ->
+                        val filters = output!!.javaClass.getMethod("getFilters").invoke(output) as Iterable<*>
+                        val abi = filters
+                            .firstOrNull { f ->
+                                val filterType = f!!.javaClass.getMethod("getFilterType").invoke(f)
+                                (filterType as Enum<*>).name == "ABI"
+                            }
+                            ?.let { f -> f!!.javaClass.getMethod("getIdentifier").invoke(f) as String }
+                            ?: "universal"
+                        mapOf("abi" to abi, "fileName" to "app-$flavorPrefix$abi-$buildType$signedSuffix.apk")
+                    }.sortedBy { it["abi"] as String }
+                    variants.add(mapOf("apks" to apks, "build_type" to buildType, "name" to variantName))
                 }
 
+                val selector = androidComponents.javaClass.getMethod("selector").invoke(androidComponents)
+                val allSelector = selector.javaClass.getMethod("all").invoke(selector)
+                // onVariants(VariantSelector, (Variant) -> Unit). The callback is a Kotlin function type;
+                // build the proxy from the method's own parameter type so it is loaded by the same
+                // (Android Gradle plugin) classloader the method expects.
+                val onVariants = androidComponents.javaClass.methods.first {
+                    it.name == "onVariants" &&
+                        it.parameterCount == 2 &&
+                        it.parameterTypes[1].name == "kotlin.jvm.functions.Function1"
+                }
+                val callbackType = onVariants.parameterTypes[1]
+                val callback = java.lang.reflect.Proxy.newProxyInstance(
+                    callbackType.classLoader,
+                    arrayOf(callbackType),
+                ) { _, method, args ->
+                    when (method.name) {
+                        "invoke" -> { collectVariant(args!![0]!!); Unit }
+                        "equals" -> false
+                        "hashCode" -> 0
+                        "toString" -> "printVariantsCollector"
+                        else -> null
+                    }
+                }
+                onVariants.invoke(androidComponents, allSelector, callback)
+            }
+
+            project.tasks.register("printVariants") {
                 outputs.file(outputFile)
 
                 doLast {
-                    val variantsList = variants.get()
+                    val variantsList = variants.toMutableList()
                     variantsList.add(
                         mapOf(
                             "apks" to listOf(

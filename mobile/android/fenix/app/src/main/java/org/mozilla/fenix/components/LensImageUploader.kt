@@ -35,26 +35,45 @@ class LensImageUploader(
 ) {
 
     /**
-     * Decodes, scales, compresses, and uploads the image at [imageUri] to Google Lens.
+     * The outcome of an image upload to Google Lens.
      *
-     * @return The Lens results URL on success, or null on failure.
+     * @property resultUrl The Lens results URL on success, or null on failure.
+     * @property httpStatusCode The HTTP status code of the Lens upload request, or null when the
+     * request was never made (for example, the image could not be decoded or downloaded).
      */
-    suspend fun upload(imageUri: Uri): String? = withContext(Dispatchers.IO) {
-        val bitmap = decodeBitmap(imageUri) ?: return@withContext null
+    data class UploadResult(
+        val resultUrl: String?,
+        val httpStatusCode: Int? = null,
+    )
+
+    /**
+     * Decodes, scales, compresses, and uploads the image at [imageUri] to Google Lens.
+     */
+    suspend fun upload(imageUri: Uri): UploadResult = withContext(Dispatchers.IO) {
+        val bitmap = decodeBitmap(imageUri) ?: return@withContext UploadResult(resultUrl = null)
         uploadBitmap(bitmap)
     }
 
     /**
      * Fetches the image at [imageUrl], then scales, compresses, and uploads it to Google Lens.
-     *
-     * @return The Lens results URL on success, or null on failure.
+     * Preferred over [buildUploadByUrl] because the browser's User-Agent and cookies are used to
+     * fetch the image, which succeeds for hosts that block Lens's own server-side fetcher.
      */
-    suspend fun uploadFromUrl(imageUrl: String): String? = withContext(Dispatchers.IO) {
-        val bitmap = fetchBitmap(imageUrl) ?: return@withContext null
+    suspend fun uploadFromUrl(imageUrl: String): UploadResult = withContext(Dispatchers.IO) {
+        val bitmap = fetchBitmap(imageUrl) ?: return@withContext UploadResult(resultUrl = null)
         uploadBitmap(bitmap)
     }
 
-    private fun uploadBitmap(bitmap: Bitmap): String? {
+    /**
+     * Builds the Google Lens "by URL" search URL for [imageUrl], letting Lens fetch the image
+     * server-side. Loading the returned URL redirects to the Lens results page. Used as a fallback
+     * when [uploadFromUrl] yields no result client-side, whether because the image could not be
+     * downloaded or because the byte upload itself produced no Lens results URL.
+     */
+    fun buildUploadByUrl(imageUrl: String): String =
+        "$UPLOAD_BY_URL_ENDPOINT?url=${Uri.encode(imageUrl)}&ep=$EP_BY_URL&${commonParams()}"
+
+    private fun uploadBitmap(bitmap: Bitmap): UploadResult {
         val scaled = scaleBitmap(bitmap)
         val scaledWidth = scaled.width
         val scaledHeight = scaled.height
@@ -64,16 +83,7 @@ class LensImageUploader(
         if (scaled !== bitmap) scaled.recycle()
         bitmap.recycle()
 
-        val metrics = context.resources.displayMetrics
-        val timestamp = System.currentTimeMillis()
-        val locale = Locale.getDefault().language
-
-        val uploadUrl = "https://lens.google.com/v3/upload" +
-            "?hl=$locale" +
-            "&vpw=${metrics.widthPixels}" +
-            "&vph=${metrics.heightPixels}" +
-            "&ep=ccm" +
-            "&st=$timestamp"
+        val uploadUrl = "$UPLOAD_ENDPOINT?${commonParams()}&ep=$EP_BY_BYTES"
 
         val boundary = "----LensBoundary${System.nanoTime()}"
 
@@ -110,11 +120,12 @@ class LensImageUploader(
         )
 
         return client.fetch(request).use { response ->
-            if (response.status in SUCCESS_RANGE && response.url != uploadUrl) {
+            val resultUrl = if (response.status in SUCCESS_RANGE && response.url != uploadUrl) {
                 response.url
             } else {
                 null
             }
+            UploadResult(resultUrl = resultUrl, httpStatusCode = response.status)
         }
     }
 
@@ -231,6 +242,18 @@ class LensImageUploader(
         return sampleSize
     }
 
+    /**
+     * Builds the query parameters common to both Lens endpoints: language override and the
+     * viewport dimensions and start time used for server-side rendering and latency tracking.
+     */
+    private fun commonParams(): String {
+        val metrics = context.resources.displayMetrics
+        return "hl=${Locale.getDefault().language}" +
+            "&vpw=${metrics.widthPixels}" +
+            "&vph=${metrics.heightPixels}" +
+            "&st=${System.currentTimeMillis()}"
+    }
+
     private fun scaleBitmap(bitmap: Bitmap): Bitmap {
         val longestDim = max(bitmap.width, bitmap.height)
         if (longestDim <= MAX_IMAGE_DIMENSION) return bitmap
@@ -248,8 +271,21 @@ class LensImageUploader(
     }
 
     companion object {
+        @VisibleForTesting
+        internal const val UPLOAD_ENDPOINT = "https://lens.google.com/upload"
+
+        @VisibleForTesting
+        internal const val UPLOAD_BY_URL_ENDPOINT = "https://lens.google.com/uploadbyurl"
+
+        // Entry-point identifiers assigned to Mozilla by Google for attribution.
+        @VisibleForTesting
+        internal const val EP_BY_BYTES = "fntpubb"
+
+        @VisibleForTesting
+        internal const val EP_BY_URL = "fntpubu"
+
         private const val MAX_IMAGE_DIMENSION = 1000
-        private const val JPEG_QUALITY = 85
+        private const val JPEG_QUALITY = 40
         private const val CONNECT_TIMEOUT_MS = 15_000
         private const val READ_TIMEOUT_MS = 30_000
         private const val ROTATE_90 = 90f

@@ -35,6 +35,7 @@ import org.mozilla.fenix.home.collections.CollectionsState
 import org.mozilla.fenix.home.interactor.HomepageInteractor
 import org.mozilla.fenix.home.pocket.PocketRecommendedStoriesCategory
 import org.mozilla.fenix.home.pocket.PocketState
+import org.mozilla.fenix.home.pocket.controller.StoriesImpressionSource
 import org.mozilla.fenix.home.pocket.interactor.PocketStoriesInteractor
 import org.mozilla.fenix.home.privatebrowsing.interactor.PrivateBrowsingInteractor
 import org.mozilla.fenix.home.recentsyncedtabs.RecentSyncedTab
@@ -55,6 +56,8 @@ import org.mozilla.fenix.home.sports.SportsInteractor
 import org.mozilla.fenix.home.store.NimbusMessageState
 import org.mozilla.fenix.home.termsofuse.PrivacyNoticeBannerInteractor
 import org.mozilla.fenix.home.termsofuse.PrivacyNoticeBannerInteractorNoOp
+import org.mozilla.fenix.home.topsites.AddShortcutEntryPoint
+import org.mozilla.fenix.home.topsites.AddShortcutSource
 import org.mozilla.fenix.home.topsites.interactor.TopSiteInteractor
 import org.mozilla.fenix.wallpapers.WallpaperState
 import java.io.File
@@ -101,6 +104,8 @@ internal object FakeHomepagePreview {
             override fun onPrivacyReportTapped() { /* no op */ }
 
             override fun onLongfoxEntryPointClicked() { /* no op */ }
+
+            override fun onLongfoxEntryPointShown() { /* no op */ }
         }
 
     internal val sportsInteractor
@@ -119,6 +124,8 @@ internal object FakeHomepagePreview {
 
             override fun onGetCustomWallpaperClicked() { /* no op */ }
 
+            override fun onSportsWidgetShareClicked() { /* no op */ }
+
             override fun onMatchClicked(homeTeam: String?, awayTeam: String?, date: String?) { /* no op */ }
 
             override fun onSportsWidgetCardShown(
@@ -136,13 +143,17 @@ internal object FakeHomepagePreview {
                 storyPosition: Triple<Int, Int, Int>,
             ) { /* no op */ }
 
-            override fun onStoriesShown(storiesShown: List<PocketStory>) { /* no op */ }
+            override fun onStoriesShown(
+                storiesShown: List<PocketStory>,
+                source: StoriesImpressionSource,
+            ) { /* no op */ }
 
             override fun onCategoryClicked(categoryClicked: PocketRecommendedStoriesCategory) { /* no op */ }
 
             override fun onStoryClicked(
                 storyClicked: PocketStory,
                 storyPosition: Triple<Int, Int, Int>,
+                source: StoriesImpressionSource,
             ) { /* no op */ }
 
             override fun onDiscoverMoreClicked() { /* no op */ }
@@ -179,6 +190,13 @@ internal object FakeHomepagePreview {
             override fun onShowAllTopSitesClicked() { /* no op */ }
 
             override fun onShortcutsLibraryViewed() { /* no op */ }
+
+            override fun onSaveShortcut(
+                title: String,
+                url: String,
+                source: AddShortcutSource,
+                entryPoint: AddShortcutEntryPoint,
+            ) { /* no op */ }
         }
 
     internal val recentTabInteractor

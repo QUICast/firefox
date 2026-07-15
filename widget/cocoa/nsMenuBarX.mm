@@ -15,22 +15,22 @@
 #include "nsMenuX.h"
 
 #include "nsCOMPtr.h"
-#include "nsString.h"
 #include "nsGkAtoms.h"
 #include "nsObjCExceptions.h"
+#include "nsString.h"
 #include "nsThreadUtils.h"
 
-#include "nsIContent.h"
-#include "nsIShellService.h"
 #include "mozilla/dom/Document.h"
 #include "nsIAppStartup.h"
+#include "nsIContent.h"
+#include "nsIShellService.h"
 #include "nsIStringBundle.h"
 #include "nsToolkitCompsCID.h"
 
 #include "mozilla/Components.h"
+#include "mozilla/Preferences.h"
 #include "mozilla/dom/Element.h"
 #include "mozilla/glean/WidgetCocoaMetrics.h"
-#include "mozilla/browser/NimbusFeatures.h"
 
 using namespace mozilla;
 using mozilla::dom::Element;
@@ -587,7 +587,7 @@ void nsMenuBarX::ApplicationMenuOpened() {
 
 #ifdef MOZ_BUILD_APP_IS_BROWSER
   // Only show if Set as Default Browser item if Nimbus allows.
-  if (NimbusFeatures::GetBool("macAppMenuSetAsDefault"_ns, "shown"_ns, false)) {
+  if (Preferences::GetBool("browser.macAppMenu.setAsDefaultShown")) {
     bool isDefaultBrowser = false;
 
     nsCOMPtr<nsIShellService> shell(do_GetService(NS_SHELLSERVICE_CONTRACTID));

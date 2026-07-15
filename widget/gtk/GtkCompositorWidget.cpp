@@ -4,8 +4,8 @@
 
 #include "GtkCompositorWidget.h"
 
-#include "mozilla/gfx/gfxVars.h"
 #include "mozilla/WidgetUtilsGtk.h"
+#include "mozilla/gfx/gfxVars.h"
 #include "mozilla/widget/PlatformWidgetTypes.h"
 #include "nsWindow.h"
 

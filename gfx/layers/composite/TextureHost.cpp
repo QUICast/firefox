@@ -4,40 +4,40 @@
 
 #include "TextureHost.h"
 
+#include <limits>
+
+#include "../opengl/CompositorOGL.h"
 #include "CompositableHost.h"  // for CompositableHost
-#include "mozilla/gfx/2D.h"    // for DataSourceSurface, Factory
+#include "gfxUtils.h"
+#include "mozilla/RefPtr.h"  // for nsRefPtr
+#include "mozilla/StaticPrefs_gfx.h"
+#include "mozilla/StaticPrefs_layers.h"
+#include "mozilla/gfx/2D.h"  // for DataSourceSurface, Factory
 #include "mozilla/gfx/CanvasManagerParent.h"
 #include "mozilla/gfx/gfxVars.h"
 #include "mozilla/ipc/Shmem.h"  // for Shmem
 #include "mozilla/layers/AsyncImagePipelineManager.h"
 #include "mozilla/layers/BufferTexture.h"
 #include "mozilla/layers/CompositableTransactionParent.h"  // for CompositableParentManager
+#include "mozilla/layers/Compositor.h"                     // for Compositor
 #include "mozilla/layers/CompositorBridgeParent.h"
-#include "mozilla/layers/Compositor.h"         // for Compositor
+#include "mozilla/layers/GPUVideoTextureHost.h"
 #include "mozilla/layers/ISurfaceAllocator.h"  // for ISurfaceAllocator
 #include "mozilla/layers/ImageBridgeParent.h"  // for ImageBridgeParent
-#include "mozilla/layers/LayersSurfaces.h"     // for SurfaceDescriptor, etc
-#include "mozilla/layers/RemoteTextureMap.h"
-#include "mozilla/layers/TextureHostOGL.h"  // for TextureHostOGL
 #include "mozilla/layers/ImageDataSerializer.h"
+#include "mozilla/layers/LayersSurfaces.h"  // for SurfaceDescriptor, etc
+#include "mozilla/layers/PTextureParent.h"
+#include "mozilla/layers/RemoteTextureMap.h"
 #include "mozilla/layers/TextureClient.h"
-#include "mozilla/layers/GPUVideoTextureHost.h"
+#include "mozilla/layers/TextureHostOGL.h"  // for TextureHostOGL
 #include "mozilla/layers/VideoBridgeParent.h"
 #include "mozilla/layers/WebRenderTextureHost.h"
-#include "mozilla/StaticPrefs_layers.h"
-#include "mozilla/StaticPrefs_gfx.h"
 #include "mozilla/webrender/RenderBufferTextureHost.h"
 #include "mozilla/webrender/RenderExternalTextureHost.h"
 #include "mozilla/webrender/RenderThread.h"
 #include "mozilla/webrender/WebRenderAPI.h"
 #include "nsAString.h"
-#include "mozilla/RefPtr.h"   // for nsRefPtr
 #include "nsPrintfCString.h"  // for nsPrintfCString
-#include "mozilla/layers/PTextureParent.h"
-#include <limits>
-#include "../opengl/CompositorOGL.h"
-
-#include "gfxUtils.h"
 
 #ifdef XP_MACOSX
 #  include "../opengl/MacIOSurfaceTextureHostOGL.h"
@@ -209,6 +209,7 @@ already_AddRefed<TextureHost> TextureHost::Create(
     case SurfaceDescriptor::TEGLImageDescriptor:
     case SurfaceDescriptor::TSurfaceTextureDescriptor:
     case SurfaceDescriptor::TSurfaceDescriptorAndroidHardwareBuffer:
+    case SurfaceDescriptor::TAndroidImageReaderImageDescriptor:
     case SurfaceDescriptor::TSurfaceDescriptorSharedGLTexture:
     case SurfaceDescriptor::TSurfaceDescriptorDMABuf:
       result = CreateTextureHostOGL(aDesc, aDeallocator, aBackend, aFlags);
@@ -496,7 +497,8 @@ BufferTextureHost::BufferTextureHost(const BufferDescriptor& aDesc,
   mUseExternalTextures =
       kMaxSize >= mSize.width && mSize.width >= kMinSize &&
       kMaxSize >= mSize.height && mSize.height >= kMinSize &&
-      StaticPrefs::gfx_webrender_enable_client_storage_AtStartup();
+      StaticPrefs::gfx_webrender_enable_client_storage_AtStartup() &&
+      !gfx::gfxVars::UseWebRenderANGLE();
 #else
   mUseExternalTextures = false;
 #endif
@@ -522,10 +524,10 @@ void BufferTextureHost::CreateRenderTexture(
   } else {
     texture = MakeRefPtr<wr::RenderBufferTextureHost>(GetBuffer(),
                                                       GetBufferDescriptor());
+  }
 
-    if (auto* shmemTextureHost = AsShmemTextureHost()) {
-      shmemTextureHost->OnRenderTextureCreated(texture);
-    }
+  if (auto* shmemTextureHost = AsShmemTextureHost()) {
+    shmemTextureHost->OnRenderTextureCreated(texture);
   }
 
   wr::RenderThread::Get()->RegisterExternalImage(aExternalImageId,
@@ -549,8 +551,8 @@ void BufferTextureHost::PushResourceUpdates(
 
   // Use native textures if our backend requires it, or if our backend doesn't
   // forbid it and we want to use them.
-  NativeTexturePolicy policy =
-      BackendNativeTexturePolicy(aResources.GetBackendType(), GetSize());
+  NativeTexturePolicy policy = BackendNativeTexturePolicy(
+      aResources.GetCapabilities().mBackendType, GetSize());
   bool useNativeTexture =
       (policy == REQUIRE) || (policy != FORBID && UseExternalTextures());
   auto imageType = useNativeTexture ? wr::ExternalImageType::TextureHandle(
@@ -569,7 +571,12 @@ void BufferTextureHost::PushResourceUpdates(
       return;
     }
 
-    wr::ImageDescriptor descriptor(GetSize(), stride.value(), GetFormat());
+    auto format = wr::SurfaceFormatToImageFormat(GetFormat());
+    if (NS_WARN_IF(!format)) {
+      return;
+    }
+    wr::ImageDescriptor descriptor(GetSize(), stride.value(), *format,
+                                   wr::ToOpacityType(GetFormat()));
     (aResources.*method)(aImageKeys[0], descriptor, aExtID, imageType, 0,
                          /* aNormalizedUvs */ false);
   } else {
@@ -581,11 +588,16 @@ void BufferTextureHost::PushResourceUpdates(
     const layers::YCbCrDescriptor& desc = mDescriptor.get_YCbCrDescriptor();
     gfx::IntSize ySize = desc.display().Size();
     gfx::IntSize cbcrSize = ImageDataSerializer::GetCroppedCbCrSize(desc);
-    wr::ImageDescriptor yDescriptor(
-        ySize, desc.yStride(), SurfaceFormatForColorDepth(desc.colorDepth()));
-    wr::ImageDescriptor cbcrDescriptor(
-        cbcrSize, desc.cbCrStride(),
-        SurfaceFormatForColorDepth(desc.colorDepth()));
+    gfx::SurfaceFormat surfaceFormat =
+        SurfaceFormatForColorDepth(desc.colorDepth());
+    auto format = wr::SurfaceFormatToImageFormat(surfaceFormat);
+    if (NS_WARN_IF(!format)) {
+      return;
+    }
+    auto opacity = wr::ToOpacityType(surfaceFormat);
+    wr::ImageDescriptor yDescriptor(ySize, desc.yStride(), *format, opacity);
+    wr::ImageDescriptor cbcrDescriptor(cbcrSize, desc.cbCrStride(), *format,
+                                       opacity);
     (aResources.*method)(aImageKeys[0], yDescriptor, aExtID, imageType, 0,
                          /* aNormalizedUvs */ false);
     (aResources.*method)(aImageKeys[1], cbcrDescriptor, aExtID, imageType, 1,

@@ -38,6 +38,7 @@
 #include "ReportInternalError.h"
 #include "SafeRefPtr.h"
 #include "SchemaUpgrades.h"
+#include "TransactionOpResult.h"
 #include "chrome/common/ipc_channel.h"
 #include "ipc/IPCMessageUtils.h"
 #include "js/RootingAPI.h"
@@ -382,9 +383,6 @@ constexpr auto kColumnNameKey = "key"_ns;
 constexpr auto kColumnNameValue = "value"_ns;
 constexpr auto kColumnNameAliasSortKey = "sort_column"_ns;
 
-// SQL fragments used at multiple locations.
-constexpr auto kOpenLimit = " LIMIT "_ns;
-
 // The deletion marker file is created before RemoveDatabaseFilesAndDirectory
 // begins deleting a database. It is removed as the last step of deletion. If a
 // deletion marker file is found when initializing the origin, the deletion
@@ -475,15 +473,14 @@ using ObjectStoreTable =
     nsTHashMap<nsUint64HashKey, SafeRefPtr<FullObjectStoreMetadata>>;
 
 static_assert(
-    std::is_same_v<IndexOrObjectStoreId,
-                   std::remove_cv_t<std::remove_reference_t<
-                       decltype(std::declval<const ObjectStoreGetParams&>()
-                                    .objectStoreId())>>>);
-static_assert(
     std::is_same_v<
         IndexOrObjectStoreId,
-        std::remove_cv_t<std::remove_reference_t<
-            decltype(std::declval<const IndexGetParams&>().objectStoreId())>>>);
+        std::remove_cvref_t<decltype(std::declval<const ObjectStoreGetParams&>()
+                                         .objectStoreId())>>);
+static_assert(std::is_same_v<
+              IndexOrObjectStoreId,
+              std::remove_cvref_t<decltype(std::declval<const IndexGetParams&>()
+                                               .objectStoreId())>>);
 
 struct FullDatabaseMetadata final : AtomicSafeRefCounted<FullDatabaseMetadata> {
   DatabaseMetadata mCommonMetadata;
@@ -552,33 +549,6 @@ uint32_t HashName(const nsAString& aName) {
                            return kGoldenRatioU32 *
                                   (Helper::RotateBitsLeft32(hash, 5) ^ ch);
                          });
-}
-
-nsresult ClampResultCode(nsresult aResultCode) {
-  if (NS_SUCCEEDED(aResultCode) ||
-      NS_ERROR_GET_MODULE(aResultCode) == NS_ERROR_MODULE_DOM_INDEXEDDB) {
-    return aResultCode;
-  }
-
-  switch (aResultCode) {
-    case NS_ERROR_FILE_NO_DEVICE_SPACE:
-      return NS_ERROR_DOM_INDEXEDDB_QUOTA_ERR;
-    case NS_ERROR_STORAGE_CONSTRAINT:
-      return NS_ERROR_DOM_INDEXEDDB_CONSTRAINT_ERR;
-    default:
-#ifdef DEBUG
-      nsPrintfCString message("Converting non-IndexedDB error code (0x%" PRIX32
-                              ") to "
-                              "NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR",
-                              static_cast<uint32_t>(aResultCode));
-      NS_WARNING(message.get());
-#else
-        ;
-#endif
-  }
-
-  IDB_REPORT_INTERNAL_ERR();
-  return NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR;
 }
 
 Result<nsCOMPtr<nsIFileURL>, nsresult> GetDatabaseFileURL(
@@ -2041,13 +2011,13 @@ class TransactionDatabaseOperationBase : public DatabaseOperationBase {
   // Must be overridden in subclasses. Called on the background thread to allow
   // the subclass to serialize its results and send them to the child actor. A
   // failed return value will trigger a SendFailureResult callback.
-  virtual nsresult SendSuccessResult() = 0;
+  virtual TransactionOpResult SendSuccessResult() = 0;
 
   // Must be overridden in subclasses. Called on the background thread to allow
   // the subclass to send its failure code. Returning false will cause the
   // transaction to be aborted with aResultCode. Returning true will not cause
   // the transaction to be aborted.
-  virtual bool SendFailureResult(nsresult aResultCode) = 0;
+  virtual bool SendFailureResult(const TransactionOpResult& aResult) = 0;
 
 #ifdef MOZ_DIAGNOSTIC_ASSERT_ENABLED
   auto MakeAutoSavepointCleanupHandler(DatabaseConnection& aConnection) {
@@ -2219,12 +2189,24 @@ class Database final : public PBackgroundIDBDatabaseParent,
     // the current thread is the connection thread (mConnection might be reset
     // when EnsureConnection is called again, but in the meantime, we have to
     // fallback to just checking the main thread and the PBackgroud thread).
+    //
+    // We cannot additionally assert mInvalidated here: mConnection is only ever
+    // assigned (never cleared), so it is also left pointing at a closed
+    // connection after a routine idle-connection close. ConnectionPool's idle
+    // timer (IdleTimerCallback -> CloseDatabase -> CloseConnectionRunnable)
+    // closes the connection, and NoteClosedDatabase then drops the
+    // DatabaseInfo without invalidating the owning Database -- so the Database
+    // survives with a Closed() mConnection and mInvalidated still false. A
+    // sibling transaction's CommitOp can then run on the connection thread in
+    // this closed-but-not-invalidated state -- a window widened whenever an
+    // in-profile database open is slow (e.g. SQLite at-rest encryption fetching
+    // a per-database key). The CommitOp path tolerates a closed/absent
+    // connection, so only the thread identity matters here.
     if (mConnection && !mConnection->Closed()) {
       mConnection->AssertIsOnConnectionThread();
     } else {
       MOZ_ASSERT(!NS_IsMainThread());
       MOZ_ASSERT(!IsOnBackgroundThread());
-      MOZ_ASSERT(mInvalidated);
     }
 #endif
   }
@@ -2421,9 +2403,9 @@ class Database::StartTransactionOp final
 
   nsresult DoDatabaseWork(DatabaseConnection* aConnection) override;
 
-  nsresult SendSuccessResult() override;
+  TransactionOpResult SendSuccessResult() override;
 
-  bool SendFailureResult(nsresult aResultCode) override;
+  bool SendFailureResult(const TransactionOpResult& aResult) override;
 
   void Cleanup() override;
 };
@@ -3343,9 +3325,9 @@ class OpenDatabaseOp::VersionChangeOp final
 
   nsresult DoDatabaseWork(DatabaseConnection* aConnection) override;
 
-  nsresult SendSuccessResult() override;
+  TransactionOpResult SendSuccessResult() override;
 
-  bool SendFailureResult(nsresult aResultCode) override;
+  bool SendFailureResult(const TransactionOpResult& aResult) override;
 
   void Cleanup() override;
 };
@@ -3462,9 +3444,9 @@ class VersionChangeTransactionOp : public TransactionDatabaseOperationBase {
   ~VersionChangeTransactionOp() override = default;
 
  private:
-  nsresult SendSuccessResult() override;
+  TransactionOpResult SendSuccessResult() override;
 
-  bool SendFailureResult(nsresult aResultCode) override;
+  bool SendFailureResult(const TransactionOpResult& aResult) override;
 };
 
 class CreateObjectStoreOp final : public VersionChangeTransactionOp {
@@ -3669,9 +3651,9 @@ class NormalTransactionOp : public TransactionDatabaseOperationBase,
  private:
   nsresult SendPreprocessInfo() override;
 
-  nsresult SendSuccessResult() override;
+  TransactionOpResult SendSuccessResult() override;
 
-  bool SendFailureResult(nsresult aResultCode) override;
+  bool SendFailureResult(const TransactionOpResult& aResult) override;
 
   // IPDL methods.
   void ActorDestroy(ActorDestroyReason aWhy) override;
@@ -4578,8 +4560,8 @@ class Cursor<CursorType>::CursorOpBase
 
   ~CursorOpBase() override = default;
 
-  bool SendFailureResult(nsresult aResultCode) final;
-  nsresult SendSuccessResult() final;
+  bool SendFailureResult(const TransactionOpResult& aResult) final;
+  TransactionOpResult SendSuccessResult() final;
 
   void Cleanup() override;
 };
@@ -6182,8 +6164,7 @@ uint32_t TelemetryIdForFile(nsIFile* aFile) {
   // Any databases in these directories are owned by the application and should
   // not have their filenames masked. Hopefully they also appear in the
   // Telemetry.cpp whitelist.
-  if (origin.EqualsLiteral("chrome") ||
-      origin.EqualsLiteral("moz-safe-about+home")) {
+  if (origin.EqualsLiteral("chrome")) {
     return 0;
   }
 
@@ -9220,6 +9201,12 @@ Factory::AllocPBackgroundIDBFactoryRequestParent(
   MOZ_ASSERT(principalInfo.type() == PrincipalInfo::TSystemPrincipalInfo ||
              principalInfo.type() == PrincipalInfo::TContentPrincipalInfo);
 
+  if (!BackgroundParent::ValidatePrincipalInfo(Manager(), principalInfo,
+                                               PrincipalValidationOptions())) {
+    IPC_FAIL(this, "Invalid principal!");
+    return nullptr;
+  }
+
   if (NS_AUUF_OR_WARN_IF(
           principalInfo.type() == PrincipalInfo::TSystemPrincipalInfo &&
           metadata.persistenceType() != PERSISTENCE_TYPE_PERSISTENT)) {
@@ -9301,6 +9288,10 @@ mozilla::ipc::IPCResult Factory::RecvGetDatabases(
 
   MOZ_ASSERT(aPrincipalInfo.type() == PrincipalInfo::TSystemPrincipalInfo ||
              aPrincipalInfo.type() == PrincipalInfo::TContentPrincipalInfo);
+
+  QM_TRY(MOZ_TO_RESULT(BackgroundParent::ValidatePrincipalInfo(
+             Manager(), aPrincipalInfo, PrincipalValidationOptions())),
+         QM_IPC_FAIL(this));
 
   PersistenceType persistenceType =
       IDBFactory::GetPersistenceType(aPrincipalInfo);
@@ -9976,13 +9967,13 @@ nsresult Database::StartTransactionOp::DoDatabaseWork(
   return NS_OK;
 }
 
-nsresult Database::StartTransactionOp::SendSuccessResult() {
+TransactionOpResult Database::StartTransactionOp::SendSuccessResult() {
   // We don't need to do anything here.
   return NS_OK;
 }
 
 bool Database::StartTransactionOp::SendFailureResult(
-    nsresult /* aResultCode */) {
+    const TransactionOpResult& /* aResult */) {
   IDB_REPORT_INTERNAL_ERR();
 
   // Abort the transaction.
@@ -14813,7 +14804,7 @@ Result<bool, nsresult> DatabaseOperationBase::ObjectStoreHasIndexes(
                         "SELECT id "
                         "FROM object_store_index "
                         "WHERE object_store_id = :"_ns +
-                            kStmtParamNameObjectStoreId + kOpenLimit + "1;"_ns,
+                            kStmtParamNameObjectStoreId + " LIMIT 1;"_ns,
                         [aObjectStoreId](auto& stmt) -> Result<Ok, nsresult> {
                           QM_TRY(MOZ_TO_RESULT(stmt.BindInt64ByName(
                               kStmtParamNameObjectStoreId, aObjectStoreId)));
@@ -16639,7 +16630,7 @@ nsresult OpenDatabaseOp::VersionChangeOp::DoDatabaseWork(
   return NS_OK;
 }
 
-nsresult OpenDatabaseOp::VersionChangeOp::SendSuccessResult() {
+TransactionOpResult OpenDatabaseOp::VersionChangeOp::SendSuccessResult() {
   AssertIsOnOwningThread();
   MOZ_ASSERT(mOpenDatabaseOp);
   MOZ_ASSERT(mOpenDatabaseOp->mState == State::DatabaseWorkVersionChange);
@@ -16653,13 +16644,14 @@ nsresult OpenDatabaseOp::VersionChangeOp::SendSuccessResult() {
   return NS_OK;
 }
 
-bool OpenDatabaseOp::VersionChangeOp::SendFailureResult(nsresult aResultCode) {
+bool OpenDatabaseOp::VersionChangeOp::SendFailureResult(
+    const TransactionOpResult& aResult) {
   AssertIsOnOwningThread();
   MOZ_ASSERT(mOpenDatabaseOp);
   MOZ_ASSERT(mOpenDatabaseOp->mState == State::DatabaseWorkVersionChange);
   MOZ_ASSERT(mOpenDatabaseOp->mVersionChangeOp == this);
 
-  mOpenDatabaseOp->SetFailureCode(aResultCode);
+  mOpenDatabaseOp->SetFailureCode(aResult.mCode);
   mOpenDatabaseOp->mState = State::SendingResults;
 
   MOZ_ALWAYS_SUCCEEDS(mOpenDatabaseOp->Run());
@@ -17552,7 +17544,7 @@ void TransactionDatabaseOperationBase::SendPreprocessInfoOrResults(
     OverrideFailureCode(NS_ERROR_DOM_INDEXEDDB_ABORT_ERR);
   }
 
-  const nsresult rv = [aSendPreprocessInfo, this] {
+  const auto result = [aSendPreprocessInfo, this]() -> TransactionOpResult {
     if (HasFailed()) {
       return ResultCode();
     }
@@ -17564,13 +17556,13 @@ void TransactionDatabaseOperationBase::SendPreprocessInfoOrResults(
     return SendSuccessResult();
   }();
 
-  if (NS_FAILED(rv)) {
-    SetFailureCodeIfUnset(rv);
+  if (NS_FAILED(result.mCode)) {
+    SetFailureCodeIfUnset(result.mCode);
 
     // This should definitely release the IPDL reference.
-    if (!SendFailureResult(rv)) {
+    if (!SendFailureResult(result)) {
       // Abort the transaction.
-      (*mTransaction)->Abort(rv, /* aForce */ false);
+      (*mTransaction)->Abort(result.mCode, /* aForce */ false);
     }
   }
 
@@ -17872,14 +17864,15 @@ void TransactionBase::CommitOp::TransactionFinishedAfterUnblock() {
 #endif
 }
 
-nsresult VersionChangeTransactionOp::SendSuccessResult() {
+TransactionOpResult VersionChangeTransactionOp::SendSuccessResult() {
   AssertIsOnOwningThread();
 
   // Nothing to send here, the API assumes that this request always succeeds.
   return NS_OK;
 }
 
-bool VersionChangeTransactionOp::SendFailureResult(nsresult aResultCode) {
+bool VersionChangeTransactionOp::SendFailureResult(
+    const TransactionOpResult& /* aResult */) {
   AssertIsOnOwningThread();
 
   // The only option here is to cause the transaction to abort.
@@ -18936,7 +18929,7 @@ nsresult NormalTransactionOp::SendPreprocessInfo() {
   return NS_OK;
 }
 
-nsresult NormalTransactionOp::SendSuccessResult() {
+TransactionOpResult NormalTransactionOp::SendSuccessResult() {
   AssertIsOnOwningThread();
 
   if (!IsActorDestroyed()) {
@@ -18963,15 +18956,23 @@ nsresult NormalTransactionOp::SendSuccessResult() {
           " (size=%zu bytes, max=%zu bytes).",
           responseSize, kMaxMessageSize);
       NS_WARNING(warning.get());
-      return NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR;
+      // Structured serialization encodings/sizes are explicitly
+      // implementation-dependent. It's OK for us to expose the exact size
+      // here because IndexedDB serializations cannot include any no-cors data
+      // like opaque Responses and because the existence of this threshold is
+      // itself already a primitive for determining sizes since there's a
+      // boolean indicator of whether we reach the max message size.
+      // Additionally, it's useful information for bugs and potentially more
+      // actionable for developers encountering the problem.
+      return TransactionOpResult(NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR, warning);
     }
 
     MOZ_ASSERT(response.type() != RequestResponse::T__None);
 
-    if (response.type() == RequestResponse::Tnsresult) {
-      MOZ_ASSERT(NS_FAILED(response.get_nsresult()));
+    if (response.type() == RequestResponse::TTransactionOpResult) {
+      MOZ_ASSERT(NS_FAILED(response.get_TransactionOpResult().mCode));
 
-      return response.get_nsresult();
+      return response.get_TransactionOpResult();
     }
 
     if (NS_WARN_IF(
@@ -18988,15 +18989,15 @@ nsresult NormalTransactionOp::SendSuccessResult() {
   return NS_OK;
 }
 
-bool NormalTransactionOp::SendFailureResult(nsresult aResultCode) {
+bool NormalTransactionOp::SendFailureResult(
+    const TransactionOpResult& aResult) {
   AssertIsOnOwningThread();
-  MOZ_ASSERT(NS_FAILED(aResultCode));
+  MOZ_ASSERT(NS_FAILED(aResult.mCode));
 
   bool result = false;
 
   if (!IsActorDestroyed()) {
-    result = PBackgroundIDBRequestParent::Send__delete__(
-        this, ClampResultCode(aResultCode));
+    result = PBackgroundIDBRequestParent::Send__delete__(this, aResult);
   }
 
 #ifdef DEBUG
@@ -19656,7 +19657,7 @@ nsresult ObjectStoreGetRequestOp::DoDatabaseWork(
       kStmtParamNameObjectStoreId +
       MaybeGetBindingClauseForKeyRange(mOptionalKeyRange, kColumnNameKey) +
       MakeDirectionClause(mDirection) +
-      (mLimit ? kOpenLimit + IntToCString(mLimit) : EmptyCString());
+      (mLimit ? " LIMIT "_ns + IntToCString(mLimit) : EmptyCString());
 
   QM_TRY_INSPECT(const auto& stmt, aConnection->BorrowCachedStatement(query));
 
@@ -19749,7 +19750,9 @@ void ObjectStoreGetRequestOp::GetResponse(RequestResponse& aResponse,
                     mDatabase, std::move(info));
               },
               fallible),
-          QM_VOID, [&aResponse](const nsresult result) { aResponse = result; });
+          QM_VOID, [&aResponse](const nsresult result) {
+            aResponse = TransactionOpResult(result);
+          });
     }
 
     return;
@@ -19766,8 +19769,9 @@ void ObjectStoreGetRequestOp::GetResponse(RequestResponse& aResponse,
     QM_TRY_UNWRAP(serializedInfo,
                   ConvertResponse<SerializedStructuredCloneReadInfo>(
                       mDatabase, std::move(mResponse[0])),
-                  QM_VOID,
-                  [&aResponse](const nsresult result) { aResponse = result; });
+                  QM_VOID, [&aResponse](const nsresult result) {
+                    aResponse = TransactionOpResult(result);
+                  });
   }
 }
 
@@ -20161,7 +20165,7 @@ nsCString IndexGetRequestOp::MakeQuery() const {
            "AND object_data.key = "
            "index_table.object_data_key"_ns +
            MakeDirectionClause(mDirection, "index_table.value"_ns) +
-           (mLimit ? kOpenLimit + IntToCString(mLimit) : EmptyCString());
+           (mLimit ? " LIMIT "_ns + IntToCString(mLimit) : EmptyCString());
   }
   return "SELECT file_ids, data "
          "FROM object_data "
@@ -20176,7 +20180,7 @@ nsCString IndexGetRequestOp::MakeQuery() const {
          kStmtParamNameIndexId +
          MaybeGetBindingClauseForKeyRange(mOptionalKeyRange, kColumnNameValue) +
          MakeDirectionClause(mDirection, "index_table.value"_ns) +
-         (mLimit ? kOpenLimit + IntToCString(mLimit) : EmptyCString());
+         (mLimit ? " LIMIT "_ns + IntToCString(mLimit) : EmptyCString());
 }
 
 nsresult IndexGetRequestOp::DoDatabaseWork(DatabaseConnection* aConnection) {
@@ -20243,18 +20247,19 @@ void IndexGetRequestOp::GetResponse(RequestResponse& aResponse,
     *aResponseSize = 0;
 
     if (!mResponse.IsEmpty()) {
-      QM_TRY_UNWRAP(
-          aResponse.get_IndexGetAllResponse().cloneInfos(),
-          TransformIntoNewArrayAbortOnErr(
-              std::make_move_iterator(mResponse.begin()),
-              std::make_move_iterator(mResponse.end()),
-              [convertResponse,
-               &aResponseSize](StructuredCloneReadInfoParent&& info) {
-                *aResponseSize += info.Size();
-                return convertResponse(std::move(info));
-              },
-              fallible),
-          QM_VOID, [&aResponse](const nsresult result) { aResponse = result; });
+      QM_TRY_UNWRAP(aResponse.get_IndexGetAllResponse().cloneInfos(),
+                    TransformIntoNewArrayAbortOnErr(
+                        std::make_move_iterator(mResponse.begin()),
+                        std::make_move_iterator(mResponse.end()),
+                        [convertResponse,
+                         &aResponseSize](StructuredCloneReadInfoParent&& info) {
+                          *aResponseSize += info.Size();
+                          return convertResponse(std::move(info));
+                        },
+                        fallible),
+                    QM_VOID, [&aResponse](const nsresult result) {
+                      aResponse = TransactionOpResult(result);
+                    });
     }
 
     return;
@@ -20269,8 +20274,9 @@ void IndexGetRequestOp::GetResponse(RequestResponse& aResponse,
 
     *aResponseSize += mResponse[0].Size();
     QM_TRY_UNWRAP(serializedInfo, convertResponse(std::move(mResponse[0])),
-                  QM_VOID,
-                  [&aResponse](const nsresult result) { aResponse = result; });
+                  QM_VOID, [&aResponse](const nsresult result) {
+                    aResponse = TransactionOpResult(result);
+                  });
   }
 }
 
@@ -20298,14 +20304,14 @@ nsCString IndexGetKeyRequestOp::MakeQuery() const {
                                             kColumnNameValue) +
            " GROUP BY value"_ns +
            MakeDirectionClause(mDirection, kColumnNameValue) +
-           (mLimit ? kOpenLimit + IntToCString(mLimit) : EmptyCString());
+           (mLimit ? " LIMIT "_ns + IntToCString(mLimit) : EmptyCString());
   }
   return "SELECT object_data_key "
          "FROM "_ns +
          indexTable + "WHERE index_id = :"_ns + kStmtParamNameIndexId +
          MaybeGetBindingClauseForKeyRange(mOptionalKeyRange, kColumnNameValue) +
          MakeDirectionClause(mDirection, kColumnNameValue) +
-         (mLimit ? kOpenLimit + IntToCString(mLimit) : EmptyCString());
+         (mLimit ? " LIMIT "_ns + IntToCString(mLimit) : EmptyCString());
 }
 
 IndexGetKeyRequestOp::IndexGetKeyRequestOp(
@@ -20421,7 +20427,7 @@ nsresult ObjectStoreGetAllRecordsRequestOp::DoDatabaseWork(
       kStmtParamNameObjectStoreId +
       MaybeGetBindingClauseForKeyRange(mOptionalKeyRange, kColumnNameKey) +
       MakeDirectionClause(mDirection) +
-      (mLimit ? kOpenLimit + IntToCString(mLimit) : EmptyCString());
+      (mLimit ? " LIMIT "_ns + IntToCString(mLimit) : EmptyCString());
 
   QM_TRY_INSPECT(const auto& stmt, aConnection->BorrowCachedStatement(query));
 
@@ -20488,7 +20494,9 @@ void ObjectStoreGetAllRecordsRequestOp::GetResponse(RequestResponse& aResponse,
                 mDatabase, std::move(info));
           },
           fallible),
-      QM_VOID, [&aResponse](const nsresult result) { aResponse = result; });
+      QM_VOID, [&aResponse](const nsresult result) {
+        aResponse = TransactionOpResult(result);
+      });
 }
 
 IndexGetAllRecordsRequestOp::IndexGetAllRecordsRequestOp(
@@ -20537,7 +20545,7 @@ nsCString IndexGetAllRecordsRequestOp::MakeQuery() const {
            "AND object_data.key = "
            "index_table.object_data_key"_ns +
            MakeDirectionClause(mDirection, "index_table.value"_ns) +
-           (mLimit ? kOpenLimit + IntToCString(mLimit) : EmptyCString());
+           (mLimit ? " LIMIT "_ns + IntToCString(mLimit) : EmptyCString());
   }
   return "SELECT index_table.value, object_data.key, "
          "object_data.file_ids, object_data.data "
@@ -20553,7 +20561,7 @@ nsCString IndexGetAllRecordsRequestOp::MakeQuery() const {
          kStmtParamNameIndexId +
          MaybeGetBindingClauseForKeyRange(mOptionalKeyRange, kColumnNameValue) +
          MakeDirectionClause(mDirection, "index_table.value"_ns) +
-         (mLimit ? kOpenLimit + IntToCString(mLimit) : EmptyCString());
+         (mLimit ? " LIMIT "_ns + IntToCString(mLimit) : EmptyCString());
 }
 
 nsresult IndexGetAllRecordsRequestOp::DoDatabaseWork(
@@ -20640,7 +20648,9 @@ void IndexGetAllRecordsRequestOp::GetResponse(RequestResponse& aResponse,
                 database, std::move(info));
           },
           fallible),
-      QM_VOID, [&aResponse](const nsresult result) { aResponse = result; });
+      QM_VOID, [&aResponse](const nsresult result) {
+        aResponse = TransactionOpResult(result);
+      });
 }
 
 nsresult IndexCountRequestOp::DoDatabaseWork(DatabaseConnection* aConnection) {
@@ -20699,15 +20709,16 @@ nsresult IndexCountRequestOp::DoDatabaseWork(DatabaseConnection* aConnection) {
 }
 
 template <IDBCursorType CursorType>
-bool Cursor<CursorType>::CursorOpBase::SendFailureResult(nsresult aResultCode) {
+bool Cursor<CursorType>::CursorOpBase::SendFailureResult(
+    const TransactionOpResult& aResult) {
   AssertIsOnOwningThread();
-  MOZ_ASSERT(NS_FAILED(aResultCode));
+  MOZ_ASSERT(NS_FAILED(aResult.mCode));
   MOZ_ASSERT(mCursor);
   MOZ_ASSERT(mCursor->mCurrentlyRunningOp == this);
   MOZ_ASSERT(!mResponseSent);
 
   if (!IsActorDestroyed()) {
-    mResponse = ClampResultCode(aResultCode);
+    mResponse = aResult.mCode;
 
     // This is an expected race when the transaction is invalidated after
     // data is retrieved from database.
@@ -20941,7 +20952,7 @@ void ObjectStoreOpenOpHelper<CursorType>::PrepareKeyConditionClauses(
   }
 
   const nsAutoCString suffix =
-      aDirectionClause + kOpenLimit + ":"_ns + kStmtParamNameLimit;
+      aDirectionClause + " LIMIT :"_ns + kStmtParamNameLimit;
 
   GetCursor().mContinueQueries.init(
       aQueryStart + keyRangeClause + suffix,
@@ -21024,7 +21035,7 @@ void IndexOpenOpHelper<CursorType>::PrepareIndexKeyConditionClause(
   }
 
   const nsAutoCString suffix =
-      aDirectionClause + kOpenLimit + ":"_ns + kStmtParamNameLimit;
+      aDirectionClause + " LIMIT :"_ns + kStmtParamNameLimit;
   continueQuery += suffix;
   continueToQuery += suffix;
   if (!continuePrimaryKeyQuery.IsEmpty()) {
@@ -21091,7 +21102,7 @@ nsresult OpenOpHelper<IDBCursorType::ObjectStore>::DoDatabaseWork(
   // Note: Changing the number or order of SELECT columns in the query will
   // require changes to CursorOpBase::PopulateResponseFromStatement.
   const nsCString firstQuery = queryStart + keyRangeClause + directionClause +
-                               kOpenLimit +
+                               " LIMIT "_ns +
                                IntToCString(1 + GetCursor().mMaxExtraCount);
 
   QM_TRY_INSPECT(const auto& stmt,
@@ -21135,7 +21146,7 @@ nsresult OpenOpHelper<IDBCursorType::ObjectStoreKey>::DoDatabaseWork(
   // Note: Changing the number or order of SELECT columns in the query will
   // require changes to CursorOpBase::PopulateResponseFromStatement.
   const nsCString firstQuery =
-      queryStart + keyRangeClause + directionClause + kOpenLimit + "1"_ns;
+      queryStart + keyRangeClause + directionClause + " LIMIT 1"_ns;
 
   QM_TRY_INSPECT(const auto& stmt,
                  aConnection->BorrowCachedStatement(firstQuery));
@@ -21219,7 +21230,7 @@ nsresult OpenOpHelper<IDBCursorType::Index>::DoDatabaseWork(
   // Note: Changing the number or order of SELECT columns in the query will
   // require changes to CursorOpBase::PopulateResponseFromStatement.
   const nsCString firstQuery = queryStart + keyRangeClause + directionClause +
-                               kOpenLimit +
+                               " LIMIT "_ns +
                                IntToCString(1 + GetCursor().mMaxExtraCount);
 
   QM_TRY_INSPECT(const auto& stmt,
@@ -21303,7 +21314,7 @@ nsresult OpenOpHelper<IDBCursorType::IndexKey>::DoDatabaseWork(
   // Note: Changing the number or order of SELECT columns in the query will
   // require changes to CursorOpBase::PopulateResponseFromStatement.
   const nsCString firstQuery =
-      queryStart + keyRangeClause + directionClause + kOpenLimit + "1"_ns;
+      queryStart + keyRangeClause + directionClause + " LIMIT 1"_ns;
 
   QM_TRY_INSPECT(const auto& stmt,
                  aConnection->BorrowCachedStatement(firstQuery));
@@ -21347,7 +21358,7 @@ nsresult Cursor<CursorType>::OpenOp::DoDatabaseWork(
 }
 
 template <IDBCursorType CursorType>
-nsresult Cursor<CursorType>::CursorOpBase::SendSuccessResult() {
+TransactionOpResult Cursor<CursorType>::CursorOpBase::SendSuccessResult() {
   AssertIsOnOwningThread();
   MOZ_ASSERT(mCursor);
   MOZ_ASSERT(mCursor->mCurrentlyRunningOp == this);

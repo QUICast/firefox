@@ -787,6 +787,9 @@ static inline size_t NumTrailingBytes(size_t propertyCount,
                   protoShapeCount * sizeof(GCPtr<Shape*>);
   if (hasIndices) {
     result += propertyCount * sizeof(PropertyIndex);
+    if constexpr (sizeof(PropertyIndex) != alignof(GCPtr<Shape*>)) {
+      result = AlignBytes(result, alignof(GCPtr<Shape*>));
+    }
   }
   return result;
 }
@@ -1391,7 +1394,8 @@ PlainObject* GlobalObject::getOrCreateIterResultTemplateObject(JSContext* cx) {
 /* static */
 PlainObject* GlobalObject::createIterResultTemplateObject(JSContext* cx) {
   // Create template plain object
-  Rooted<PlainObject*> templateObject(cx, NewPlainObject(cx, TenuredObject));
+  Rooted<PlainObject*> templateObject(
+      cx, NewPlainObject(cx, {.newKind = TenuredObject}));
   if (!templateObject) {
     return nullptr;
   }
@@ -1481,7 +1485,8 @@ ArrayIteratorObject* js::NewArrayIteratorTemplate(JSContext* cx) {
     return nullptr;
   }
 
-  return NewTenuredObjectWithGivenProto<ArrayIteratorObject>(cx, proto);
+  return NewObjectWithGivenProto<ArrayIteratorObject>(
+      cx, proto, {.newKind = TenuredObject});
 }
 
 ArrayIteratorObject* js::NewArrayIterator(JSContext* cx) {
@@ -1530,7 +1535,8 @@ StringIteratorObject* js::NewStringIteratorTemplate(JSContext* cx) {
     return nullptr;
   }
 
-  return NewTenuredObjectWithGivenProto<StringIteratorObject>(cx, proto);
+  return NewObjectWithGivenProto<StringIteratorObject>(
+      cx, proto, {.newKind = TenuredObject});
 }
 
 StringIteratorObject* js::NewStringIterator(JSContext* cx) {
@@ -1612,7 +1618,8 @@ RegExpStringIteratorObject* js::NewRegExpStringIteratorTemplate(JSContext* cx) {
     return nullptr;
   }
 
-  return NewTenuredObjectWithGivenProto<RegExpStringIteratorObject>(cx, proto);
+  return NewObjectWithGivenProto<RegExpStringIteratorObject>(
+      cx, proto, {.newKind = TenuredObject});
 }
 
 RegExpStringIteratorObject* js::NewRegExpStringIterator(JSContext* cx) {
@@ -1961,15 +1968,13 @@ static const JSFunctionSpec iterator_methods[] = {
     JS_SELF_HOSTED_FN("some", "IteratorSome", 1, 0),
     JS_SELF_HOSTED_FN("every", "IteratorEvery", 1, 0),
     JS_SELF_HOSTED_FN("find", "IteratorFind", 1, 0),
+    JS_SELF_HOSTED_FN("includes", "IteratorIncludes", 2, 0),
+    JS_SELF_HOSTED_FN("join", "IteratorJoin", 1, 0),
+    JS_SELF_HOSTED_FN("chunks", "IteratorChunks", 1, 0),
+    JS_SELF_HOSTED_FN("windows", "IteratorWindows", 2, 0),
     JS_SELF_HOSTED_SYM_FN(iterator, "IteratorIdentity", 0, 0),
 #ifdef ENABLE_EXPLICIT_RESOURCE_MANAGEMENT
     JS_SELF_HOSTED_SYM_FN(dispose, "IteratorDispose", 0, 0),
-#endif
-#ifdef NIGHTLY_BUILD
-    JS_SELF_HOSTED_FN("chunks", "IteratorChunks", 1, 0),
-    JS_SELF_HOSTED_FN("windows", "IteratorWindows", 2, 0),
-    JS_SELF_HOSTED_FN("join", "IteratorJoin", 1, 0),
-    JS_SELF_HOSTED_FN("includes", "IteratorIncludes", 2, 0),
 #endif
     JS_FS_END,
 };

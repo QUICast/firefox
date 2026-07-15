@@ -3,15 +3,14 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "ImageLogging.h"  // Must appear first
-
 #include "nsJXLDecoder.h"
 
 #include "AnimationParams.h"
-#include "mozilla/CheckedInt.h"
-#include "gfxPlatform.h"
+#include "ImageLogging.h"  // Must appear first
 #include "RasterImage.h"
 #include "SurfacePipeFactory.h"
+#include "gfxPlatform.h"
+#include "mozilla/CheckedInt.h"
 
 using namespace mozilla::gfx;
 
@@ -418,7 +417,7 @@ nsresult nsJXLDecoder::AllocateFrameBuffers() {
   }
 
   if (mPixelFormat.value() == PixelFormat::Cmyk8 &&
-      !mKBuffer.resize(size.width * size.height)) {
+      !mKBuffer.resize(size_t(size.width) * size.height)) {
     return NS_ERROR_FAILURE;
   }
 

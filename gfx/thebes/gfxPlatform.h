@@ -5,26 +5,22 @@
 #ifndef GFX_PLATFORM_H
 #define GFX_PLATFORM_H
 
-#include "mozilla/gfx/Types.h"
-#include "mozilla/intl/UnicodeScriptCodes.h"
-#include "nsTArray.h"
-#include "nsString.h"
-#include "nsCOMPtr.h"
-
+#include "GfxInfoCollector.h"
+#include "gfxSkipChars.h"
 #include "gfxTelemetry.h"
 #include "gfxTypes.h"
-#include "gfxSkipChars.h"
-
-#include "qcms.h"
-
-#include "mozilla/RefPtr.h"
-#include "GfxInfoCollector.h"
-
 #include "mozilla/Maybe.h"
+#include "mozilla/RefPtr.h"
+#include "mozilla/gfx/Types.h"
+#include "mozilla/intl/UnicodeScriptCodes.h"
 #include "mozilla/layers/CompositorTypes.h"
 #include "mozilla/layers/LayersTypes.h"
 #include "mozilla/layers/MemoryPressureObserver.h"
 #include "mozilla/layers/OverlayInfo.h"
+#include "nsCOMPtr.h"
+#include "nsString.h"
+#include "nsTArray.h"
+#include "qcms.h"
 
 class FontVisibilityProvider;
 class gfxASurface;
@@ -397,28 +393,26 @@ class gfxPlatform : public mozilla::layers::MemoryPressureListener {
   /**
    * Look up a local platform font using the full font face name.
    * (Needed to support @font-face src local().)
-   * Ownership of the returned gfxFontEntry is passed to the caller,
-   * who must either AddRef() or delete.
+   * Ownership of the returned gfxFontEntry is passed to the caller.
    */
-  gfxFontEntry* LookupLocalFont(FontVisibilityProvider* aFontVisibilityProvider,
-                                const nsACString& aFontName,
-                                const WeightRange& aWeightForEntry,
-                                const StretchRange& aStretchForEntry,
-                                const SlantStyleRange& aStyleForEntry);
+  already_AddRefed<gfxFontEntry> LookupLocalFont(
+      FontVisibilityProvider* aFontVisibilityProvider,
+      const nsACString& aFontName, const WeightRange& aWeightForEntry,
+      const StretchRange& aStretchForEntry,
+      const SlantStyleRange& aStyleForEntry);
 
   /**
    * Activate a platform font.  (Needed to support @font-face src url().)
    * aFontData is a NS_Malloc'ed block that must be freed by this function
    * (or responsibility passed on) when it is no longer needed; the caller
    * will NOT free it.
-   * Ownership of the returned gfxFontEntry is passed to the caller,
-   * who must either AddRef() or delete.
+   * Ownership of the returned gfxFontEntry is passed to the caller.
    */
-  gfxFontEntry* MakePlatformFont(const nsACString& aFontName,
-                                 const WeightRange& aWeightForEntry,
-                                 const StretchRange& aStretchForEntry,
-                                 const SlantStyleRange& aStyleForEntry,
-                                 const uint8_t* aFontData, uint32_t aLength);
+  already_AddRefed<gfxFontEntry> MakePlatformFont(
+      const nsACString& aFontName, const WeightRange& aWeightForEntry,
+      const StretchRange& aStretchForEntry,
+      const SlantStyleRange& aStyleForEntry, const uint8_t* aFontData,
+      uint32_t aLength);
 
   /**
    * Whether to allow downloadable fonts via @font-face rules

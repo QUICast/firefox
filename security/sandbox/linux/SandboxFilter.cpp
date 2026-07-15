@@ -322,7 +322,11 @@ class SandboxPolicyCommon : public SandboxPolicyBase {
   static intptr_t UnlinkTrap(ArgsRef aArgs, void* aux) {
     auto broker = static_cast<SandboxBrokerClient*>(aux);
     auto path = reinterpret_cast<const char*>(aArgs.args[0]);
-    if (path && path[0] == '\0') {
+    if (!path) {
+      // A null path is a bad pointer as far as the kernel is concerned.
+      return -EFAULT;
+    }
+    if (path[0] == '\0') {
       // If the path is empty, then just fail the call here
       return -ENOENT;
     }
@@ -498,7 +502,11 @@ class SandboxPolicyCommon : public SandboxPolicyBase {
     auto fd = static_cast<int>(aArgs.args[0]);
     auto path = reinterpret_cast<const char*>(aArgs.args[1]);
     auto flags = static_cast<int>(aArgs.args[2]);
-    if (path && path[0] == '\0') {
+    if (!path) {
+      // A null path is a bad pointer as far as the kernel is concerned.
+      return -EFAULT;
+    }
+    if (path[0] == '\0') {
       // If the path is empty, then just fail the call here
       return -ENOENT;
     }
@@ -2044,6 +2052,14 @@ class RDDSandboxPolicy final : public SandboxPolicyCommon {
       case __NR_getrusage:
         return Allow();
 
+      // Required by libnuma for FFmpeg
+      case __NR_get_mempolicy:
+        return Allow();
+
+      // Required by libnuma for FFmpeg
+      case __NR_set_mempolicy:
+        return Error(ENOSYS);
+
       case __NR_ioctl: {
         Arg<unsigned long> request(1);
         auto shifted_type = request & kIoctlTypeMask;
@@ -2111,6 +2127,7 @@ class RDDSandboxPolicy final : public SandboxPolicyCommon {
         // Mesa attempts to use them to optimize performance; often
         // this involves passing other threads' tids, which we can't
         // safely allow, but maybe a future Mesa version could fix that.
+        // Also sched_setaffinity is required by libnuma for FFmpeg.
       case __NR_sched_getaffinity:
       case __NR_sched_setaffinity:
       case __NR_sched_getparam:

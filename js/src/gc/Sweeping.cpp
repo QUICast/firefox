@@ -1333,7 +1333,6 @@ IncrementalProgress GCRuntime::markGray(JS::GCContext* gcx,
   auto [mainThreadBudget, helperThreadBudget] = budgetConcurrentMarking(budget);
 
   if (markSynchronously(mainThreadBudget, useParallelMarking) == NotFinished) {
-    MOZ_ASSERT(hasMarkingWork());
     MOZ_ASSERT(isIncremental);
     MOZ_ASSERT(safeToYield);
 
@@ -1369,6 +1368,7 @@ IncrementalProgress GCRuntime::endMarkingSweepGroup(JS::GCContext* gcx,
   }
 
   MOZ_ASSERT(marker().isDrained());
+  MOZ_ASSERT(!hasAnyDeferredWeakMaps());
 
   // We must not yield after this point before we start sweeping the group.
   safeToYield = false;
@@ -1958,7 +1958,8 @@ IncrementalProgress GCRuntime::markDuringSweeping(JS::GCContext* gcx,
 
   // If we can mark in parallel with sweeping on the main thread we do that.
   if (markOnBackgroundThreadDuringSweeping) {
-    if (!marker().isDrained() || hasDelayedMarking()) {
+    if (!marker().isDrained() || hasDelayedMarking() ||
+        hasAnyDeferredWeakMaps()) {
       AutoLockHelperThreadState lock;
       MOZ_ASSERT(markTask.isIdle(lock));
       markTask.initialize(false, budget, lock);

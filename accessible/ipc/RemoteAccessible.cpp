@@ -2,27 +2,28 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+#include "RemoteAccessible.h"
+
 #include "ARIAMap.h"
 #include "CachedTableAccessible.h"
-#include "RemoteAccessible.h"
+#include "Pivot.h"
+#include "Relation.h"
+#include "TextLeafRange.h"
 #include "mozilla/a11y/CacheConstants.h"
 #include "mozilla/a11y/DocAccessibleParent.h"
 #include "mozilla/a11y/DocManager.h"
 #include "mozilla/a11y/Platform.h"
+#include "mozilla/a11y/RelationType.h"
 #include "mozilla/a11y/TableAccessible.h"
 #include "mozilla/a11y/TableCellAccessible.h"
-#include "mozilla/dom/Element.h"
 #include "mozilla/dom/BrowserParent.h"
 #include "mozilla/dom/CanonicalBrowsingContext.h"
+#include "mozilla/dom/Element.h"
 #include "mozilla/gfx/Matrix.h"
-#include "nsAccessibilityService.h"
 #include "nsAccUtils.h"
+#include "nsAccessibilityService.h"
 #include "nsFocusManager.h"
 #include "nsTextEquivUtils.h"
-#include "Pivot.h"
-#include "Relation.h"
-#include "TextLeafRange.h"
-#include "mozilla/a11y/RelationType.h"
 #include "xpcAccessibleDocument.h"
 
 #ifdef A11Y_LOG
@@ -179,11 +180,16 @@ RemoteAccessible* RemoteAccessible::RemoteParent() const {
   return mParent;
 }
 
-void RemoteAccessible::ApplyCache(CacheUpdateType aUpdateType,
+bool RemoteAccessible::ApplyCache(CacheUpdateType aUpdateType,
                                   AccAttributes* aFields) {
   if (!aFields) {
     MOZ_ASSERT_UNREACHABLE("ApplyCache called with aFields == null");
-    return;
+    return false;
+  }
+  if (aFields->HasAttribute(CacheKey::HyperTextOffsets) ||
+      aFields->HasAttribute(CacheKey::GroupInfo)) {
+    MOZ_ASSERT_UNREACHABLE("Received invalid cache key");
+    return false;
   }
 
   const nsTArray<bool> relUpdatesNeeded = PreProcessRelations(aFields);
@@ -239,7 +245,7 @@ void RemoteAccessible::ApplyCache(CacheUpdateType aUpdateType,
     mCachedFields->Update(aFields);
   }
 
-  if (IsTextLeaf()) {
+  if (IsText()) {
     RemoteAccessible* parent = RemoteParent();
     if (parent && parent->IsHyperText()) {
       parent->InvalidateCachedHyperTextOffsets();
@@ -247,6 +253,7 @@ void RemoteAccessible::ApplyCache(CacheUpdateType aUpdateType,
   }
 
   PostProcessRelations(relUpdatesNeeded);
+  return true;
 }
 
 ENameValueFlag RemoteAccessible::Name(nsString& aName) const {
@@ -945,6 +952,20 @@ bool RemoteAccessible::IsClipped() const {
   return false;
 }
 
+LayoutDeviceIntRect RemoteAccessible::ComputeBoundsFromContent() const {
+  ASSERT_DOMAINS_ACTIVE(CacheDomain::Style, this);
+  MOZ_ASSERT(mCachedFields);
+
+  LayoutDeviceIntRect result;
+  for (uint32_t i = 0, n = ChildCount(); i < n; i++) {
+    if (Accessible* child = ChildAt(i); child && child->IsRemote()) {
+      result =
+          result.Union(child->AsRemote()->BoundsWithOffset(Nothing(), false));
+    }
+  }
+  return result;
+}
+
 LayoutDeviceIntRect RemoteAccessible::BoundsWithOffset(
     Maybe<nsRect> aOffset, bool aBoundsAreForHittesting) const {
   if (mDoc->RequestDomainsIfInactive(kNecessaryBoundsDomains)) {
@@ -953,6 +974,17 @@ LayoutDeviceIntRect RemoteAccessible::BoundsWithOffset(
 
   Maybe<nsRect> maybeBounds = RetrieveCachedBounds();
   if (maybeBounds) {
+    if (maybeBounds->IsEmpty() && aOffset.isNothing()) {
+      RefPtr<nsAtom> display = DisplayStyle();
+      RefPtr<nsAtom> contentsAtom = NS_Atomize("contents");
+      if (display == contentsAtom) {
+        // If we have a display:contents acc, we'll end up
+        // with a 0x0 rect from our normal bounds computation below.
+        // Try to compute bounds from child accs instead.
+        return ComputeBoundsFromContent();
+      }
+    }
+
     nsRect bounds = *maybeBounds;
     // maybeBounds is parent-relative. However, the transform matrix we cache
     // (if any) is meant to operate on self-relative rects. Therefore, make

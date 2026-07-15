@@ -82,6 +82,9 @@ class Rule {
     this.isSystem = appliedStyle.isSystem;
     this.isUnmatched = appliedStyle.isUnmatched || false;
     this.darkColorScheme = appliedStyle.darkColorScheme;
+    this.siblingCount = appliedStyle.siblingCount;
+    this.siblingIndex = appliedStyle.siblingIndex;
+
     this.inherited = appliedStyle.inherited || null;
     this.pseudoElement = appliedStyle.pseudoElement || "";
     this.keyframes = appliedStyle.keyframes || null;
@@ -388,6 +391,8 @@ class Rule {
         prop.updateEditor();
       }
     }
+
+    this.elementStyle.onRuleUpdated();
   }
 
   /**
@@ -418,8 +423,6 @@ class Rule {
         return this.#applyPropertiesNoAuthored(modifications);
       })
       .then(() => {
-        this.elementStyle.onRuleUpdated();
-
         if (resultPromise === this.applyingModifications) {
           this.applyingModifications = null;
           this.elementStyle.notifyChanged();
@@ -474,41 +477,12 @@ class Rule {
     property.value = value;
     property.priority = priority;
 
+    this.elementStyle.ruleView.emitForTests("start-set-property-value");
+
     const index = this.textProps.indexOf(property);
     return this.applyProperties(modifications => {
       modifications.setProperty(index, property.name, value, priority);
     });
-  }
-
-  /**
-   * Just sets the value and priority of a property, in order to preview its
-   * effect on the content document.
-   *
-   * @param {TextProperty} property
-   *        The property which value will be previewed
-   * @param {string} value
-   *        The value to be used for the preview
-   * @param {string} priority
-   *        The property's priority (either "important" or an empty string).
-   * @return {Promise}
-   */
-  async previewPropertyValue(property, value, priority) {
-    this.elementStyle.ruleView.emitForTests("start-preview-property-value");
-    const modifications = this.domRule.startModifyingProperties(
-      this.inspector.panelWin,
-      this.cssProperties
-    );
-    modifications.setProperty(
-      this.textProps.indexOf(property),
-      property.name,
-      value,
-      priority
-    );
-    await modifications.apply();
-
-    // Ensure dispatching a ruleview-changed event
-    // also for previews
-    this.elementStyle.notifyChanged();
   }
 
   /**
@@ -643,6 +617,11 @@ class Rule {
     const colorSchemeChanged =
       this.darkColorScheme !== appliedStyle.darkColorScheme;
     this.darkColorScheme = appliedStyle.darkColorScheme;
+    const siblingCountChanged = this.siblingCount !== appliedStyle.siblingCount;
+    this.siblingCountChanged = appliedStyle.siblingCountChanged;
+    const siblingIndexChanged =
+      this.siblingIndexChanged !== appliedStyle.siblingIndexChanged;
+    this.siblingIndexChanged = appliedStyle.siblingIndexChanged;
 
     // The `domRule`'s StyleRule actor doesn't change (this.domRule == appliedStyle.rule)
     // but the appliedStyle may object may update any of its other attributes.
@@ -693,7 +672,9 @@ class Rule {
           // - it's using attr() (we don't check if the attribute changed as it would be
           //   cumbersome and this is unlikely to be perf sensitive as the function might
           //   not be used that much)
-          prop.value.includes("attr("))
+          prop.value.includes("attr(") ||
+          (siblingCountChanged && prop.value.includes("sibling-count(")) ||
+          (siblingIndexChanged && prop.value.includes("sibling-index(")))
       ) {
         prop.updateEditor();
       }

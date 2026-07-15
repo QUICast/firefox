@@ -256,7 +256,7 @@ BufferOffset MacroAssemblerCompat::movePatchablePtr(ImmPtr ptr, Register dest) {
   // Scratch space for generating the load instruction.
   //
   // allocLiteralLoadEntry() will use InsertIndexIntoTag() to store a temporary
-  // index to the corresponding PoolEntry in the instruction itself.
+  // index to the corresponding pool entry in the instruction itself.
   //
   // That index will be fixed up later when finishPool()
   // walks over all marked loads and calls PatchConstantPoolLoad().
@@ -282,7 +282,7 @@ BufferOffset MacroAssemblerCompat::movePatchablePtr(ImmWord ptr,
   // Scratch space for generating the load instruction.
   //
   // allocLiteralLoadEntry() will use InsertIndexIntoTag() to store a temporary
-  // index to the corresponding PoolEntry in the instruction itself.
+  // index to the corresponding pool entry in the instruction itself.
   //
   // That index will be fixed up later when finishPool()
   // walks over all marked loads and calls PatchConstantPoolLoad().
@@ -1617,7 +1617,6 @@ CodeOffset MacroAssembler::call(Label* label) {
 
 void MacroAssembler::call(ImmPtr imm) {
   // This sync has been observed (and is expected) to be necessary.
-  // eg testcase: asm.js/testTimeout5.js
   syncStackPtr();
   vixl::UseScratchRegisterScope temps(this);
   const Register scratch = temps.AcquireX().asUnsized();

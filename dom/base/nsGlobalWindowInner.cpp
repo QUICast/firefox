@@ -86,6 +86,7 @@
 #include "mozilla/ThrottledEventQueue.h"
 #include "mozilla/TimeStamp.h"
 #include "mozilla/UniquePtr.h"
+#include "mozilla/Utf16.h"
 #include "mozilla/dom/AudioContext.h"
 #include "mozilla/dom/AutoEntryScript.h"
 #include "mozilla/dom/BarProps.h"
@@ -212,7 +213,6 @@
 #include "nsCRT.h"
 #include "nsCRTGlue.h"
 #include "nsCanvasFrame.h"
-#include "nsCharTraits.h"
 #include "nsCheapSets.h"
 #include "nsContentUtils.h"
 #include "nsCoord.h"
@@ -230,7 +230,6 @@
 #include "nsHistory.h"
 #include "nsIAddonPolicyService.h"
 #include "nsIArray.h"
-#include "nsIBaseWindow.h"
 #include "nsIBrowserChild.h"
 #include "nsICancelableRunnable.h"
 #include "nsIChannel.h"
@@ -492,7 +491,7 @@ class IdleRequestExecutorTimeoutHandler final : public TimeoutHandler {
   explicit IdleRequestExecutorTimeoutHandler(IdleRequestExecutor* aExecutor)
       : mExecutor(aExecutor) {}
 
-  NS_DECL_CYCLE_COLLECTING_ISUPPORTS
+  NS_DECL_CYCLE_COLLECTING_ISUPPORTS_FINAL
   NS_DECL_CYCLE_COLLECTION_CLASS(IdleRequestExecutorTimeoutHandler)
 
   bool Call(const char* /* unused */) override;
@@ -525,7 +524,7 @@ class IdleRequestExecutor final : public nsIRunnable,
         MakeRefPtr<IdleRequestExecutorTimeoutHandler>(this);
   }
 
-  NS_DECL_CYCLE_COLLECTING_ISUPPORTS
+  NS_DECL_CYCLE_COLLECTING_ISUPPORTS_FINAL
   NS_DECL_CYCLE_COLLECTION_CLASS_AMBIGUOUS(IdleRequestExecutor, nsIRunnable)
 
   NS_DECL_NSIRUNNABLE
@@ -779,7 +778,7 @@ class IdleRequestTimeoutHandler final : public TimeoutHandler {
                             nsPIDOMWindowInner* aWindow)
       : TimeoutHandler(aCx), mIdleRequest(aIdleRequest), mWindow(aWindow) {}
 
-  NS_DECL_CYCLE_COLLECTING_ISUPPORTS
+  NS_DECL_CYCLE_COLLECTING_ISUPPORTS_FINAL
   NS_DECL_CYCLE_COLLECTION_CLASS(IdleRequestTimeoutHandler)
 
   MOZ_CAN_RUN_SCRIPT bool Call(const char* /* unused */) override {
@@ -3421,7 +3420,9 @@ bool nsGlobalWindowInner::ResolveComponentsShim(
   // Warn once.
   nsCOMPtr<Document> doc = GetExtantDoc();
   if (doc) {
-    doc->WarnOnceAbout(DeprecatedOperations::eComponents, /* asError = */ true);
+    doc->WarnOnceAndReportAbout(
+        DeprecatedOperations::eComponents, /* asError = */
+        true);
     // Keep track of how often this happens.
     doc->SetUseCounter(eUseCounter_custom_ComponentsShimResolved);
   }
@@ -3527,7 +3528,7 @@ bool nsGlobalWindowInner::DoResolve(
       !xpc::IsXrayWrapper(aObj) &&
       !nsContentUtils::ObjectPrincipal(aObj)->IsSystemPrincipal()) {
     if (GetExtantDoc()) {
-      GetExtantDoc()->WarnOnceAbout(
+      GetExtantDoc()->WarnOnceAndReportAbout(
           DeprecatedOperations::eWindow_Cc_ontrollers);
     }
     const JSClass* clazz;
@@ -3930,19 +3931,29 @@ nsIWidget* nsGlobalWindowInner::GetNearestWidget() const {
 }
 
 void nsGlobalWindowInner::SetFullScreen(bool aFullscreen,
-                                        mozilla::ErrorResult& aError) {
+                                        CallerType aCallerType,
+                                        ErrorResult& aError) {
+  if (aCallerType == CallerType::NonSystem) {
+    if (Document* doc = GetExtantDoc()) {
+      doc->WarnOnceAndReportAbout(DeprecatedOperations::eFullscreenAttribute);
+    }
+  }
   FORWARD_TO_OUTER_OR_THROW(SetFullscreenOuter, (aFullscreen, aError), aError,
                             /* void */);
 }
 
-bool nsGlobalWindowInner::GetFullScreen(ErrorResult& aError) {
+bool nsGlobalWindowInner::GetFullScreen(CallerType aCallerType,
+                                        ErrorResult& aError) {
+  if (aCallerType == CallerType::NonSystem) {
+    if (Document* doc = GetExtantDoc()) {
+      doc->WarnOnceAndReportAbout(DeprecatedOperations::eFullscreenAttribute);
+    }
+  }
   FORWARD_TO_OUTER_OR_THROW(GetFullscreenOuter, (), aError, false);
 }
 
 bool nsGlobalWindowInner::GetFullScreen() {
-  ErrorResult dummy;
-  bool fullscreen = GetFullScreen(dummy);
-  dummy.SuppressException();
+  bool fullscreen = GetFullScreen(CallerType::System, IgnoreErrors());
   return fullscreen;
 }
 
@@ -4248,15 +4259,11 @@ void nsGlobalWindowInner::SetResizable(bool aResizable) const {
 }
 
 void nsGlobalWindowInner::CaptureEvents() {
-  if (mDoc) {
-    mDoc->WarnOnceAbout(DeprecatedOperations::eUseOfCaptureEvents);
-  }
+  // Intentionally a no-op, as this API is deprecated.
 }
 
 void nsGlobalWindowInner::ReleaseEvents() {
-  if (mDoc) {
-    mDoc->WarnOnceAbout(DeprecatedOperations::eUseOfReleaseEvents);
-  }
+  // Intentionally a no-op, as this API is deprecated.
 }
 
 Nullable<WindowProxyHolder> nsGlobalWindowInner::Open(const nsAString& aUrl,
@@ -5374,14 +5381,14 @@ nsGlobalWindowInner::ShowSlowScriptDialog(JSContext* aCx,
       size_t cutStart = 30;
       size_t cutLength = filenameUTF16.Length() - 60;
       MOZ_ASSERT(cutLength > 0);
-      if (NS_IS_LOW_SURROGATE(filenameUTF16[cutStart])) {
+      if (IsLowSurrogate(filenameUTF16[cutStart])) {
         // Don't truncate before the low surrogate, in case it's preceded by a
         // high surrogate and forms a single Unicode character.  Instead, just
         // include the low surrogate.
         ++cutStart;
         --cutLength;
       }
-      if (NS_IS_LOW_SURROGATE(filenameUTF16[cutStart + cutLength])) {
+      if (IsLowSurrogate(filenameUTF16[cutStart + cutLength])) {
         // Likewise, don't drop a trailing low surrogate here.  We want to
         // increase cutLength, since it might be 0 already so we can't very well
         // decrease it.
@@ -6474,7 +6481,6 @@ int32_t nsGlobalWindowInner::SetTimeoutOrInterval(
   if (!GetContextInternal() || !HasJSGlobal()) {
     // This window was already closed, or never properly initialized,
     // don't let a timer be scheduled on such a window.
-    aError.Throw(NS_ERROR_NOT_INITIALIZED);
     return 0;
   }
 
@@ -7770,6 +7776,13 @@ void nsGlobalWindowInner::UpdateSharedWorkersLanguageOverride(
   }
 }
 
+void nsGlobalWindowInner::UpdateSharedWorkerTimezoneOverride(
+    const nsAString& aTimezoneOverride) {
+  for (RefPtr<SharedWorker> pinnedWorker : mSharedWorkers.ForwardRange()) {
+    pinnedWorker->UpdateTimezoneOverride(aTimezoneOverride);
+  }
+}
+
 RefPtr<GenericPromise> nsGlobalWindowInner::StorageAccessPermissionChanged(
     bool aGranted) {
   // Invalidate cached StorageAllowed field so that calls to GetLocalStorage
@@ -7835,12 +7848,11 @@ RefPtr<GenericPromise> nsGlobalWindowInner::StorageAccessPermissionChanged(
   if (mDoc) {
     mDoc->ClearActiveCookieAndStoragePrincipals();
     if (mWindowGlobalChild) {
-      // XXX(farre): This is a bit backwards, but clearing the cookie
-      // principal might make us end up with a new effective storage
-      // principal on the child side than on the parent side, which
+      // Clearing the cookie principal might make us end up with a new effective
+      // storage principal on the child side than on the parent side, which
       // means that we need to sync it. See bug 1705359.
-      mWindowGlobalChild->SetDocumentPrincipal(
-          mDoc->NodePrincipal(), mDoc->EffectiveStoragePrincipal());
+      mWindowGlobalChild->SendUpdatePrincipalPartitioning(
+          !mDoc->UseRegularPrincipal());
     }
   }
 

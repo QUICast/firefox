@@ -11,6 +11,21 @@
 // the union of rules in the feature's mListIds, and used at classify time
 // based on the channel's PBM-ness and the protection-vs-annotation phase.
 
+add_setup(function () {
+  registerCleanupFunction(() => {
+    for (const pref of [
+      "privacy.trackingprotection.content.protection.enabled",
+      "privacy.trackingprotection.content.protection.engines",
+      "privacy.trackingprotection.content.protection.engines.pbmode",
+      "privacy.trackingprotection.content.annotation.enabled",
+      "privacy.trackingprotection.content.annotation.engines",
+      "privacy.trackingprotection.content.annotation.engines.pbmode",
+    ]) {
+      Services.prefs.clearUserPref(pref);
+    }
+  });
+});
+
 // "trackers" feature reads rules from RS list "disconnect-tracker-base"
 // (see kFeatures table in ContentClassifierService.cpp). With protection.
 // engines = "trackers" set, a matching third-party image should be blocked.
@@ -548,34 +563,35 @@ add_task(async function test_allowlist_skips_multifeature_blocking() {
     Services.perms.ALLOW_ACTION,
     { url: topLevelOrigin }
   );
-  registerCleanupFunction(() =>
-    SpecialPowers.removePermission("trackingprotection", {
+
+  try {
+    let tab = await openTestTab();
+    let browser = tab.linkedBrowser;
+    await syncAndWaitForLists(client, records);
+
+    await assertImageLoaded(
+      browser,
+      TEST_BLOCKED_3RD_PARTY_DOMAIN,
+      "allowlisted top-level page should not cancel example.org"
+    );
+
+    await assertLacksBlockingState(
+      browser,
+      TEST_BLOCKED_3RD_PARTY_DOMAIN,
+      Ci.nsIWebProgressListener.STATE_BLOCKED_TRACKING_CONTENT,
+      "no STATE_BLOCKED_TRACKING_CONTENT for allowlisted page"
+    );
+    await assertLacksBlockingState(
+      browser,
+      TEST_BLOCKED_3RD_PARTY_DOMAIN,
+      Ci.nsIWebProgressListener.STATE_BLOCKED_FINGERPRINTING_CONTENT,
+      "no STATE_BLOCKED_FINGERPRINTING_CONTENT for allowlisted page"
+    );
+  } finally {
+    await SpecialPowers.removePermission("trackingprotection", {
       url: topLevelOrigin,
-    })
-  );
-
-  let tab = await openTestTab();
-  let browser = tab.linkedBrowser;
-  await syncAndWaitForLists(client, records);
-
-  await assertImageLoaded(
-    browser,
-    TEST_BLOCKED_3RD_PARTY_DOMAIN,
-    "allowlisted top-level page should not cancel example.org"
-  );
-
-  await assertLacksBlockingState(
-    browser,
-    TEST_BLOCKED_3RD_PARTY_DOMAIN,
-    Ci.nsIWebProgressListener.STATE_BLOCKED_TRACKING_CONTENT,
-    "no STATE_BLOCKED_TRACKING_CONTENT for allowlisted page"
-  );
-  await assertLacksBlockingState(
-    browser,
-    TEST_BLOCKED_3RD_PARTY_DOMAIN,
-    Ci.nsIWebProgressListener.STATE_BLOCKED_FINGERPRINTING_CONTENT,
-    "no STATE_BLOCKED_FINGERPRINTING_CONTENT for allowlisted page"
-  );
+    });
+  }
 });
 
 // Exception semantics: when an exception feature carries an
@@ -583,9 +599,9 @@ add_task(async function test_allowlist_skips_multifeature_blocking() {
 // carries `||example.com^`, the aggregated ContentClassifierResult's
 // status is promoted to Exception (which ranks above Hit), so
 // MaybeCancelChannel's `aResult.Hit()` returns false and the channel
-// is never cancelled. The exception feature is listed first in the
-// engines pref to also confirm there's no early-out that would skip
-// the trailing blocker.
+// is never cancelled. Since Bug 2041805 the blocking feature must be
+// listed before the exception feature for the exception engine to see
+// the propagated matched_rule.
 async function runExceptionAllowsBlocker({
   exceptionFeature,
   exceptionListName,
@@ -632,4 +648,228 @@ add_task(async function test_major_exceptions_allows_blocker() {
     exceptionFeature: "major-exceptions",
     exceptionListName: "mozilla-major-exceptions",
   });
+});
+
+// A helper function to test the WebCompat allowlist mechanism.
+async function runExceptionAllowListTest({
+  exceptionListName,
+  baselineEnabled,
+  convenienceEnabled,
+  expectBlocked,
+}) {
+  let client = getRSClient();
+  let records = await populateMultipleRS(client.db, [
+    { id: "exception", name: exceptionListName, rules: ["@@||example.com^"] },
+    {
+      id: "trackers",
+      name: "disconnect-tracker-base",
+      rules: ["||example.com^"],
+    },
+  ]);
+
+  await SpecialPowers.pushPrefEnv({
+    set: [
+      ["privacy.trackingprotection.content.testing", true],
+      ["privacy.trackingprotection.content.mirror.enabled", true],
+      ["privacy.trackingprotection.enabled", true],
+      [
+        "privacy.trackingprotection.allow_list.baseline.enabled",
+        baselineEnabled,
+      ],
+      [
+        "privacy.trackingprotection.allow_list.convenience.enabled",
+        convenienceEnabled,
+      ],
+    ],
+  });
+
+  // The pref mirror recomputes the engine prefs on a coalesced main-thread
+  // runnable; spin the event loop once so that Sync() has written them before
+  // we drive the rebuild below.
+  await new Promise(resolve => Services.tm.dispatchToMainThread(resolve));
+
+  let tab = await openTestTab();
+  let browser = tab.linkedBrowser;
+  await syncAndWaitForLists(client, records);
+
+  let desc = `baseline=${baselineEnabled} convenience=${convenienceEnabled}`;
+
+  if (expectBlocked) {
+    await assertImageBlocked(
+      browser,
+      TEST_ANNOTATED_3RD_PARTY_DOMAIN,
+      `${desc}: disabled allowlist no longer suppresses the block`
+    );
+    await assertHasBlockingState(
+      browser,
+      TEST_ANNOTATED_3RD_PARTY_DOMAIN,
+      Ci.nsIWebProgressListener.STATE_BLOCKED_TRACKING_CONTENT,
+      `${desc}: STATE_BLOCKED_TRACKING_CONTENT set when allowlist disabled`
+    );
+  } else {
+    await assertImageLoaded(
+      browser,
+      TEST_ANNOTATED_3RD_PARTY_DOMAIN,
+      `${desc}: enabled allowlist still allows example.com`
+    );
+    await assertLacksBlockingState(
+      browser,
+      TEST_ANNOTATED_3RD_PARTY_DOMAIN,
+      Ci.nsIWebProgressListener.STATE_BLOCKED_TRACKING_CONTENT,
+      `${desc}: no STATE_BLOCKED_TRACKING_CONTENT when allowlist enabled`
+    );
+  }
+}
+
+// baseline.enabled=false keeps the mirror from appending major-exceptions, so
+// its allow rule no longer suppresses the trackers block.
+add_task(async function test_major_exceptions_gated_by_baseline_pref() {
+  await runExceptionAllowListTest({
+    exceptionListName: "mozilla-major-exceptions",
+    baselineEnabled: false,
+    convenienceEnabled: true,
+    expectBlocked: true,
+  });
+});
+
+// convenience.enabled=false keeps the mirror from appending minor-exceptions
+// while baseline keeps major-exceptions present.
+add_task(async function test_minor_exceptions_gated_by_convenience_pref() {
+  await runExceptionAllowListTest({
+    exceptionListName: "mozilla-minor-exceptions",
+    baselineEnabled: true,
+    convenienceEnabled: false,
+    expectBlocked: true,
+  });
+});
+
+// Disabling convenience must not affect the major-exceptions (baseline) engine.
+add_task(async function test_major_exceptions_unaffected_by_convenience_pref() {
+  await runExceptionAllowListTest({
+    exceptionListName: "mozilla-major-exceptions",
+    baselineEnabled: true,
+    convenienceEnabled: false,
+    expectBlocked: false,
+  });
+});
+
+// convenience depends on baseline: with baseline disabled the mirror appends
+// neither exception engine even though convenience.enabled is true.
+add_task(async function test_minor_exceptions_requires_baseline_pref() {
+  await runExceptionAllowListTest({
+    exceptionListName: "mozilla-minor-exceptions",
+    baselineEnabled: false,
+    convenienceEnabled: true,
+    expectBlocked: true,
+  });
+});
+
+// Bug 2041805: matched_rule is threaded across engines and force_check_-
+// exceptions is no longer hard-coded. An exception-only feature listed
+// BEFORE its paired blocker therefore never sees a propagated matched_rule
+// and skips its exception lookup, so the trailing blocker takes effect.
+add_task(async function test_exception_before_blocker_does_not_unblock() {
+  let client = getRSClient();
+  let records = await populateMultipleRS(client.db, [
+    {
+      id: "exception",
+      name: "mozilla-minor-exceptions",
+      rules: ["@@||example.com^"],
+    },
+    {
+      id: "trackers",
+      name: "disconnect-tracker-base",
+      rules: ["||example.com^"],
+    },
+  ]);
+
+  await pushEnginePrefs({ protection: "minor-exceptions,trackers" });
+
+  let tab = await openTestTab();
+  let browser = tab.linkedBrowser;
+  await syncAndWaitForLists(client, records);
+
+  await assertImageBlocked(
+    browser,
+    TEST_ANNOTATED_3RD_PARTY_DOMAIN,
+    "exception-first ordering does not unblock (matched_rule not propagated)"
+  );
+
+  await assertHasBlockingState(
+    browser,
+    TEST_ANNOTATED_3RD_PARTY_DOMAIN,
+    Ci.nsIWebProgressListener.STATE_BLOCKED_TRACKING_CONTENT,
+    "trailing blocker still fires when listed after an exception feature"
+  );
+});
+
+// Bug 2041805: without an upstream blocker, an exception-only engine's
+// exception lookup is skipped entirely. Nothing matches, the image loads,
+// and no blocking-state entry is written.
+add_task(async function test_exception_only_engine_no_block_loads() {
+  let client = getRSClient();
+  let records = await populateMultipleRS(client.db, [
+    {
+      id: "exception",
+      name: "mozilla-minor-exceptions",
+      rules: ["@@||example.com^"],
+    },
+  ]);
+
+  await pushEnginePrefs({ protection: "minor-exceptions" });
+
+  let tab = await openTestTab();
+  let browser = tab.linkedBrowser;
+  await syncAndWaitForLists(client, records);
+
+  await assertImageLoaded(
+    browser,
+    TEST_ANNOTATED_3RD_PARTY_DOMAIN,
+    "exception-only engine without an upstream blocker is a no-op"
+  );
+
+  await assertLacksBlockingState(
+    browser,
+    TEST_ANNOTATED_3RD_PARTY_DOMAIN,
+    Ci.nsIWebProgressListener.STATE_BLOCKED_TRACKING_CONTENT,
+    "no STATE_BLOCKED_TRACKING_CONTENT when only an exception engine runs"
+  );
+});
+
+// Bug 2041805: $important block rules are immune to exceptions (adblock-rust
+// semantics), and ClassifyWithEngines additionally short-circuits at
+// ImportantHit so later exception engines are not invoked at all.
+add_task(async function test_important_block_overrides_exception() {
+  let client = getRSClient();
+  let records = await populateMultipleRS(client.db, [
+    {
+      id: "trackers",
+      name: "disconnect-tracker-base",
+      rules: ["||example.com^$important"],
+    },
+    {
+      id: "exception",
+      name: "mozilla-minor-exceptions",
+      rules: ["@@||example.com^"],
+    },
+  ]);
+
+  await pushEnginePrefs({ protection: "trackers,minor-exceptions" });
+
+  let tab = await openTestTab();
+  let browser = tab.linkedBrowser;
+  await syncAndWaitForLists(client, records);
+
+  await assertImageBlocked(
+    browser,
+    TEST_ANNOTATED_3RD_PARTY_DOMAIN,
+    "$important block survives a later exception engine"
+  );
+
+  await assertHasBlockingState(
+    browser,
+    TEST_ANNOTATED_3RD_PARTY_DOMAIN,
+    Ci.nsIWebProgressListener.STATE_BLOCKED_TRACKING_CONTENT,
+    "important block carries STATE_BLOCKED_TRACKING_CONTENT"
+  );
 });

@@ -4,6 +4,10 @@
 
 #include "TSFTextStoreBase.h"
 
+#include <comutil.h>  // for _bstr_t
+#include <oleauto.h>  // for SysAllocString
+#include <olectl.h>
+
 #include "IMMHandler.h"
 #include "TSFInputScope.h"
 #include "TSFTextStore.h"
@@ -18,10 +22,6 @@
 #include "mozilla/TextEvents.h"
 #include "mozilla/ToString.h"
 #include "nsWindow.h"
-
-#include <comutil.h>  // for _bstr_t
-#include <oleauto.h>  // for SysAllocString
-#include <olectl.h>
 
 // For collecting other people's log, tell `MOZ_LOG=IMEHandler:4,sync`
 // rather than `MOZ_LOG=IMEHandler:5,sync` since using `5` may create too

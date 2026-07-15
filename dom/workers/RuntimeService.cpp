@@ -808,12 +808,12 @@ bool InitJSContextForWorker(WorkerPrivate* aWorkerPrivate,
   return true;
 }
 
-static bool PreserveWrapper(JSContext* cx, JS::Handle<JSObject*> obj) {
+static void PreserveWrapper(JSContext* cx, JS::Handle<JSObject*> obj) {
   MOZ_ASSERT(cx);
   MOZ_ASSERT(obj);
   MOZ_ASSERT(mozilla::dom::IsDOMObject(obj));
 
-  return mozilla::dom::TryPreserveWrapper(obj);
+  mozilla::dom::TryPreserveWrapper(obj);
 }
 
 static bool IsWorkerDebuggerGlobalOrSandbox(JS::Handle<JSObject*> aGlobal) {
@@ -1915,6 +1915,15 @@ void RuntimeService::PropagateStorageAccessPermissionGranted(
   }
 }
 
+void RuntimeService::UpdateTimezoneOverrideForWorkers(
+    const nsPIDOMWindowInner& aWindow, const nsAString& aTimezone) {
+  AssertIsOnMainThread();
+
+  for (WorkerPrivate* const worker : GetWorkersForWindow(aWindow)) {
+    worker->UpdateTimezoneOverride(aTimezone);
+  }
+}
+
 template <typename Func>
 void RuntimeService::BroadcastAllWorkers(const Func& aFunc) {
   AssertIsOnMainThread();
@@ -2293,9 +2302,9 @@ WorkerThreadPrimaryRunnable::Run() {
 
       failureCleanup.release();
 
-      // Binding the RemoteWorkerDebugger child endpoint after initailzation
-      // successfully.
-      // mWorkerPrivate->BindRemoteWorkerDebuggerChild();
+      // Binding the RemoteWorkerDebugger child endpoint after initialization
+      // successfully. Self-gates on UseRemoteDebugger().
+      mWorkerPrivate->BindRemoteWorkerDebuggerChild();
 
       runLoopRan = true;
 
@@ -2493,6 +2502,15 @@ void PropagateStorageAccessPermissionGrantedToWorkers(
   RuntimeService* runtime = RuntimeService::GetService();
   if (runtime) {
     runtime->PropagateStorageAccessPermissionGranted(aWindow);
+  }
+}
+
+void UpdateTimezoneOverrideForWorkers(const nsPIDOMWindowInner& aWindow,
+                                      const nsAString& aTimezone) {
+  AssertIsOnMainThread();
+  RuntimeService* runtime = RuntimeService::GetService();
+  if (runtime) {
+    runtime->UpdateTimezoneOverrideForWorkers(aWindow, aTimezone);
   }
 }
 

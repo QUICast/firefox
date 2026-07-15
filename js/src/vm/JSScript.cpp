@@ -2153,8 +2153,7 @@ bool ScriptSource::setFilename(FrontendContext* fc, UniqueChars&& filename) {
   MOZ_ASSERT(!filename_);
   filename_ = getOrCreateStringZ(fc, std::move(filename));
   if (filename_) {
-    filenameHash_ =
-        mozilla::HashStringKnownLength(filename_.chars(), filename_.length());
+    filenameHash_ = mozilla::HashString(filename_.chars(), filename_.length());
     return true;
   }
   return false;
@@ -2488,12 +2487,17 @@ bool PrivateScriptData::InitFromStencil(
 
   MOZ_ASSERT(ngcthings <= INDEX_LIMIT);
 
-  // Create and initialize PrivateScriptData
-  if (!JSScript::createPrivateScriptData(cx, script, ngcthings)) {
+  // Create and initialize PrivateScriptData.
+  //
+  // NOTE: If you use PrivateScriptData::new_ directly instead of via
+  // fullyInitFromStencil, you are responsible for notifying the debugger after
+  // successfully creating the script.
+  RootedBuffer<PrivateScriptData> data(cx,
+                                       PrivateScriptData::new_(cx, ngcthings));
+  if (!data) {
     return false;
   }
 
-  js::PrivateScriptData* data = script->data_;
   if (ngcthings) {
     if (!EmitScriptThingsVector(cx, atomCache, stencil, gcOutput,
                                 scriptStencil.gcthings(stencil),
@@ -2501,6 +2505,13 @@ bool PrivateScriptData::InitFromStencil(
       return false;
     }
   }
+
+  // Memory fence so concurrent marking sees the initialized PrivateScriptData
+  // memory.
+  MemoryReleaseFence(cx->zone());
+
+  script->swapData(&data);
+  MOZ_ASSERT(!data);
 
   return true;
 }
@@ -2547,23 +2558,6 @@ uint32_t JSScript::vtuneMethodID() {
   return id;
 }
 #endif
-
-/* static */
-bool JSScript::createPrivateScriptData(JSContext* cx, HandleScript script,
-                                       uint32_t ngcthings) {
-  cx->check(script);
-
-  RootedBuffer<PrivateScriptData> data(cx,
-                                       PrivateScriptData::new_(cx, ngcthings));
-  if (!data) {
-    return false;
-  }
-
-  script->swapData(&data);
-  MOZ_ASSERT(!data);
-
-  return true;
-}
 
 /* static */
 bool JSScript::fullyInitFromStencil(
@@ -3131,10 +3125,13 @@ js::UniquePtr<ImmutableScriptData> ImmutableScriptData::new_(
 }
 
 void ScriptWarmUpData::trace(JSTracer* trc) {
-  uintptr_t tag = data_ & TagMask;
+  uintptr_t data = data_.getForTracing();
+  uintptr_t tag = data & TagMask;
+  uintptr_t untagged = data & ~TagMask;
+
   switch (tag) {
     case EnclosingScriptTag: {
-      BaseScript* enclosingScript = toEnclosingScript();
+      auto* enclosingScript = reinterpret_cast<BaseScript*>(untagged);
       BaseScript* prior = enclosingScript;
       TraceManuallyBarrieredEdge(trc, &enclosingScript, "enclosingScript");
       if (enclosingScript != prior) {
@@ -3144,7 +3141,7 @@ void ScriptWarmUpData::trace(JSTracer* trc) {
     }
 
     case EnclosingScopeTag: {
-      Scope* enclosingScope = toEnclosingScope();
+      auto* enclosingScope = reinterpret_cast<Scope*>(untagged);
       Scope* prior = enclosingScope;
       TraceManuallyBarrieredEdge(trc, &enclosingScope, "enclosingScope");
       if (enclosingScope != prior) {
@@ -3154,7 +3151,11 @@ void ScriptWarmUpData::trace(JSTracer* trc) {
     }
 
     case JitScriptTag: {
-      toJitScript()->trace(trc);
+      auto* jitScript = reinterpret_cast<jit::JitScript*>(untagged);
+      // Memory fence so that concurrent marking sees initialized JitScript
+      // data. For GC things this happens in MarkingTracerT::markAndTraverse.
+      gc::MemoryAcquireFence(trc);
+      jitScript->trace(trc);
       break;
     }
 
@@ -3910,24 +3911,6 @@ bool JSScript::dumpGCThings(JSContext* cx, JS::Handle<JSScript*> script,
 }
 
 #endif  // defined(DEBUG) || defined(JS_JITSPEW)
-
-void JSScript::AutoDelazify::holdScript(JS::HandleFunction fun) {
-  if (fun) {
-    JSAutoRealm ar(cx_, fun);
-    script_ = JSFunction::getOrCreateScript(cx_, fun);
-    if (script_) {
-      oldAllowRelazify_ = script_->allowRelazify();
-      script_->clearAllowRelazify();
-    }
-  }
-}
-
-void JSScript::AutoDelazify::dropScript() {
-  if (script_) {
-    script_->setAllowRelazify(oldAllowRelazify_);
-  }
-  script_ = nullptr;
-}
 
 JS::ubi::Base::Size JS::ubi::Concrete<BaseScript>::size(
     mozilla::MallocSizeOf mallocSizeOf) const {

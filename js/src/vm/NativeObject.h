@@ -243,10 +243,11 @@ class ObjectElements {
 
   // The flags word stores both the flags and the number of shifted elements.
   // Allow shifting 2047 elements before actually moving the elements.
-  static const size_t NumShiftedElementsBits = 11;
-  static const size_t MaxShiftedElements = (1 << NumShiftedElementsBits) - 1;
-  static const size_t NumShiftedElementsShift = 32 - NumShiftedElementsBits;
-  static const size_t FlagsMask = (1 << NumShiftedElementsShift) - 1;
+  static constexpr size_t NumShiftedElementsBits = 11;
+  static constexpr size_t MaxShiftedElements =
+      (1 << NumShiftedElementsBits) - 1;
+  static constexpr size_t NumShiftedElementsShift = 32 - NumShiftedElementsBits;
+  static constexpr size_t FlagsMask = (1 << NumShiftedElementsShift) - 1;
   static_assert(MaxShiftedElements == 2047,
                 "MaxShiftedElements should match the comment");
 
@@ -255,6 +256,8 @@ class ObjectElements {
   friend class ArrayObject;
   friend class NativeObject;
   friend class gc::TenuringTracer;
+  template <uint32_t>
+  friend class gc::MarkingTracerT;
 
   friend bool js::SetIntegrityLevel(JSContext* cx, HandleObject obj,
                                     IntegrityLevel level);
@@ -266,7 +269,7 @@ class ObjectElements {
   // The NumShiftedElementsBits high bits of this are used to store the
   // number of shifted elements, the other bits are available for the flags.
   // See Flags enum above.
-  uint32_t flags;
+  GCData<uint32_t> flags;
 
   /*
    * Number of initialized elements. This is <= the capacity, and for arrays
@@ -274,7 +277,7 @@ class ObjectElements {
    * uninitialized, but values between the initialized length and the proper
    * length are conceptually holes.
    */
-  uint32_t initializedLength;
+  GCData<uint32_t> initializedLength;
 
   /* Number of allocated slots. */
   uint32_t capacity;
@@ -410,6 +413,9 @@ class ObjectElements {
   }
 
   uint32_t numShiftedElements() const {
+    return numShiftedElementsFromFlags(flags);
+  }
+  static uint32_t numShiftedElementsFromFlags(uint32_t flags) {
     uint32_t numShifted = flags >> NumShiftedElementsShift;
     MOZ_ASSERT_IF(numShifted > 0,
                   !(flags & (NONWRITABLE_ARRAY_LENGTH | NOT_EXTENSIBLE |
@@ -434,6 +440,9 @@ class ObjectElements {
     return fromElements(unshiftedElements);
   }
 
+  uint32_t getFlags() const { return flags.get(); }
+  uint32_t getFlagsForTracing() const { return flags.getForTracing(); }
+
   // This is enough slots to store an object of this class. See the static
   // assertion below.
   static const size_t VALUES_PER_HEADER = 2;
@@ -452,9 +461,12 @@ static_assert(ObjectElements::VALUES_PER_HEADER * sizeof(HeapSlot) ==
  * slot data follows in memory.
  */
 class alignas(HeapSlot) ObjectSlots {
-  uint32_t capacity_;
-  uint32_t dictionarySlotSpan_;
-  uint64_t maybeUniqueId_;
+  GCData<uint32_t> capacity_;
+  GCData<uint32_t> dictionarySlotSpan_;
+  GCData<uint64_t> maybeUniqueId_;
+
+  template <uint32_t>
+  friend class gc::MarkingTracerT;
 
  public:
   // Special values for maybeUniqueId_ to indicate no unique ID is present.
@@ -504,6 +516,9 @@ class alignas(HeapSlot) ObjectSlots {
   constexpr uint32_t capacity() const { return capacity_; }
 
   constexpr uint32_t dictionarySlotSpan() const { return dictionarySlotSpan_; }
+  uint32_t dictionarySlotSpanForTracing() const {
+    return dictionarySlotSpan_.getForTracing();
+  }
 
   bool isSharedEmptySlots() const {
     return maybeUniqueId_ == NoUniqueIdInSharedEmptySlots;
@@ -595,9 +610,16 @@ enum class CanReuseShape {
   NoReuse,
 };
 
-// Utility functions used by the GC to determine object layout.
+// Functions used to determine object layout. These (or their alternate
+// versions) are also used by the GC.
+//
+// The GC versions are designed to be safe for concurrent marking. They
+// allow tracing to read fields at most once (hence may take additional
+// arguments), and use 'forTracing' versions of getters as appropriate.
 
 inline uint32_t NativeObjectSlotSpan(Shape* shape, ObjectSlots* slotsHeader) {
+  // Keep this in line with MarkingTracerT methods such as minSlotSpan.
+
   if (shape->isDictionary()) {
     return slotsHeader->dictionarySlotSpan();
   }
@@ -606,14 +628,43 @@ inline uint32_t NativeObjectSlotSpan(Shape* shape, ObjectSlots* slotsHeader) {
   return shape->asShared().slotSpan();
 }
 
+// Get the slot span accurate up to Shape::SMALL_SLOTSPAN_MAX.
+inline uint32_t NativeObjectSmallSlotSpanForTracing(
+    Shape::ImmutableFlags shapeFlags, ObjectSlots* slotsHeader) {
+  Shape::Kind kind = Shape::kindFromImmutableFlags(shapeFlags);
+  if (kind == Shape::Kind::Dictionary) {
+    return slotsHeader->dictionarySlotSpanForTracing();
+  }
+
+  // Number of slots limited to SMALL_SLOTSPAN_MAX slots.
+  return SharedShape::smallSlotSpanFromImmutableFlags(shapeFlags);
+}
+
 inline uint32_t NumNativeObjectFixedSlots(Shape* shape) {
   auto* shadowShape = reinterpret_cast<JS::shadow::Shape*>(shape);
-  return JS::shadow::NumObjectFixedSlots(shadowShape);
+  return JS::shadow::NumNativeObjectFixedSlots(shadowShape);
+}
+inline uint32_t NumNativeObjectFixedSlots(Shape::ImmutableFlags shapeFlags) {
+  return NativeShape::numFixedSlotsFromImmutableFlags(shapeFlags);
 }
 
 inline uint32_t NumNativeObjectUsedFixedSlots(Shape* shape) {
   uint32_t nslots = shape->asShared().slotSpan();
   return std::min(nslots, NumNativeObjectFixedSlots(shape));
+}
+inline uint32_t NumNativeObjectUsedFixedSlotsForTracing(
+    NativeObject* obj, Shape::ImmutableFlags shapeFlags,
+    ObjectSlots* slotsHeader) {
+  // For non-dictionary shapes this uses the small slot span to avoid calling
+  // SharedShape::slotSpanSlow. This is safe because we only need accurate slot
+  // span if it can be less than the number of fixed slots.
+  static_assert(JS::shadow::NativeObject::MAX_FIXED_SLOTS <=
+                Shape::SMALL_SLOTSPAN_MAX);
+
+  uint32_t nfixed = NumNativeObjectFixedSlots(shapeFlags);
+  uint32_t minSlots =
+      NativeObjectSmallSlotSpanForTracing(shapeFlags, slotsHeader);
+  return std::min(nfixed, minSlots);
 }
 
 inline bool IsNativeObjectDynamicSlots(HeapSlot* slots) {
@@ -625,14 +676,24 @@ inline bool IsNativeObjectEmptyElements(HeapSlot* elements) {
          elements == emptyObjectElementsShared;
 }
 
+inline bool IsNativeObjectFixedElements(uint32_t elementFlags) {
+  return elementFlags & ObjectElements::FIXED;
+}
+
 inline bool IsNativeObjectFixedElements(HeapSlot* elements) {
-  ObjectElements* elementsHeader = ObjectElements::fromElements(elements);
-  return elementsHeader->isFixed();
+  return IsNativeObjectFixedElements(
+      ObjectElements::fromElements(elements)->getFlags());
 }
 
 inline bool IsNativeObjectDynamicElements(HeapSlot* elements) {
   return !IsNativeObjectEmptyElements(elements) &&
          !IsNativeObjectFixedElements(elements);
+}
+
+inline bool IsNativeObjectDynamicElements(HeapSlot* elements,
+                                          uint32_t elementFlags) {
+  return !IsNativeObjectEmptyElements(elements) &&
+         !IsNativeObjectFixedElements(elementFlags);
 }
 
 /*
@@ -671,10 +732,10 @@ inline bool IsNativeObjectDynamicElements(HeapSlot* elements) {
 class NativeObject : public JSObject {
  protected:
   /* Slots for object properties. */
-  js::HeapSlot* slots_;
+  GCData<HeapSlot*> slots_;
 
   /* Slots for object dense elements. */
-  js::HeapSlot* elements_;
+  GCData<HeapSlot*> elements_;
 
   friend class ::JSObject;
 
@@ -863,6 +924,7 @@ class NativeObject : public JSObject {
   friend class DictionaryPropMap;
   template <uint32_t>
   friend class gc::MarkingTracerT;
+  friend class GCMarker;
   friend class Shape;
 
   void invalidateSlotRange(uint32_t start, uint32_t end) {
@@ -1463,6 +1525,8 @@ class NativeObject : public JSObject {
   ObjectElements* getElementsHeader() const {
     return ObjectElements::fromElements(elements_);
   }
+
+  Value* unbarrieredElements() { return elements_->unbarrieredAddress(); }
 
   // Returns a pointer to the first element, including shifted elements.
   inline HeapSlot* unshiftedElements() const {

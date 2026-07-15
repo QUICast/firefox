@@ -1,13 +1,12 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-use api::{BorderRadius, BoxShadowClipMode, ClipMode, ColorF, ColorU, PropertyBinding};
+use api::{BorderRadius, BoxShadowClipMode, ClipMode, ColorF, PropertyBinding};
 use api::units::*;
-use crate::border::{BorderRadiusAu};
 use crate::clip::{ClipItemEntry, ClipItemKey, ClipItemKeyKind, ClipNodeId};
 use crate::intern::{Handle as InternHandle, InternDebug, Internable};
 use crate::prim_store::{InternablePrimitive, PrimKey, PrimTemplate, PrimTemplateCommonData};
-use crate::prim_store::{PrimitiveKind, PrimitiveStore, VectorKey};
+use crate::prim_store::{PrimitiveKind, PrimitiveStore};
 use crate::prim_store::rectangle::RectanglePrim;
 use crate::scene_building::{SceneBuilder, IsVisible};
 use crate::spatial_tree::SpatialNodeIndex;
@@ -29,22 +28,9 @@ impl BoxShadowKey {
 
 impl InternDebug for BoxShadowKey {}
 
-#[cfg_attr(feature = "capture", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
-#[derive(Debug, Clone, MallocSizeOf, Hash, Eq, PartialEq)]
-pub struct BoxShadow {
-    pub color: ColorU,
-    pub blur_radius: Au,
-    pub clip_mode: BoxShadowClipMode,
-    pub shadow_radius: BorderRadiusAu,
-    pub element_radius: BorderRadiusAu,
-    /// `box-shadow` offset of the shadow relative to the element, in
-    /// local space.
-    pub box_offset: VectorKey,
-    /// Signed spread radius. Positive for Outset, negative for Inset
-    /// (matches the convention in `add_box_shadow`).
-    pub spread_amount: Au,
-}
+// `BoxShadow` now lives in `webrender_api::interned_prims` so content-process
+// interning can hold it. Re-exported to keep existing references working.
+pub use api::interned_prims::BoxShadow;
 
 impl IsVisible for BoxShadow {
     fn is_visible(&self) -> bool {
@@ -143,6 +129,10 @@ pub struct BoxShadowCacheKey {
     pub br_top_right: DeviceIntSize,
     pub br_bottom_right: DeviceIntSize,
     pub br_bottom_left: DeviceIntSize,
+    pub shape_top_left: u32,
+    pub shape_top_right: u32,
+    pub shape_bottom_left: u32,
+    pub shape_bottom_right: u32,
     pub device_pixel_scale: Au,
 }
 
@@ -196,6 +186,12 @@ impl<'a> SceneBuilder<'a> {
                     }
 
                     // TODO(gw): Add a fast path for ClipOut + zero border radius!
+                    // Anchor the inner ClipOut edge to the snapped element by
+                    // snapping with the spread as the outset (bug 2052033): the
+                    // edge stays a constant `spread` from the snapped element,
+                    // rather than each side rounding on its own (which makes the
+                    // fake-border sides thicken at different times as the spread
+                    // animates, and the ring width breathe under motion).
                     clips.push(ClipItemEntry {
                         key: ClipItemKey {
                             kind: ClipItemKeyKind::rounded_rect(
@@ -205,12 +201,16 @@ impl<'a> SceneBuilder<'a> {
                         },
                         spatial_node_index,
                         clip_rect: prim_info.rect,
+                        snap_outset: Au::from_f32_px(spread_radius),
                     });
 
                     (shadow_rect, shadow_radius)
                 }
                 BoxShadowClipMode::Inset => {
                     if !shadow_rect.is_empty() {
+                        // See the Outset arm: anchor the inner ClipOut edge to
+                        // the snapped element via the spread outset, rather than
+                        // snapping it independently (bug 2052033).
                         clips.push(ClipItemEntry {
                             key: ClipItemKey {
                                 kind: ClipItemKeyKind::rounded_rect(
@@ -220,6 +220,7 @@ impl<'a> SceneBuilder<'a> {
                             },
                             spatial_node_index,
                             clip_rect: shadow_rect,
+                            snap_outset: Au::from_f32_px(spread_radius),
                         });
                     }
 
@@ -227,6 +228,9 @@ impl<'a> SceneBuilder<'a> {
                 }
             };
 
+            // The outer Clip matches the RectanglePrim rect and snaps normally
+            // (both snapped the same way), so the outer edge stays crisp and
+            // aligned; only the inner ClipOut above uses the spread outset.
             clips.push(ClipItemEntry {
                 key: ClipItemKey {
                     kind: ClipItemKeyKind::rounded_rect(
@@ -236,6 +240,7 @@ impl<'a> SceneBuilder<'a> {
                 },
                 spatial_node_index,
                 clip_rect: final_prim_rect,
+                snap_outset: Au(0),
             });
 
             self.add_primitive(
@@ -264,7 +269,7 @@ impl<'a> SceneBuilder<'a> {
                     }
 
                     // Element clip is handled analytically in the shader.
-                    self.add_nonshadowable_primitive(
+                    self.add_primitive(
                         spatial_node_index,
                         clip_node_id,
                         &LayoutPrimitiveInfo::with_clip_rect(dest_rect, prim_info.clip_rect),
@@ -291,7 +296,7 @@ impl<'a> SceneBuilder<'a> {
                     }
 
                     // Element clip is handled analytically in the shader.
-                    self.add_nonshadowable_primitive(
+                    self.add_primitive(
                         spatial_node_index,
                         clip_node_id,
                         &prim_info.clone(),

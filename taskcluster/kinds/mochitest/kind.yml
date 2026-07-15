@@ -328,6 +328,8 @@ tasks:
             - inc-origin-init
             - trainhop-beta
             - trainhop-release
+            - nova
+            - nova+vertical-tabs
         run-on-projects:
             by-variant:
                 trainhop-beta:
@@ -384,6 +386,24 @@ tasks:
                         windows1.*-64.*(-shippable)?/.*: ['autoland', 'mozilla-central']
                         default: []
                 inc-origin-init: []
+                nova:
+                    by-test-platform:
+                        .*-artifact.*: []
+                        .*-asan.*: []
+                        .*-ccov.*: []
+                        linux.*64(-shippable)?/opt: ['mozilla-central']
+                        macosx1[45].*64(-shippable)?(-qr)?/opt: ['mozilla-central']
+                        windows11.*-64.*(-shippable)?/opt: ['mozilla-central']
+                        default: []
+                nova+vertical-tabs:
+                    by-test-platform:
+                        .*-artifact.*: []
+                        .*-asan.*: []
+                        .*-ccov.*: []
+                        linux.*64(-shippable)?/opt: ['mozilla-central']
+                        macosx1[45].*64(-shippable)?(-qr)?/opt: ['mozilla-central']
+                        windows11.*-64.*(-shippable)?/opt: ['mozilla-central']
+                        default: []
                 default:
                     by-test-platform:
                         android.*: []
@@ -505,6 +525,9 @@ tasks:
             by-test-platform:
                 .*-tsan.*: 2700
                 linux.*/debug: 2700
+                windows.*-ccov.*: 2700
+                windows.*-asan.*: 2700
+                windows.*/debug: 2700
                 default: 1800
         mozharness:
             mochitest-flavor: browser
@@ -556,11 +579,15 @@ tasks:
         suite:
             name: mochitest-browser-screenshots
         treeherder-symbol: M(ss)
+        index:
+            product: test
+            job-name: mochitest-browser-screenshots
         loopback-video: true
-        variants: ["no-fission"]
         run-on-projects:
             by-test-platform:
                 linux2404-64.*/opt: ['trunk']
+                windows11-64-25h2.*/opt: ['trunk']
+                macosx1500-aarch64/opt: ['trunk']
                 default: []
         max-run-time: 3600
         mozharness:
@@ -609,6 +636,7 @@ tasks:
             - webrender-sw+1proc
             - standalone
             - inc-origin-init
+            - nova
         run-on-projects:
             by-variant:
                 webrender-sw+1proc:
@@ -634,6 +662,15 @@ tasks:
                         windows.*-64-[^-/]+/opt: ['autoland']
                         default: []
                 inc-origin-init: []
+                nova:
+                    by-test-platform:
+                        .*-artifact.*: []
+                        .*-asan.*: []
+                        .*-ccov.*: []
+                        linux.*64(-shippable)?/opt: ['mozilla-central']
+                        macosx1[45].*64(-shippable)?(-qr)?/opt: ['mozilla-central']
+                        windows11.*-64.*(-shippable)?/opt: ['mozilla-central']
+                        default: []
         chunks: dynamic
         default-chunks:
             by-variant:

@@ -6,9 +6,9 @@
 #define mozilla_net_NeckoParent_h
 
 #include "mozilla/BasePrincipal.h"
-#include "mozilla/net/PNeckoParent.h"
-#include "mozilla/net/NeckoCommon.h"
 #include "mozilla/MozPromise.h"
+#include "mozilla/net/NeckoCommon.h"
+#include "mozilla/net/PNeckoParent.h"
 #include "nsIAuthPrompt2.h"
 #include "nsIInterfaceRequestor.h"
 #include "nsNetUtil.h"

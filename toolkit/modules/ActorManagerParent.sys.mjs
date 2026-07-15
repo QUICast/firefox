@@ -23,6 +23,7 @@ let JSPROCESSACTORS = {
     child: {
       esModuleURI: "resource://gre/modules/AsyncPrefs.sys.mjs",
     },
+    safeForUntrustedWebProcess: true,
   },
 
   ContentPrefs: {
@@ -32,6 +33,7 @@ let JSPROCESSACTORS = {
     child: {
       esModuleURI: "resource://gre/modules/ContentPrefServiceChild.sys.mjs",
     },
+    safeForUntrustedWebProcess: true,
   },
 
   ExtensionContent: {
@@ -39,6 +41,7 @@ let JSPROCESSACTORS = {
       esModuleURI: "resource://gre/modules/ExtensionContent.sys.mjs",
     },
     includeParent: true,
+    safeForUntrustedWebProcess: true,
   },
 
   HPKEConfigManager: {
@@ -98,10 +101,12 @@ let JSPROCESSACTORS = {
 let JSWINDOWACTORS = {
   AboutCertViewer: {
     parent: {
-      esModuleURI: "resource://gre/modules/AboutCertViewerParent.sys.mjs",
+      esModuleURI:
+        "moz-src:///toolkit/components/certviewer/AboutCertViewerParent.sys.mjs",
     },
     child: {
-      esModuleURI: "resource://gre/modules/AboutCertViewerChild.sys.mjs",
+      esModuleURI:
+        "moz-src:///toolkit/components/certviewer/AboutCertViewerChild.sys.mjs",
 
       events: {
         DOMDocElementInserted: { capture: true },
@@ -124,6 +129,7 @@ let JSWINDOWACTORS = {
     },
     matches: ["about:httpsonlyerror?*"],
     allFrames: true,
+    safeForUntrustedWebProcess: true,
   },
 
   AboutRestricted: {
@@ -138,6 +144,7 @@ let JSWINDOWACTORS = {
     },
     matches: ["about:restricted?*"],
     allFrames: true,
+    safeForUntrustedWebProcess: true,
   },
 
   AudioPlayback: {
@@ -151,6 +158,7 @@ let JSWINDOWACTORS = {
     },
 
     allFrames: true,
+    safeForUntrustedWebProcess: true,
   },
 
   AutoComplete: {
@@ -167,6 +175,7 @@ let JSWINDOWACTORS = {
     },
 
     allFrames: true,
+    safeForUntrustedWebProcess: true,
   },
 
   Autoplay: {
@@ -182,6 +191,7 @@ let JSWINDOWACTORS = {
     },
 
     allFrames: true,
+    safeForUntrustedWebProcess: true,
   },
 
   AutoScroll: {
@@ -197,6 +207,7 @@ let JSWINDOWACTORS = {
     },
 
     allFrames: true,
+    safeForUntrustedWebProcess: true,
   },
 
   BackgroundThumbnails: {
@@ -207,6 +218,7 @@ let JSWINDOWACTORS = {
       },
     },
     messageManagerGroups: ["thumbnails"],
+    safeForUntrustedWebProcess: true,
   },
 
   BrowserElement: {
@@ -222,6 +234,7 @@ let JSWINDOWACTORS = {
     },
 
     allFrames: true,
+    safeForUntrustedWebProcess: true,
   },
 
   Conduits: {
@@ -234,6 +247,7 @@ let JSWINDOWACTORS = {
     },
 
     allFrames: true,
+    safeForUntrustedWebProcess: true,
   },
 
   Controllers: {
@@ -245,6 +259,7 @@ let JSWINDOWACTORS = {
     },
 
     allFrames: true,
+    safeForUntrustedWebProcess: true,
   },
 
   CaptchaDetection: {
@@ -282,6 +297,7 @@ let JSWINDOWACTORS = {
     messageManagerGroups: ["browsers"],
     allFrames: true,
     enablePreference: "captchadetection.actor.enabled",
+    safeForUntrustedWebProcess: true,
   },
 
   CaptchaDetectionCommunication: {
@@ -293,6 +309,7 @@ let JSWINDOWACTORS = {
         "resource://gre/actors/CaptchaDetectionCommunicationChild.sys.mjs",
     },
     allFrames: true,
+    safeForUntrustedWebProcess: true,
   },
 
   CookieBanner: {
@@ -345,6 +362,7 @@ let JSWINDOWACTORS = {
 
       maybeRegister();
     },
+    safeForUntrustedWebProcess: true,
   },
 
   ExtFind: {
@@ -353,6 +371,7 @@ let JSWINDOWACTORS = {
     },
 
     allFrames: true,
+    safeForUntrustedWebProcess: true,
   },
 
   FindBar: {
@@ -368,6 +387,7 @@ let JSWINDOWACTORS = {
 
     allFrames: true,
     messageManagerGroups: ["browsers", "test"],
+    safeForUntrustedWebProcess: true,
   },
 
   // This is the actor that responds to requests from the find toolbar and
@@ -378,6 +398,7 @@ let JSWINDOWACTORS = {
     },
 
     allFrames: true,
+    safeForUntrustedWebProcess: true,
   },
 
   FormHistory: {
@@ -392,6 +413,7 @@ let JSWINDOWACTORS = {
     },
 
     allFrames: true,
+    safeForUntrustedWebProcess: true,
   },
 
   FormHandler: {
@@ -406,6 +428,7 @@ let JSWINDOWACTORS = {
     },
 
     allFrames: true,
+    safeForUntrustedWebProcess: true,
   },
 
   InlineSpellChecker: {
@@ -418,6 +441,7 @@ let JSWINDOWACTORS = {
     },
 
     allFrames: true,
+    safeForUntrustedWebProcess: true,
   },
 
   KeyPressEventModelChecker: {
@@ -430,6 +454,7 @@ let JSWINDOWACTORS = {
     },
 
     allFrames: true,
+    safeForUntrustedWebProcess: true,
   },
 
   LoginManager: {
@@ -454,12 +479,14 @@ let JSWINDOWACTORS = {
       "chatbot-browser",
       "",
     ],
+    safeForUntrustedWebProcess: true,
   },
 
   ManifestMessages: {
     child: {
-      esModuleURI: "resource://gre/modules/ManifestMessagesChild.sys.mjs",
+      esModuleURI: "moz-src:///dom/ipc/ManifestMessagesChild.sys.mjs",
     },
+    safeForUntrustedWebProcess: true,
   },
 
   NetError: {
@@ -476,6 +503,7 @@ let JSWINDOWACTORS = {
 
     matches: ["about:certerror?*", "about:neterror?*"],
     allFrames: true,
+    safeForUntrustedWebProcess: true,
   },
 
   OpenSearchLoader: {
@@ -485,6 +513,7 @@ let JSWINDOWACTORS = {
     },
     matches: ["about:blank"],
     messageManagerGroups: ["opensearch"],
+    safeForUntrustedWebProcess: true,
   },
 
   PageExtractor: {
@@ -503,6 +532,7 @@ let JSWINDOWACTORS = {
       "about:reader?*",
     ],
     messageManagerGroups: ["browsers", "headless-browsers"],
+    safeForUntrustedWebProcess: true,
   },
 
   PopupAndRedirectBlocking: {
@@ -522,6 +552,7 @@ let JSWINDOWACTORS = {
       },
     },
     allFrames: true,
+    safeForUntrustedWebProcess: true,
   },
 
   Printing: {
@@ -535,6 +566,7 @@ let JSWINDOWACTORS = {
         printPreviewUpdate: { capture: true },
       },
     },
+    safeForUntrustedWebProcess: true,
   },
 
   PrintingSelection: {
@@ -542,6 +574,7 @@ let JSWINDOWACTORS = {
       esModuleURI: "resource://gre/actors/PrintingSelectionChild.sys.mjs",
     },
     allFrames: true,
+    safeForUntrustedWebProcess: true,
   },
 
   ReportBrokenSite: {
@@ -559,6 +592,7 @@ let JSWINDOWACTORS = {
     ],
     messageManagerGroups: ["browsers"],
     allFrames: true,
+    safeForUntrustedWebProcess: true,
   },
 
   TLSCertificateBinding: {
@@ -567,6 +601,7 @@ let JSWINDOWACTORS = {
     },
 
     messageManagerGroups: ["browsers"],
+    safeForUntrustedWebProcess: true,
   },
 
   // This actor is available for all pages that one can
@@ -579,6 +614,7 @@ let JSWINDOWACTORS = {
     },
 
     allFrames: true,
+    safeForUntrustedWebProcess: true,
   },
 
   // This actor is for the view-source page itself.
@@ -596,6 +632,7 @@ let JSWINDOWACTORS = {
 
     matches: ["view-source:*"],
     allFrames: true,
+    safeForUntrustedWebProcess: true,
   },
 
   WebChannel: {
@@ -610,12 +647,14 @@ let JSWINDOWACTORS = {
     },
 
     allFrames: true,
+    safeForUntrustedWebProcess: true,
   },
 
   Thumbnails: {
     child: {
       esModuleURI: "resource://gre/actors/ThumbnailsChild.sys.mjs",
     },
+    safeForUntrustedWebProcess: true,
   },
 
   // Determines if a page can be translated, and coordinates communication with the
@@ -646,6 +685,7 @@ let JSWINDOWACTORS = {
       );
       TranslationsParent.onIsEnabledChanged(isEnabled);
     },
+    safeForUntrustedWebProcess: true,
   },
 
   UAWidgets: {
@@ -659,6 +699,7 @@ let JSWINDOWACTORS = {
 
     includeChrome: true,
     allFrames: true,
+    safeForUntrustedWebProcess: true,
   },
 
   UnselectedTabHover: {
@@ -674,6 +715,7 @@ let JSWINDOWACTORS = {
     },
 
     allFrames: true,
+    safeForUntrustedWebProcess: true,
   },
 };
 
@@ -696,6 +738,7 @@ if (!Services.prefs.getBoolPref("browser.pagedata.enabled", false)) {
     },
 
     messageManagerGroups: ["browsers"],
+    safeForUntrustedWebProcess: true,
   };
 }
 
@@ -717,6 +760,7 @@ if (AppConstants.platform != "android") {
 
     includeChrome: true,
     allFrames: true,
+    safeForUntrustedWebProcess: true,
   };
 
   // Note that GeckoView handles MozOpenDateTimePicker in GeckoViewPrompt.
@@ -735,11 +779,13 @@ if (AppConstants.platform != "android") {
 
     includeChrome: true,
     allFrames: true,
+    safeForUntrustedWebProcess: true,
   };
 
   JSWINDOWACTORS.PictureInPictureLauncher = {
     parent: {
-      esModuleURI: "resource://gre/modules/PictureInPicture.sys.mjs",
+      esModuleURI:
+        "moz-src:///toolkit/components/pictureinpicture/PictureInPicture.sys.mjs",
     },
     child: {
       esModuleURI: "resource://gre/actors/PictureInPictureChild.sys.mjs",
@@ -749,22 +795,26 @@ if (AppConstants.platform != "android") {
     },
     messageManagerGroups: ["browsers"],
     allFrames: true,
+    safeForUntrustedWebProcess: true,
   };
 
   JSWINDOWACTORS.PictureInPicture = {
     parent: {
-      esModuleURI: "resource://gre/modules/PictureInPicture.sys.mjs",
+      esModuleURI:
+        "moz-src:///toolkit/components/pictureinpicture/PictureInPicture.sys.mjs",
     },
     child: {
       esModuleURI: "resource://gre/actors/PictureInPictureChild.sys.mjs",
     },
     messageManagerGroups: ["browsers", "pip-player"],
     allFrames: true,
+    safeForUntrustedWebProcess: true,
   };
 
   JSWINDOWACTORS.PictureInPictureToggle = {
     parent: {
-      esModuleURI: "resource://gre/modules/PictureInPicture.sys.mjs",
+      esModuleURI:
+        "moz-src:///toolkit/components/pictureinpicture/PictureInPicture.sys.mjs",
     },
     child: {
       esModuleURI: "resource://gre/actors/PictureInPictureChild.sys.mjs",
@@ -775,6 +825,21 @@ if (AppConstants.platform != "android") {
     },
     messageManagerGroups: ["browsers"],
     allFrames: true,
+    safeForUntrustedWebProcess: true,
+  };
+
+  JSWINDOWACTORS.AboutPDF = {
+    parent: {
+      esModuleURI: "resource://gre/actors/AboutPDFParent.sys.mjs",
+    },
+    child: {
+      esModuleURI: "resource://gre/actors/AboutPDFChild.sys.mjs",
+      events: {
+        DOMDocElementInserted: {},
+      },
+    },
+    matches: ["about:pdf", "about:pdf?*", "about:pdf#*"],
+    remoteTypes: ["privilegedabout"],
   };
 
   JSWINDOWACTORS.AboutTranslations = {
@@ -808,6 +873,7 @@ if (AppConstants.platform != "android") {
 
     includeChrome: true,
     allFrames: true,
+    safeForUntrustedWebProcess: true,
   };
 }
 

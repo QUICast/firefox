@@ -2,46 +2,47 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "mozilla/Logging.h"
-
 #include "gfxFcPlatformFontList.h"
-#include "gfxFont.h"
+
+#include "SharedFontList-impl.h"
 #include "gfxFT2Utils.h"
+#include "gfxFont.h"
 #include "gfxPlatform.h"
-#include "nsPresContext.h"
-#include "mozilla/dom/ContentChild.h"
-#include "mozilla/dom/ContentParent.h"
+#include "mozilla/Components.h"
+#include "mozilla/Logging.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/Sprintf.h"
 #include "mozilla/StaticPrefs_gfx.h"
 #include "mozilla/StaticPrefs_mathml.h"
+#include "mozilla/dom/ContentChild.h"
+#include "mozilla/dom/ContentParent.h"
 #include "mozilla/glean/GfxMetrics.h"
+#include "nsCharSeparatedTokenizer.h"
+#include "nsDirectoryServiceDefs.h"
+#include "nsDirectoryServiceUtils.h"
 #include "nsGkAtoms.h"
 #include "nsIConsoleService.h"
 #include "nsIGfxInfo.h"
-#include "mozilla/Components.h"
+#include "nsPresContext.h"
 #include "nsString.h"
 #include "nsStringFwd.h"
-#include "nsDirectoryServiceUtils.h"
-#include "nsDirectoryServiceDefs.h"
-#include "nsCharSeparatedTokenizer.h"
 #include "nsXULAppAPI.h"
-#include "SharedFontList-impl.h"
 #define StandardFonts
 #include "StandardFonts-linux.inc"
 #undef StandardFonts
-#include "mozilla/intl/Locale.h"
-
 #include <cairo-ft.h>
+#include <dlfcn.h>
 #include <fontconfig/fcfreetype.h>
 #include <fontconfig/fontconfig.h>
 #include <harfbuzz/hb.h>
-#include <dlfcn.h>
 #include <unistd.h>
+
+#include "mozilla/intl/Locale.h"
 
 #ifdef MOZ_WIDGET_GTK
 #  include <gdk/gdk.h>
 #  include <gtk/gtk.h>
+
 #  include "gfxPlatformGtk.h"
 #  include "mozilla/WidgetUtilsGtk.h"
 #endif
@@ -86,6 +87,59 @@ static const FcChar8* ToFcChar8Ptr(const char* aStr) {
 
 static const char* ToCharPtr(const FcChar8* aStr) {
   return reinterpret_cast<const char*>(aStr);
+}
+
+// Detect fontconfig 2.18 regression in FcNameUnparse, see bug 2051021 and
+// https://gitlab.freedesktop.org/fontconfig/fontconfig/-/merge_requests/544
+static bool FontconfigUnparseOmitsStringEscapes() {
+  static const bool sBroken = [] {
+    RefPtr<FcPattern> pat = dont_AddRef(FcPatternCreate());
+    FcPatternAddString(pat, FC_FAMILY, ToFcChar8Ptr("a-b"));
+    FcChar8* s = FcNameUnparse(pat);
+    bool broken = s && !strchr(ToCharPtr(s), '\\');
+    if (s) {
+      free(s);
+    }
+    return broken;
+  }();
+  return sBroken;
+}
+
+static already_AddRefed<FcPattern> MaybeEscapeFamilyForBrokenUnparse(
+    FcPattern* aPattern) {
+  if (!FontconfigUnparseOmitsStringEscapes()) {
+    return nullptr;
+  }
+  // These chars match the font family escape chars from fontconfig.
+  static const char kEscapeChars[] = "\\-:,";
+  AutoTArray<nsCString, 4> families;
+  bool needsEscaping = false;
+  FcChar8* value;
+  for (int i = 0;
+       FcPatternGetString(aPattern, FC_FAMILY, i, &value) == FcResultMatch;
+       ++i) {
+    nsAutoCString escaped;
+    for (const char* p = ToCharPtr(value); *p; ++p) {
+      if (strchr(kEscapeChars, *p)) {
+        escaped.Append('\\');
+        needsEscaping = true;
+      }
+      escaped.Append(*p);
+    }
+    families.AppendElement(escaped);
+  }
+  if (!needsEscaping) {
+    return nullptr;
+  }
+  RefPtr<FcPattern> dup = dont_AddRef(FcPatternDuplicate(aPattern));
+  if (!dup) {
+    return nullptr;
+  }
+  FcPatternDel(dup, FC_FAMILY);
+  for (const auto& family : families) {
+    FcPatternAddString(dup, FC_FAMILY, ToFcChar8Ptr(family.get()));
+  }
+  return dup.forget();
 }
 
 // canonical name ==> first en name or first name if no en name
@@ -861,15 +915,21 @@ static void PreparePattern(FcPattern* aPattern, bool aIsPrinterFont) {
   FcDefaultSubstitute(aPattern);
 }
 
-void gfxFontconfigFontEntry::UnscaledFontCache::MoveToFront(size_t aIndex) {
-  if (aIndex > 0) {
-    ThreadSafeWeakPtr<UnscaledFontFontconfig> front =
-        std::move(mUnscaledFonts[aIndex]);
-    for (size_t i = aIndex; i > 0; i--) {
-      mUnscaledFonts[i] = std::move(mUnscaledFonts[i - 1]);
+void gfxFontconfigFontEntry::UnscaledFontCache::Add(
+    const RefPtr<UnscaledFontFontconfig>& aUnscaledFont) {
+  // Find the oldest entry and replace that with the new font.
+  size_t oldestIdx = 0;
+  int32_t lastGen = mLastGeneration;
+  int32_t oldestAge = lastGen - mGenerations[0];
+  for (size_t i = 1; i < kNumEntries; i++) {
+    int32_t age = lastGen - mGenerations[i];
+    if (age > oldestAge) {
+      oldestIdx = i;
+      oldestAge = age;
     }
-    mUnscaledFonts[0] = std::move(front);
   }
+  mUnscaledFonts[oldestIdx] = aUnscaledFont;
+  mGenerations[oldestIdx] = ++mLastGeneration;
 }
 
 already_AddRefed<UnscaledFontFontconfig>
@@ -878,7 +938,7 @@ gfxFontconfigFontEntry::UnscaledFontCache::Lookup(const std::string& aFile,
   for (size_t i = 0; i < kNumEntries; i++) {
     RefPtr<UnscaledFontFontconfig> entry(mUnscaledFonts[i]);
     if (entry && entry->GetFile() == aFile && entry->GetIndex() == aIndex) {
-      MoveToFront(i);
+      mGenerations[i] = ++mLastGeneration;
       return entry.forget();
     }
   }
@@ -1648,37 +1708,8 @@ nsresult gfxFcPlatformFontList::InitFontListForPlatform() {
     UpdateSystemFontOptionsFromIpc(fontList.options());
 #endif
 
-    // For fontconfig versions between 2.10.94 and 2.11.1 inclusive,
-    // we need to escape any leading space in the charset element,
-    // otherwise FcNameParse will fail. :(
-    //
-    // The bug was introduced on 2013-05-24 by
-    //   https://cgit.freedesktop.org/fontconfig/commit/?id=cd9b1033a68816a7acfbba1718ba0aa5888f6ec7
-    //   "Bug 64906 - FcNameParse() should ignore leading whitespace in
-    //   parameters"
-    // because ignoring a leading space in the encoded value of charset
-    // causes erroneous decoding of the whole element.
-    // This first shipped in version 2.10.94, and was eventually fixed as
-    // a side-effect of switching to the "human-readable" representation of
-    // charsets on 2014-07-03 in
-    //   https://cgit.freedesktop.org/fontconfig/commit/?id=e708e97c351d3bc9f7030ef22ac2f007d5114730
-    //   "Change charset parse/unparse format to be human readable"
-    // (with a followup fix next day) which means a leading space is no
-    // longer significant. This fix landed after 2.11.1 had been shipped,
-    // so the first version tag without the bug is 2.11.91.
-    int fcVersion = FcGetVersion();
-    bool fcCharsetParseBug = fcVersion >= 21094 && fcVersion <= 21101;
-
-    for (FontPatternListEntry& fpe : fontList.entries()) {
-      nsCString& patternStr = fpe.pattern();
-      if (fcCharsetParseBug) {
-        int32_t index = patternStr.Find(":charset= ");
-        if (index != kNotFound) {
-          // insert backslash after the =, before the space
-          patternStr.Insert('\\', index + 9);
-        }
-      }
-      FcPattern* pattern = FcNameParse((const FcChar8*)patternStr.get());
+    for (const FontPatternListEntry& fpe : fontList.entries()) {
+      FcPattern* pattern = FcNameParse((const FcChar8*)fpe.pattern().get());
       AddPatternToFontList(pattern, lastFamilyName, familyName, fontFamily,
                            fpe.appFontFamily());
       FcPatternDestroy(pattern);
@@ -1850,15 +1881,9 @@ void gfxFcPlatformFontList::InitSharedFontListForPlatform() {
 
   nsClassHashtable<nsCStringHashKey, FacesData> faces;
 
-  // Do we need to work around the fontconfig FcNameParse/FcNameUnparse bug
-  // (present in versions between 2.10.94 and 2.11.1 inclusive)? See comment
-  // in InitFontListForPlatform for details.
-  int fcVersion = FcGetVersion();
-  bool fcCharsetParseBug = fcVersion >= 21094 && fcVersion <= 21101;
-
   // Returns true if the font was added with FontVisibility::Base.
   // This enables us to count how many known Base fonts are present.
-  auto addPattern = [this, fcCharsetParseBug, &families, &faces](
+  auto addPattern = [this, &families, &faces](
                         FcPattern* aPattern, FcChar8*& aLastFamilyName,
                         nsCString& aFamilyName, bool aAppFont) -> bool {
     // get canonical name
@@ -1894,17 +1919,16 @@ void gfxFcPlatformFontList::InitSharedFontListForPlatform() {
                 })
             .get();
 
-    char* s = (char*)FcNameUnparse(aPattern);
-    nsAutoCString descriptor(s);
-    free(s);
-
-    if (fcCharsetParseBug) {
-      // Escape any leading space in charset to work around FcNameParse bug.
-      int32_t index = descriptor.Find(":charset= ");
-      if (index != kNotFound) {
-        // insert backslash after the =, before the space
-        descriptor.Insert('\\', index + 9);
-      }
+    // Intentionally using nsCString + Assign(), rather than nsAutoCString,
+    // since we copy the buffer around into an nsCString multiple times.
+    nsCString descriptor;
+    {
+      RefPtr<FcPattern> dupToUnparse =
+          MaybeEscapeFamilyForBrokenUnparse(aPattern);
+      char* s =
+          (char*)FcNameUnparse(dupToUnparse ? dupToUnparse.get() : aPattern);
+      descriptor.Assign(s);
+      free(s);
     }
 
     WeightRange weight(FontWeight::NORMAL);
@@ -2187,14 +2211,14 @@ gfxFcPlatformFontList::GetFilteredPlatformFontLists() {
   return fontLists;
 }
 
-gfxFontEntry* gfxFcPlatformFontList::CreateFontEntry(
+already_AddRefed<gfxFontEntry> gfxFcPlatformFontList::CreateFontEntry(
     fontlist::Face* aFace, const fontlist::Family* aFamily) {
   nsAutoCString desc(aFace->mDescriptor.AsString(SharedFontList()));
   FcPattern* pattern = FcNameParse((const FcChar8*)desc.get());
-  auto* fe = new gfxFontconfigFontEntry(desc, pattern, true);
+  RefPtr fe = MakeRefPtr<gfxFontconfigFontEntry>(desc, pattern, true);
   FcPatternDestroy(pattern);
   fe->InitializeFrom(aFace, aFamily);
-  return fe;
+  return fe.forget();
 }
 
 // For displaying the fontlist in UI, use explicit call to FcFontList. Using
@@ -2301,7 +2325,7 @@ FontFamily gfxFcPlatformFontList::GetDefaultFontForPlatform(
   return FontFamily();
 }
 
-gfxFontEntry* gfxFcPlatformFontList::LookupLocalFont(
+already_AddRefed<gfxFontEntry> gfxFcPlatformFontList::LookupLocalFont(
     FontVisibilityProvider* aFontVisibilityProvider,
     const nsACString& aFontName, WeightRange aWeightForEntry,
     StretchRange aStretchForEntry, SlantStyleRange aStyleForEntry) {
@@ -2322,11 +2346,12 @@ gfxFontEntry* gfxFcPlatformFontList::LookupLocalFont(
     return nullptr;
   }
 
-  return new gfxFontconfigFontEntry(aFontName, *fontPattern, aWeightForEntry,
-                                    aStretchForEntry, aStyleForEntry);
+  return MakeAndAddRef<gfxFontconfigFontEntry>(
+      aFontName, *fontPattern, aWeightForEntry, aStretchForEntry,
+      aStyleForEntry);
 }
 
-gfxFontEntry* gfxFcPlatformFontList::MakePlatformFont(
+already_AddRefed<gfxFontEntry> gfxFcPlatformFontList::MakePlatformFont(
     const nsACString& aFontName, WeightRange aWeightForEntry,
     StretchRange aStretchForEntry, SlantStyleRange aStyleForEntry,
     const uint8_t* aFontData, uint32_t aLength) {
@@ -2335,9 +2360,9 @@ gfxFontEntry* gfxFcPlatformFontList::MakePlatformFont(
   if (!face) {
     return nullptr;
   }
-  return new gfxFontconfigFontEntry(aFontName, aWeightForEntry,
-                                    aStretchForEntry, aStyleForEntry,
-                                    std::move(face));
+  return MakeAndAddRef<gfxFontconfigFontEntry>(aFontName, aWeightForEntry,
+                                               aStretchForEntry, aStyleForEntry,
+                                               std::move(face));
 }
 
 static bool UseCustomFontconfigLookupsForLocale(const Locale& aLocale) {
@@ -2839,9 +2864,9 @@ void gfxFcPlatformFontList::CheckFontUpdates(nsITimer* aTimer, void* aThis) {
   }
 }
 
-gfxFontFamily* gfxFcPlatformFontList::CreateFontFamily(
+already_AddRefed<gfxFontFamily> gfxFcPlatformFontList::CreateFontFamily(
     const nsACString& aName, FontVisibility aVisibility) const {
-  return new gfxFontconfigFontFamily(aName, aVisibility);
+  return MakeAndAddRef<gfxFontconfigFontFamily>(aName, aVisibility);
 }
 
 // mapping of moz lang groups ==> default lang

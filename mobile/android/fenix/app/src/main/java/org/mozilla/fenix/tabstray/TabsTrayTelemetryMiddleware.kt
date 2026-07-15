@@ -42,8 +42,11 @@ class TabsTrayTelemetryMiddleware(
 
         requireNotNull(topDestination) { "The backstack cannot be empty" }
 
-        if (action is TabGroupAction) {
-            handleTabGroupAction(store, action)
+        // these actions need to be handled prior to invoking next(action)
+        when (action) {
+            is TabGroupAction -> handleTabGroupAction(store, action)
+            is TabsTrayAction.TabItemLongClicked -> handleTabItemLongClicked(store, action)
+            else -> {}
         }
 
         next(action)
@@ -51,10 +54,10 @@ class TabsTrayTelemetryMiddleware(
         when (action) {
             is TabSearchAction -> handleTabSearchAction(action)
             is TabsTrayAction.NavigateBackInvoked -> handleNavigateBackInvoked(topDestination, isEditing)
+            // ignore the actions that were handled prior
+            is TabGroupAction, is TabsTrayAction.TabItemLongClicked -> {}
             else -> {
-                if (action !is TabGroupAction) {
-                    handleGeneralTabsTrayAction(store, action)
-                }
+                handleGeneralTabsTrayAction(store, action)
             }
         }
     }
@@ -92,6 +95,7 @@ class TabsTrayTelemetryMiddleware(
                 -> {
                 TabsTray.shareAllTabs.record(NoExtras())
             }
+
             is TabsTrayAction.SelectAllNormalTabs -> {
                 TabsTray.selectAllNormalTabs.record(NoExtras())
             }
@@ -148,41 +152,57 @@ class TabsTrayTelemetryMiddleware(
         }
     }
 
+    private fun handleTabItemLongClicked(
+        store: Store<TabsTrayState, TabsTrayAction>,
+        action: TabsTrayAction.TabItemLongClicked,
+    ) {
+        // We should record a long press even if we are not entering multi-select mode.
+        // E.g. you can still long press and drag to reorder in private mode, which does not support multi-selection.
+        TabsTray.tabLongPress.record(NoExtras())
+        // Note that the selected tab check is also executed in TabsTrayReducer
+        // and should be updated if this business logic ever changes.
+        if (store.state.mode.selectedTabs.isNotEmpty()) {
+            return
+        }
+        when (action.item) {
+            is TabsTrayItem.TabGroup -> {
+                TabsTray.enterMultiselectMode.record(TabsTray.EnterMultiselectModeExtra(true))
+            }
+
+            is TabsTrayItem.Tab -> {
+                // Private tabs cannot be multi-selected
+                if (!action.item.private) {
+                    TabsTray.enterMultiselectMode.record(TabsTray.EnterMultiselectModeExtra(true))
+                }
+            }
+        }
+    }
+
     private fun handleTabGroupAction(
         store: Store<TabsTrayState, TabsTrayAction>,
         action: TabGroupAction,
     ) {
-        val selectedTabsCount = store.state.mode.selectedTabs.size
-        val isDraggingOntoTab = if (action is TabGroupAction.DragAndDropCompleted) {
-            store.state.normalTabsState.items.find { it.id == action.destinationId } is TabsTrayItem.Tab
-        } else {
-            false
-        }
-
         when (action) {
-            is TabGroupAction.SaveClicked -> {
-                val isEditing = store.state.tabGroupState.formState?.inEditState == true
-                if (!isEditing) {
-                    TabsTray.tabGroupCreated.record(NoExtras())
-                }
+            is TabGroupAction.EditTabGroupClicked -> {
+                TabsTray.tabGroupEdited.record(NoExtras())
+            }
+
+            is TabGroupAction.SaveClicked,
+            is TabGroupAction.ThemeChanged,
+                -> {
+                handleTabGroupFormAction(store, action)
             }
 
             is TabGroupAction.DeleteConfirmed,
             is TabGroupAction.CloseTabAndDeleteGroupConfirmed,
-                 -> {
+                -> {
                 TabsTray.tabGroupDeleted.record(NoExtras())
             }
 
-            is TabGroupAction.TabAddedToGroup -> {
-                TabsTray.tabAddedToGroup.record(
-                    TabsTray.TabAddedToGroupExtra(tabCount = 1),
-                )
-            }
-
-            is TabGroupAction.SelectedTabsAddedToGroup -> {
-                TabsTray.tabAddedToGroup.record(
-                    TabsTray.TabAddedToGroupExtra(tabCount = selectedTabsCount),
-                )
+            is TabGroupAction.TabAddedToGroup,
+            is TabGroupAction.SelectedTabsAddedToGroup,
+                -> {
+                handleTabAdditionToGroupAction(store, action)
             }
 
             is TabGroupAction.TabGroupClicked -> {
@@ -199,15 +219,97 @@ class TabsTrayTelemetryMiddleware(
                 }
             }
 
-            is TabGroupAction.AddToNewTabGroup -> {
-                Metrics.tabGroupCreationMode["menu"].add()
+            is TabGroupAction.AddToNewTabGroup,
+            is TabGroupAction.NewTabGroupFabClicked,
+            is TabGroupAction.DragAndDropInitiated,
+                -> {
+                handleTabGroupCreationAction(store, action)
             }
 
             is TabGroupAction.CloseTabGroupClicked -> {
                 TabsTray.tabGroupClosed.record(NoExtras())
             }
 
-            is TabGroupAction.DragAndDropCompleted -> {
+            else -> {
+                // no-op
+            }
+        }
+    }
+
+    private fun handleTabGroupFormAction(
+        store: Store<TabsTrayState, TabsTrayAction>,
+        action: TabGroupAction,
+    ) {
+        val formState = store.state.tabGroupState.formState ?: return
+        val inEditState = formState.inEditState
+
+        when (action) {
+            is TabGroupAction.SaveClicked -> {
+                if (inEditState) {
+                    val originalGroup = store.state.tabGroupState.groups.find { it.id == formState.tabGroupId }
+                    if (originalGroup != null && originalGroup.title != formState.name) {
+                        TabsTray.tabGroupNameChanged.record(NoExtras())
+                    }
+                } else {
+                    TabsTray.tabGroupCreated.record(NoExtras())
+                    TabsTray.tabGroupNamed.record(NoExtras())
+                }
+            }
+
+            is TabGroupAction.ThemeChanged -> {
+                val themeName = action.theme.name
+                if (inEditState) {
+                    TabsTray.tabGroupColorChanged.record(TabsTray.TabGroupColorChangedExtra(themeName))
+                } else {
+                    TabsTray.tabGroupColorAssigned.record(TabsTray.TabGroupColorAssignedExtra(themeName))
+                }
+            }
+
+            else -> {
+                // no-op
+            }
+        }
+    }
+
+    private fun handleTabAdditionToGroupAction(
+        store: Store<TabsTrayState, TabsTrayAction>,
+        action: TabGroupAction,
+    ) {
+        when (action) {
+            is TabGroupAction.TabAddedToGroup -> {
+                TabsTray.tabAddedToGroup.record(
+                    TabsTray.TabAddedToGroupExtra(tabCount = 1),
+                )
+            }
+
+            is TabGroupAction.SelectedTabsAddedToGroup -> {
+                TabsTray.tabAddedToGroup.record(
+                    TabsTray.TabAddedToGroupExtra(tabCount = store.state.mode.selectedTabs.size),
+                )
+            }
+
+            else -> {
+                // no-op
+            }
+        }
+    }
+
+    private fun handleTabGroupCreationAction(
+        store: Store<TabsTrayState, TabsTrayAction>,
+        action: TabGroupAction,
+    ) {
+        when (action) {
+            is TabGroupAction.AddToNewTabGroup -> {
+                Metrics.tabGroupCreationMode["menu"].add()
+            }
+
+            is TabGroupAction.NewTabGroupFabClicked -> {
+                Metrics.tabGroupCreationMode["fab"].add()
+            }
+
+            is TabGroupAction.DragAndDropInitiated -> {
+                val isDraggingOntoTab =
+                    store.state.normalTabsState.items.find { it.id == action.destinationId } is TabsTrayItem.Tab
                 if (isDraggingOntoTab) {
                     Metrics.tabGroupCreationMode["drag_and_drop"].add()
                 }

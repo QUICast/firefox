@@ -49,7 +49,7 @@ use core::time::Duration;
 
 use crate::pattern::PatternKind;
 use crate::render_api::{DebugCommand, ApiMsg, MemoryReport};
-use crate::batch::{AlphaBatchContainer, BatchKind, BatchFeatures, BatchTextures, BrushBatchKind, ClipBatchList};
+use crate::batch::{AlphaBatchContainer, BatchKind, BatchFeatures, BatchTextures, BrushBatchKind, TextureSet};
 use crate::batch::ClipMaskInstanceList;
 #[cfg(any(feature = "capture", feature = "replay"))]
 use crate::capture::{CaptureConfig, ExternalCaptureImage, PlainExternalImage};
@@ -129,7 +129,7 @@ pub use shade::{PendingShadersToPrecache, Shaders, SharedShaders};
 pub use vertex::{desc, VertexArrayKind, MAX_VERTEX_TEXTURE_WIDTH};
 pub use gpu_buffer::{GpuBuffer, GpuBufferF, GpuBufferBuilderF, GpuBufferI, GpuBufferBuilderI};
 pub use gpu_buffer::{GpuBufferHandle, GpuBufferAddress, GpuBufferBuilder, GpuBufferWriterF};
-pub use gpu_buffer::{GpuBufferBlockF, GpuBufferDataF, GpuBufferDataI, GpuBufferWriterI};
+pub use gpu_buffer::{GpuBufferDataF, GpuBufferDataI, GpuBufferWriterI};
 
 /// The size of the array of each type of vertex data texture that
 /// is round-robin-ed each frame during bind_frame_data. Doing this
@@ -146,10 +146,6 @@ pub const VERTEX_DATA_TEXTURE_COUNT: usize = 3;
 /// Number of GPU blocks per UV rectangle provided for an image.
 pub const BLOCKS_PER_UV_RECT: usize = 2;
 
-const GPU_TAG_BRUSH_OPACITY: GpuProfileTag = GpuProfileTag {
-    label: "B_Opacity",
-    color: debug_colors::DARKMAGENTA,
-};
 const GPU_TAG_BRUSH_YUV_IMAGE: GpuProfileTag = GpuProfileTag {
     label: "B_YuvImage",
     color: debug_colors::DARKGREEN,
@@ -158,17 +154,9 @@ const GPU_TAG_BRUSH_MIXBLEND: GpuProfileTag = GpuProfileTag {
     label: "B_MixBlend",
     color: debug_colors::MAGENTA,
 };
-const GPU_TAG_BRUSH_BLEND: GpuProfileTag = GpuProfileTag {
-    label: "B_Blend",
-    color: debug_colors::ORANGE,
-};
 const GPU_TAG_BRUSH_IMAGE: GpuProfileTag = GpuProfileTag {
     label: "B_Image",
     color: debug_colors::SPRINGGREEN,
-};
-const GPU_TAG_BRUSH_SOLID: GpuProfileTag = GpuProfileTag {
-    label: "B_Solid",
-    color: debug_colors::RED,
 };
 const GPU_TAG_CACHE_CLIP: GpuProfileTag = GpuProfileTag {
     label: "C_Clip",
@@ -263,12 +251,8 @@ impl BatchKind {
             BatchKind::SplitComposite => GPU_TAG_PRIM_SPLIT_COMPOSITE,
             BatchKind::Brush(kind) => {
                 match kind {
-                    BrushBatchKind::Solid => GPU_TAG_BRUSH_SOLID,
                     BrushBatchKind::Image(..) => GPU_TAG_BRUSH_IMAGE,
-                    BrushBatchKind::Blend => GPU_TAG_BRUSH_BLEND,
                     BrushBatchKind::MixBlend { .. } => GPU_TAG_BRUSH_MIXBLEND,
-                    BrushBatchKind::YuvImage(..) => GPU_TAG_BRUSH_YUV_IMAGE,
-                    BrushBatchKind::Opacity => GPU_TAG_BRUSH_OPACITY,
                 }
             }
             BatchKind::TextRun(_) => GPU_TAG_PRIM_TEXT_RUN,
@@ -279,6 +263,13 @@ impl BatchKind {
             BatchKind::Quad(PatternKind::Gradient) => GPU_TAG_GRADIENT,
             BatchKind::Quad(PatternKind::Repeat) => GPU_TAG_REPEAT,
             BatchKind::Quad(PatternKind::BoxShadow) => GPU_TAG_PRIMITIVE,
+            BatchKind::Quad(PatternKind::Yuv) => GPU_TAG_BRUSH_YUV_IMAGE,
+            BatchKind::Quad(PatternKind::YuvTextureExternal) => GPU_TAG_BRUSH_YUV_IMAGE,
+            BatchKind::Quad(PatternKind::YuvTextureExternalBT709) => GPU_TAG_BRUSH_YUV_IMAGE,
+            BatchKind::Quad(PatternKind::YuvTextureRect) => GPU_TAG_BRUSH_YUV_IMAGE,
+            BatchKind::Quad(PatternKind::Backdrop) => GPU_TAG_PRIMITIVE,
+            BatchKind::Quad(PatternKind::Blend) => GPU_TAG_PRIMITIVE,
+            BatchKind::Quad(PatternKind::MixBlend) => GPU_TAG_PRIMITIVE,
             BatchKind::Quad(PatternKind::Mask) => GPU_TAG_INDIRECT_MASK,
         }
     }
@@ -299,8 +290,6 @@ pub enum ShaderColorMode {
     SubpixelDualSource = 1,
     BitmapShadow = 2,
     ColorBitmap = 3,
-    Image = 4,
-    MultiplyDualSource = 5,
 }
 
 impl From<GlyphFormat> for ShaderColorMode {
@@ -641,7 +630,6 @@ pub enum BlendMode {
     PremultipliedDestOut,
     SubpixelDualSource,
     Advanced(MixBlendMode),
-    MultiplyDualSource,
     Screen,
     Exclusion,
     PlusLighter,
@@ -655,7 +643,6 @@ impl BlendMode {
         mode: MixBlendMode,
         advanced_blend: bool,
         coherent: bool,
-        dual_source: bool,
     ) -> Option<BlendMode> {
         // If we emulate a mix-blend-mode via simple or dual-source blending,
         // care must be taken to output alpha As + Ad*(1-As) regardless of what
@@ -669,8 +656,6 @@ impl BlendMode {
             MixBlendMode::Exclusion => BlendMode::Exclusion,
             // PlusLighter is basically a clamped add.
             MixBlendMode::PlusLighter => BlendMode::PlusLighter,
-            // Multiply can be implemented as Cs*Cd + Cs*(1-Ad) + Cd*(1-As) => Cs*(1-Ad) + Cd*(1 - SRC1=(As-Cs))
-            MixBlendMode::Multiply if dual_source => BlendMode::MultiplyDualSource,
             // Otherwise, use advanced blend without coherency if available.
             _ if advanced_blend => BlendMode::Advanced(mode),
             // If advanced blend is not available, then we have to use brush_mix_blend.
@@ -888,6 +873,14 @@ pub struct Renderer {
 
     /// Hold DebugItems of DebugFlags::EXTERNAL_COMPOSITE_BORDERS for debug overlay
     external_composite_debug_items: Vec<DebugItem>,
+
+    /// On-demand RenderDoc frame capture, driven from the debugger / wrshell.
+    #[cfg(feature = "debugger")]
+    renderdoc: crate::renderdoc::RenderDocCapture,
+    /// Pending reply channel for an in-flight RenderDoc capture request; sent the
+    /// written .rdc path (or an error) once the next frame has been captured.
+    #[cfg(feature = "debugger")]
+    renderdoc_capture_reply: Option<crate::api::channel::Sender<crate::api::debugger::RenderDocReply>>,
 }
 
 #[derive(Debug)]
@@ -1298,6 +1291,18 @@ impl Renderer {
                     &self.profiler,
                 );
             }
+            #[cfg(feature = "debugger")]
+            DebugCommand::CaptureRenderDoc(reply) => {
+                if self.renderdoc.is_available() {
+                    self.renderdoc.arm();
+                    self.renderdoc_capture_reply = Some(reply);
+                } else {
+                    let _ = reply.send(crate::api::debugger::RenderDocReply::Error(
+                        "RenderDoc not available (launch the host with \
+                         LD_PRELOAD=librenderdoc.so)".to_string(),
+                    ));
+                }
+            }
         }
     }
 
@@ -1352,12 +1357,36 @@ impl Renderer {
                     None
                 };
 
+                #[cfg(feature = "debugger")]
+                let capture = self.renderdoc.take_request();
+                #[cfg(feature = "debugger")]
+                if capture {
+                    self.renderdoc.start();
+                }
+
                 let result = self.render_impl(
                     doc_id,
                     &mut doc,
                     size,
                     buffer_age,
                 );
+
+                #[cfg(feature = "debugger")]
+                if capture {
+                    let path = self.renderdoc.end();
+                    if let Some(reply) = self.renderdoc_capture_reply.take() {
+                        let result = match path {
+                            Some(p) => crate::api::debugger::RenderDocReply::Path(
+                                p.to_string_lossy().into_owned()
+                            ),
+                            None => crate::api::debugger::RenderDocReply::Error(
+                                "RenderDoc capture failed (launch the host with \
+                                 LD_PRELOAD=librenderdoc.so)".to_string()
+                            ),
+                        };
+                        let _ = reply.send(result);
+                    }
+                }
 
                 self.active_documents.insert(doc_id, doc);
 
@@ -2349,8 +2378,8 @@ impl Renderer {
     fn handle_prims(
         &mut self,
         draw_target: &DrawTarget,
-        prim_instances: &[FastHashMap<TextureSource, FrameVec<PrimitiveInstanceData>>],
-        prim_instances_with_scissor: &FastHashMap<(DeviceIntRect, PatternKind), FastHashMap<TextureSource, FrameVec<PrimitiveInstanceData>>>,
+        prim_instances: &[FastHashMap<TextureSet, FrameVec<PrimitiveInstanceData>>],
+        prim_instances_with_scissor: &FastHashMap<(DeviceIntRect, PatternKind), FastHashMap<TextureSet, FrameVec<PrimitiveInstanceData>>>,
         projection: &default::Transform3D<f32>,
         stats: &mut RendererStats,
     ) {
@@ -2377,8 +2406,11 @@ impl Renderer {
                     &mut self.command_log,
                 );
 
-                for (texture_source, prim_instances) in prim_instances_map {
-                    let texture_bindings = BatchTextures::composite_rgb(*texture_source);
+                for (texture_set, prim_instances) in prim_instances_map {
+                    let texture_bindings = BatchTextures {
+                        input: *texture_set,
+                        clip_mask: TextureSource::Invalid,
+                    };
 
                     self.draw_instanced_batch(
                         prim_instances,
@@ -2411,8 +2443,11 @@ impl Renderer {
 
                     self.device.set_scissor_rect(draw_target.to_framebuffer_rect(*scissor_rect));
 
-                    for (texture_source, prim_instances) in prim_instances_map {
-                        let texture_bindings = BatchTextures::composite_rgb(*texture_source);
+                    for (texture_set, prim_instances) in prim_instances_map {
+                        let texture_bindings = BatchTextures {
+                            input: *texture_set,
+                            clip_mask: TextureSource::Invalid,
+                        };
 
                         self.draw_instanced_batch(
                             prim_instances,
@@ -3059,9 +3094,6 @@ impl Renderer {
                             }
                             self.device.set_blend_mode_advanced(mode);
                         }
-                        BlendMode::MultiplyDualSource => {
-                            self.device.set_blend_mode_multiply_dual_source();
-                        }
                         BlendMode::Screen => {
                             self.device.set_blend_mode_screen();
                         }
@@ -3085,6 +3117,16 @@ impl Renderer {
                         uses_scissor,
                         &render_tasks[task_id],
                         &render_tasks[backdrop_id],
+                    );
+                }
+
+                if let Some(readback) = batch.readback {
+                    debug_assert_eq!(batch.instances.len(), 1);
+                    self.handle_readback_composite(
+                        draw_target,
+                        uses_scissor,
+                        &render_tasks[readback.src_task_id],
+                        &render_tasks[readback.readback_task_id],
                     );
                 }
 
@@ -3510,47 +3552,15 @@ impl Renderer {
         );
 
         // Draw the clip items into the tiled alpha mask.
-        let has_primary_clips = !target.clip_batcher.primary_clips.is_empty();
-        let has_secondary_clips = !target.clip_batcher.secondary_clips.is_empty();
-        let has_clip_masks = !target.clip_masks.is_empty();
-        if has_primary_clips | has_secondary_clips | has_clip_masks {
+        if !target.clip_masks.is_empty() && !self.debug_flags.contains(DebugFlags::DISABLE_CLIP_MASKS) {
             let _timer = self.gpu_profiler.start_timer(GPU_TAG_CACHE_CLIP);
 
-            // TODO(gw): Consider grouping multiple clip masks per shader
-            //           invocation here to reduce memory bandwith further?
-
-            if has_primary_clips {
-                // Draw the primary clip mask - since this is the first mask
-                // for the task, we can disable blending, knowing that it will
-                // overwrite every pixel in the mask area.
-                self.set_blend(false, FramebufferKind::Other);
-                self.draw_clip_batch_list(
-                    &target.clip_batcher.primary_clips,
-                    &projection,
-                    stats,
-                );
-            }
-
-            if has_secondary_clips {
-                // switch to multiplicative blending for secondary masks, using
-                // multiplicative blending to accumulate clips into the mask.
-                self.set_blend(true, FramebufferKind::Other);
-                self.set_blend_mode_multiply(FramebufferKind::Other);
-                self.draw_clip_batch_list(
-                    &target.clip_batcher.secondary_clips,
-                    &projection,
-                    stats,
-                );
-            }
-
-            if has_clip_masks {
-                self.handle_clips(
-                    &draw_target,
-                    &target.clip_masks,
-                    &projection,
-                    stats,
-                );
-            }
+            self.handle_clips(
+                &draw_target,
+                &target.clip_masks,
+                &projection,
+                stats,
+            );
         }
 
         if needs_depth {
@@ -3585,54 +3595,6 @@ impl Renderer {
     }
 
     /// Draw all the instances in a clip batcher list to the current target.
-    fn draw_clip_batch_list(
-        &mut self,
-        list: &ClipBatchList,
-        projection: &default::Transform3D<f32>,
-        stats: &mut RendererStats,
-    ) {
-        if self.debug_flags.contains(DebugFlags::DISABLE_CLIP_MASKS) {
-            return;
-        }
-
-        // draw rounded cornered rectangles
-        if !list.slow_rectangles.is_empty() {
-            let _gm2 = self.gpu_profiler.start_marker("slow clip rectangles");
-            self.shaders.borrow_mut().cs_clip_rectangle_slow().bind(
-                &mut self.device,
-                projection,
-                None,
-                &mut self.renderer_errors,
-                &mut self.profile,
-                &mut self.command_log,
-            );
-            self.draw_instanced_batch(
-                &list.slow_rectangles,
-                VertexArrayKind::ClipRect,
-                &BatchTextures::empty(),
-                stats,
-            );
-        }
-        if !list.fast_rectangles.is_empty() {
-            let _gm2 = self.gpu_profiler.start_marker("fast clip rectangles");
-            self.shaders.borrow_mut().cs_clip_rectangle_fast().bind(
-                &mut self.device,
-                projection,
-                None,
-                &mut self.renderer_errors,
-                &mut self.profile,
-                &mut self.command_log,
-            );
-            self.draw_instanced_batch(
-                &list.fast_rectangles,
-                VertexArrayKind::ClipRect,
-                &BatchTextures::empty(),
-                stats,
-            );
-        }
-
-    }
-
     fn bind_frame_data(&mut self, frame: &mut Frame) {
         profile_scope!("bind_frame_data");
 

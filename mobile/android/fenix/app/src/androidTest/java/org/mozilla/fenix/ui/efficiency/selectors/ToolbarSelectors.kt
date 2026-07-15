@@ -7,6 +7,7 @@ package org.mozilla.fenix.ui.efficiency.selectors
 import mozilla.components.compose.browser.toolbar.concept.BrowserToolbarTestTags.ADDRESSBAR_URL_BOX
 import mozilla.components.compose.browser.toolbar.concept.BrowserToolbarTestTags.TABS_COUNTER
 import org.mozilla.fenix.R
+import org.mozilla.fenix.components.toolbar.BrowserToolbarTestTags.SITE_INFO_SECURE
 import org.mozilla.fenix.helpers.DataGenerationHelper.getStringResource
 import org.mozilla.fenix.ui.efficiency.helpers.Selector
 import org.mozilla.fenix.ui.efficiency.helpers.SelectorStrategy
@@ -63,6 +64,13 @@ object ToolbarSelectors {
         groups = listOf("homeScreenToolbar"),
     )
 
+    val SECURE_SITE_INFORMATION_BUTTON = Selector(
+        strategy = SelectorStrategy.COMPOSE_BY_TAG,
+        value = SITE_INFO_SECURE,
+        description = "Secure site information button",
+        groups = listOf("browserViewToolbarItems"),
+    )
+
     val all = listOf(
         TOOLBAR,
         TAB_COUNTER,
@@ -71,5 +79,6 @@ object ToolbarSelectors {
         TOOLBAR_URL_BOX_UIAUTOMATOR,
         NEW_TAB_BUTTON,
         SEARCH_ENGINE_SELECTOR_ICON(),
+        SECURE_SITE_INFORMATION_BUTTON,
     )
 }

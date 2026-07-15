@@ -15,13 +15,19 @@ interface IPProtectionHandler {
 
     /**
      * Activates the IP protection.
+     *
+     * @param onResult Invoked once the activation request resolves. Receives `null` on success or
+     *  the [Throwable] that caused the failure.
      */
-    fun activate()
+    fun activate(onResult: (Throwable?) -> Unit = {})
 
     /**
      * Deactivates the IP protection proxy.
+     *
+     * @param onResult Invoked once the deactivation request resolves. Receives `null` on success or
+     *  the [Throwable] that caused the failure.
      */
-    fun deactivate()
+    fun deactivate(onResult: (Throwable?) -> Unit = {})
 
     /**
      * Triggers enrollment via the active auth provider. The [onResult] callback is invoked once
@@ -59,6 +65,14 @@ interface IPProtectionHandler {
     )
 
     /**
+     * Sets the [GpiProvider] used to handle Google Play Integrity warm-up and token requests.
+     * Pass null to clear the provider.
+     *
+     * @param provider The [GpiProvider], or null to clear.
+     */
+    fun setGpiProvider(provider: GpiProvider?)
+
+    /**
      * Result of an enrollment attempt.
      *
      * @property isEnrolledAndEntitled Whether the user is now enrolled and entitled to use the
@@ -82,6 +96,23 @@ interface IPProtectionHandler {
     interface AuthProvider {
         /**
          * Fetches a fresh authentication token and delivers it via [onComplete].
+         * Pass null to [onComplete] if the token could not be obtained.
+         */
+        fun getToken(onComplete: (String?) -> Unit)
+    }
+
+    /**
+     * Provides Google Play Integrity warm-up and token retrieval for the IP protection service.
+     */
+    interface GpiProvider {
+        /**
+         * Warms up the GPI token provider. Calls [onComplete] with true on success, false on
+         * failure.
+         */
+        fun warmUp(onComplete: (Boolean) -> Unit)
+
+        /**
+         * Fetches a GPI integrity token and delivers it via [onComplete].
          * Pass null to [onComplete] if the token could not be obtained.
          */
         fun getToken(onComplete: (String?) -> Unit)

@@ -8,6 +8,8 @@ import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -15,12 +17,14 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.fragment.app.Fragment
 import androidx.fragment.compose.content
+import androidx.lifecycle.lifecycleScope
 import androidx.navigation.fragment.findNavController
 import androidx.navigation.fragment.navArgs
 import mozilla.components.ExperimentalAndroidComponentsApi
 import mozilla.components.concept.engine.ipprotection.ServiceState
 import mozilla.components.feature.ipprotection.IPProtectionFxaAuthFlow
 import mozilla.components.feature.ipprotection.IPProtectionFxaAuthFlow.Companion.INTENT_ON_COMPLETE
+import mozilla.components.feature.ipprotection.IPProtectionWarningBinding
 import mozilla.components.feature.ipprotection.debug.IPProtectionStateDebugContent
 import mozilla.components.feature.ipprotection.store.IPProtectionAction
 import mozilla.components.feature.ipprotection.store.state.AccountStatus
@@ -33,8 +37,14 @@ import org.mozilla.fenix.components.components
 import org.mozilla.fenix.e2e.SystemInsetsPaddedFragment
 import org.mozilla.fenix.ext.hideToolbar
 import org.mozilla.fenix.ext.requireComponents
-import org.mozilla.fenix.ext.settings
+import org.mozilla.fenix.home.HomeFragmentDirections
+import org.mozilla.fenix.ipprotection.helpers.IsoPromoDeadline
+import org.mozilla.fenix.ipprotection.helpers.formatPromoDateOrCatch
+import org.mozilla.fenix.ipprotection.ui.IPProtectionSnackbarBinding
+import org.mozilla.fenix.nimbus.FxNimbus
+import org.mozilla.fenix.snackbar.FenixSnackbarDelegate
 import org.mozilla.fenix.theme.FirefoxTheme
+import java.time.LocalDate
 
 /** Fragment hosting the IP Protection settings screen. */
 class IPProtectionFragment : Fragment(), SystemInsetsPaddedFragment {
@@ -43,6 +53,10 @@ class IPProtectionFragment : Fragment(), SystemInsetsPaddedFragment {
 
     private val args: IPProtectionFragmentArgs by navArgs()
     private val fxaAccountAuthFlow = ViewBoundFeatureWrapper<IPProtectionFxaAuthFlow>()
+
+    private val ipProtectionWarningBinding = ViewBoundFeatureWrapper<IPProtectionWarningBinding>()
+    private val ipProtectionSnackbarBinding = ViewBoundFeatureWrapper<IPProtectionSnackbarBinding>()
+    private val snackbarHostState = SnackbarHostState()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -64,14 +78,29 @@ class IPProtectionFragment : Fragment(), SystemInsetsPaddedFragment {
         // To make the transition smoother, we prevent the fragment from drawing UI in that case.
         if (shouldHideUi(state)) return@content
 
+        val promoDate = FxNimbus.features.ipProtection.value().promoDeadline.let { promoDate ->
+            IsoPromoDeadline(promoDate)
+                .formatPromoDateOrCatch { requireComponents.analytics.crashReporter.submitCaughtException(it) }
+                ?.takeIf { LocalDate.now() <= LocalDate.parse(promoDate) }
+        }
+
+        LaunchedEffect(Unit) {
+           requireComponents.ipProtection.store.dispatch(IPProtectionAction.CheckAccount)
+        }
+
         FirefoxTheme {
             IPProtectionScreen(
                 state = state,
+                snackbarHostState = snackbarHostState,
                 readyToUse = state.readyToUse(),
                 syncingData = state.syncingData(),
+                promoDate = promoDate,
                 onVpnToggle = { enabled ->
                     if (enabled) {
-                        requireContext().settings().hasAlreadyUsedVpn = true
+                        Vpn.settingsTurnedOn.record(NoExtras())
+                        requireComponents.settings.hasAlreadyUsedVpn = true
+                    } else {
+                        Vpn.settingsTurnedOff.record(NoExtras())
                     }
                     requireComponents.ipProtection.store.dispatch(IPProtectionAction.Toggle)
                 },
@@ -82,14 +111,15 @@ class IPProtectionFragment : Fragment(), SystemInsetsPaddedFragment {
                         SupportUtils.getSumoURLForTopic(
                             requireActivity(),
                             SupportUtils.SumoTopic.VPN,
-                            useMobilePage = false,
+                            useMobilePage = true,
                         ),
                     )
                 },
                 onGetStartedClick = {
+                    Vpn.getStartedTapped.record(Vpn.GetStartedTappedExtra(entrypoint = "Settings"))
                     requireComponents.ipProtection.store.dispatch(IPProtectionAction.Toggle)
                 },
-                showDebugAction = requireContext().settings().showSecretDebugMenuThisSession,
+                showDebugAction = requireComponents.settings.showSecretDebugMenuThisSession,
                 onDebugActionClick = { showDebugDialog = true },
                 onNavigateBack = { findNavController().popBackStack() },
             )
@@ -121,6 +151,33 @@ class IPProtectionFragment : Fragment(), SystemInsetsPaddedFragment {
             ),
             view = view,
             owner = this,
+        )
+
+        ipProtectionWarningBinding.set(
+            feature = IPProtectionWarningBinding(
+                store = requireComponents.ipProtection.store,
+                proxyUnavailable = {
+                    Vpn.proxyUnavailable.record()
+                    findNavController().navigate(
+                        HomeFragmentDirections.actionGlobalIpProtectionUnavailableDialog(),
+                    )
+                },
+            ),
+            owner = this,
+            view = view,
+        )
+
+        ipProtectionSnackbarBinding.set(
+            feature = IPProtectionSnackbarBinding(
+                appStore = requireComponents.appStore,
+                snackbarDelegate = FenixSnackbarDelegate(
+                    snackbarHostState = snackbarHostState,
+                    scope = viewLifecycleOwner.lifecycleScope,
+                    context = requireContext(),
+                ),
+            ),
+            owner = this,
+            view = view,
         )
     }
 

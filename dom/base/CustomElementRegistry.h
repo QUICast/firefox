@@ -466,6 +466,7 @@ class CustomElementRegistry final : public nsISupports, public nsWrapperCache {
   static already_AddRefed<CustomElementRegistry> GetScopedRegistry(nsINode&);
   static void SetScopedRegistry(nsINode&, CustomElementRegistry&);
   static void RemoveScopedRegistry(nsINode&);
+  static bool IsInScopedRegistryMap(nsINode&);
 
   void TraceDefinitions(JSTracer* aTrc);
 
@@ -563,6 +564,12 @@ class CustomElementRegistry final : public nsISupports, public nsWrapperCache {
                                   ErrorResult& aRv);
 
   void Upgrade(nsINode& aRoot);
+
+  /**
+   * Initialize a Node's CustomElementRegistry to this registry.
+   * https://html.spec.whatwg.org/multipage/custom-elements.html#dom-customelementregistry-initialize
+   */
+  void Initialize(nsINode& aRoot, ErrorResult& aRv);
 };
 
 class MOZ_RAII AutoCEReaction final {

@@ -3,45 +3,46 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "DrawTargetSkia.h"
-#include "SourceSurfaceSkia.h"
-#include "ScaledFontBase.h"
+
+#include <algorithm>
+#include <cmath>
+
+#include "Blur.h"
+#include "DataSurfaceHelpers.h"
 #include "FilterNodeSoftware.h"
 #include "HelpersSkia.h"
-
+#include "Logging.h"
+#include "PathHelpers.h"
+#include "PathSkia.h"
+#include "ScaledFontBase.h"
+#include "SourceSurfaceSkia.h"
+#include "Swizzle.h"
+#include "Tools.h"
 #include "mozilla/CheckedInt.h"
 #include "mozilla/StaticPrefs_gfx.h"
 #include "mozilla/Vector.h"
-
 #include "skia/include/core/SkAnnotation.h"
 #include "skia/include/core/SkBitmap.h"
-#include "skia/include/core/SkData.h"
 #include "skia/include/core/SkCanvas.h"
+#include "skia/include/core/SkColorFilter.h"
+#include "skia/include/core/SkData.h"
 #include "skia/include/core/SkFont.h"
+#include "skia/include/core/SkRegion.h"
 #include "skia/include/core/SkSurface.h"
 #include "skia/include/core/SkTextBlob.h"
 #include "skia/include/core/SkTypeface.h"
 #include "skia/include/effects/SkGradient.h"
-#include "skia/include/core/SkColorFilter.h"
-#include "skia/include/core/SkRegion.h"
 #include "skia/include/effects/SkImageFilters.h"
 #include "skia/include/private/base/SkMalloc.h"
 #include "skia/src/core/SkEffectPriv.h"
 #include "skia/src/core/SkRasterPipeline.h"
 #include "skia/src/core/SkWriteBuffer.h"
 #include "skia/src/shaders/SkEmptyShader.h"
-#include "Blur.h"
-#include "DataSurfaceHelpers.h"
-#include "Logging.h"
-#include "Tools.h"
-#include "PathHelpers.h"
-#include "PathSkia.h"
-#include "Swizzle.h"
-#include <algorithm>
-#include <cmath>
 
 #ifdef XP_DARWIN
-#  include "BorrowedContext.h"
 #  include <CoreGraphics/CGBitmapContext.h>
+
+#  include "BorrowedContext.h"
 #endif
 
 #ifdef XP_WIN
@@ -275,30 +276,35 @@ static sk_sp<SkImage> GetSkImageForSurface(SourceSurface* aSurface,
     return nullptr;
   }
 
-  // Wrapper surfaces (e.g. SourceSurfaceOffset) can hand back the inner
-  // SourceSurfaceSkia here; route it through GetImage so copy-on-write
-  // snapshots are detached/locked rather than borrowing a raw pixel pointer
-  // that can outlive the originating SkSurface.
-  if (dataSurface->GetType() == SurfaceType::SKIA) {
-    return static_cast<SourceSurfaceSkia*>(dataSurface.get())->GetImage(aLock);
-  }
-
   DataSourceSurface::MappedSurface map;
   void (*releaseProc)(const void*, void*);
-  if (dataSurface->GetType() == SurfaceType::DATA_SHARED_WRAPPER) {
-    // Technically all surfaces should be mapped and unmapped explicitly but it
-    // appears SourceSurfaceSkia and DataSourceSurfaceWrapper have issues with
-    // this. For now, we just map SourceSurfaceSharedDataWrapper to ensure we
-    // don't unmap the data during the transaction (for blob images).
-    if (!dataSurface->Map(DataSourceSurface::MapType::READ, &map)) {
-      gfxWarning() << "Failed mapping DataSourceSurface for Skia image";
-      return nullptr;
-    }
-    releaseProc = ReleaseTemporaryMappedSurface;
-  } else {
-    map.mData = dataSurface->GetData();
-    map.mStride = dataSurface->Stride();
-    releaseProc = ReleaseTemporarySurface;
+  switch (dataSurface->GetType()) {
+    case SurfaceType::SKIA:
+      // Wrapper surfaces (e.g. SourceSurfaceOffset) can hand back the inner
+      // SourceSurfaceSkia here; route it through GetImage so copy-on-write
+      // snapshots are detached/locked rather than borrowing a raw pixel pointer
+      // that can outlive the originating SkSurface.
+      return static_cast<SourceSurfaceSkia*>(dataSurface.get())
+          ->GetImage(aLock);
+    case SurfaceType::DATA_SHARED_WRAPPER:
+    case SurfaceType::DATA_SHARED:
+    case SurfaceType::DATA_RECYCLING_SHARED:
+      // Technically all surfaces should be mapped and unmapped explicitly but
+      // it appears SourceSurfaceSkia and DataSourceSurfaceWrapper have issues
+      // with this. For now, we just map SourceSurfaceSharedDataWrapper to
+      // ensure we don't unmap the data during the transaction (for blob
+      // images).
+      if (!dataSurface->Map(DataSourceSurface::MapType::READ, &map)) {
+        gfxWarning() << "Failed mapping DataSourceSurface for Skia image";
+        return nullptr;
+      }
+      releaseProc = ReleaseTemporaryMappedSurface;
+      break;
+    default:
+      map.mData = dataSurface->GetData();
+      map.mStride = dataSurface->Stride();
+      releaseProc = ReleaseTemporarySurface;
+      break;
   }
 
   if (!map.mData || map.mStride <= 0) {
@@ -1653,7 +1659,7 @@ bool DrawTargetSkia::Draw3DTransformedSurface(SourceSurface* aSurface,
 already_AddRefed<SourceSurface> DrawTargetSkia::CreateSourceSurfaceFromData(
     unsigned char* aData, const IntSize& aSize, int32_t aStride,
     SurfaceFormat aFormat) const {
-  RefPtr<SourceSurfaceSkia> newSurf = new SourceSurfaceSkia();
+  RefPtr newSurf = MakeRefPtr<SourceSurfaceSkia>();
 
   if (!newSurf->InitFromData(aData, aSize, aStride, aFormat)) {
     gfxDebug() << *this
@@ -1667,7 +1673,7 @@ already_AddRefed<SourceSurface> DrawTargetSkia::CreateSourceSurfaceFromData(
 
 already_AddRefed<DrawTarget> DrawTargetSkia::CreateSimilarDrawTarget(
     const IntSize& aSize, SurfaceFormat aFormat) const {
-  RefPtr<DrawTargetSkia> target = new DrawTargetSkia();
+  RefPtr target = MakeRefPtr<DrawTargetSkia>();
 #ifdef DEBUG
   if (!IsBackedByPixels(mCanvas)) {
     // If our canvas is backed by vector storage such as PDF then we want to
@@ -1893,16 +1899,16 @@ bool DrawTargetSkia::Init(const IntSize& aSize, SurfaceFormat aFormat) {
   }
   const SkSurfaceProps& props = GetSkSurfaceProps();
 
+  size_t bufSize = BufferSizeFromStrideAndHeight(stride.value(), info.height());
+  if (!bufSize) {
+    return false;
+  }
+
   if (aFormat == SurfaceFormat::A8) {
     // Skia does not fully allocate the last row according to stride.
     // Since some of our algorithms (i.e. blur) depend on this, we must allocate
     // the bitmap pixels manually.
-    CheckedInt<size_t> size = stride.value();
-    size *= info.height();
-    if (!size.isValid()) {
-      return false;
-    }
-    void* buf = sk_malloc_flags(size.value(), SK_MALLOC_ZERO_INITIALIZE);
+    void* buf = sk_malloc_flags(bufSize, SK_MALLOC_ZERO_INITIALIZE);
     if (!buf) {
       return false;
     }

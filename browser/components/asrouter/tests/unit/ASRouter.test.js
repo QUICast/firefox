@@ -50,6 +50,7 @@ describe("ASRouter", () => {
   let fakeTargetingContext;
   let FakeToolbarBadgeHub;
   let FakeMomentsPageHub;
+  let FakeSpecialMessageActions;
   let ASRouterTargeting;
   let gBrowser;
   let screenImpressions;
@@ -128,6 +129,12 @@ describe("ASRouter", () => {
     ASRouterTargeting = {
       isMatch: sandbox.stub(),
       findMatchingMessage: sandbox.stub(),
+      getMessageTriggers: message => {
+        if (Array.isArray(message.triggers)) {
+          return message.triggers;
+        }
+        return message.trigger ? [message.trigger] : [];
+      },
       Environment: {
         locale: "en-US",
         localeLanguageCode: "en",
@@ -294,9 +301,9 @@ describe("ASRouter", () => {
         getAllBranches: sandbox.stub().resolves([]),
         ready: sandbox.stub().resolves(),
       },
-      SpecialMessageActions: {
+      SpecialMessageActions: (FakeSpecialMessageActions = {
         handleAction: sandbox.stub(),
-      },
+      }),
       TargetingContext: class {
         static combineContexts(...args) {
           return fakeTargetingContext.combineContexts.apply(sandbox, args);
@@ -888,6 +895,127 @@ describe("ASRouter", () => {
       assert.notCalled(FakeToolbarBadgeHub.registerBadgeNotificationListener);
       assert.notCalled(FakeMomentsPageHub.executeAction);
     });
+    describe("action template", () => {
+      let addImpressionStub;
+      let blockMessageByIdStub;
+      const allowedMessage = {
+        id: "TEST_ACTION",
+        template: "action_only",
+        content: { action: { type: "CONFIRM_LAUNCH_ON_LOGIN" } },
+      };
+      beforeEach(() => {
+        addImpressionStub = sandbox.stub(Router, "addImpression");
+        blockMessageByIdStub = sandbox.stub(Router, "blockMessageById");
+      });
+      it("calls handleAction and records an impression without blocking for an allowed action", async () => {
+        Router.routeCFRMessage(allowedMessage, browser, {});
+        await Promise.resolve(); // let dispatchCFRAction's async wrapper resolve
+
+        assert.calledOnceWithExactly(
+          FakeSpecialMessageActions.handleAction,
+          allowedMessage.content.action,
+          browser
+        );
+        assert.calledWithMatch(initParams.dispatchCFRAction, {
+          type: "ACTION_ONLY_TELEMETRY",
+          data: {
+            action: "action_only_user_event",
+            message_id: allowedMessage.id,
+            event: "IMPRESSION",
+          },
+        });
+        assert.calledWithMatch(initParams.dispatchCFRAction, {
+          type: "IMPRESSION",
+          data: allowedMessage,
+        });
+        assert.notCalled(addImpressionStub);
+        assert.notCalled(blockMessageByIdStub);
+      });
+      it("does nothing for a non-allowlisted action", () => {
+        const badMessage = {
+          id: "BAD",
+          template: "action_only",
+          content: { action: { type: "OPEN_URL" } },
+        };
+        Router.routeCFRMessage(badMessage, browser, {});
+
+        assert.notCalled(FakeSpecialMessageActions.handleAction);
+        assert.notCalled(addImpressionStub);
+        assert.notCalled(blockMessageByIdStub);
+      });
+      it("allows MULTI_ACTION when every nested action is allowlisted", async () => {
+        const multiMessage = {
+          id: "MULTI",
+          template: "action_only",
+          content: {
+            action: {
+              type: "MULTI_ACTION",
+              data: {
+                actions: [
+                  { type: "CONFIRM_LAUNCH_ON_LOGIN" },
+                  { type: "PIN_FIREFOX_TO_TASKBAR" },
+                ],
+              },
+            },
+          },
+        };
+        Router.routeCFRMessage(multiMessage, browser, {});
+        await Promise.resolve(); // let dispatchCFRAction's async wrapper resolve
+
+        assert.calledOnce(FakeSpecialMessageActions.handleAction);
+        assert.calledWithMatch(initParams.dispatchCFRAction, {
+          type: "IMPRESSION",
+          data: multiMessage,
+        });
+        assert.notCalled(addImpressionStub);
+      });
+      it("rejects MULTI_ACTION when any nested action is not allowlisted", () => {
+        const badMulti = {
+          id: "BAD_MULTI",
+          template: "action_only",
+          content: {
+            action: {
+              type: "MULTI_ACTION",
+              data: {
+                actions: [
+                  { type: "CONFIRM_LAUNCH_ON_LOGIN" },
+                  { type: "OPEN_URL" },
+                ],
+              },
+            },
+          },
+        };
+        Router.routeCFRMessage(badMulti, browser, {});
+
+        assert.notCalled(FakeSpecialMessageActions.handleAction);
+        assert.notCalled(addImpressionStub);
+      });
+      it("rejects a MULTI_ACTION with no nested actions", () => {
+        const emptyMulti = {
+          id: "EMPTY_MULTI",
+          template: "action_only",
+          content: {
+            action: { type: "MULTI_ACTION", data: { actions: [] } },
+          },
+        };
+        Router.routeCFRMessage(emptyMulti, browser, {});
+
+        assert.notCalled(FakeSpecialMessageActions.handleAction);
+        assert.notCalled(addImpressionStub);
+      });
+      it("does nothing when the message has no action", () => {
+        const noAction = {
+          id: "NO_ACTION",
+          template: "action_only",
+          content: {},
+        };
+        Router.routeCFRMessage(noAction, browser, {});
+
+        assert.notCalled(FakeSpecialMessageActions.handleAction);
+        assert.notCalled(addImpressionStub);
+        assert.notCalled(blockMessageByIdStub);
+      });
+    });
   });
 
   describe("#loadMessagesFromAllProviders", () => {
@@ -1011,6 +1139,44 @@ describe("ASRouter", () => {
       );
       assert.calledWithExactly(
         ASRouterTriggerListeners.get("openURL").init,
+        Router._triggerHandler,
+        ["www.example.com"],
+        undefined, // patterns
+        undefined // regexPatterns
+      );
+    });
+    it("should register a listener for each trigger of a multi-trigger message", async () => {
+      sandbox.spy(ASRouterTriggerListeners.get("openURL"), "init");
+      sandbox.spy(ASRouterTriggerListeners.get("frequentVisits"), "init");
+
+      await createRouterAndInit([
+        {
+          id: "foo",
+          type: "local",
+          enabled: true,
+          messages: [
+            {
+              id: "multi",
+              template: "simple_template",
+              triggers: [
+                { id: "openURL", params: ["www.mozilla.org"] },
+                { id: "frequentVisits", params: ["www.example.com"] },
+              ],
+              content: { title: "Multi", body: "Multi123" },
+            },
+          ],
+        },
+      ]);
+
+      assert.calledWithExactly(
+        ASRouterTriggerListeners.get("openURL").init,
+        Router._triggerHandler,
+        ["www.mozilla.org"],
+        undefined, // patterns
+        undefined // regexPatterns
+      );
+      assert.calledWithExactly(
+        ASRouterTriggerListeners.get("frequentVisits").init,
         Router._triggerHandler,
         ["www.example.com"],
         undefined, // patterns
@@ -1409,6 +1575,45 @@ describe("ASRouter", () => {
       });
 
       assert.deepEqual(result, message1);
+    });
+    it("should match a message with multiple triggers against any of its trigger ids", async () => {
+      const message = {
+        id: "MULTI",
+        campaign: "foocampaign",
+        triggers: [{ id: "foo" }, { id: "bar" }],
+        groups: ["cfr"],
+        provider: "cfr",
+      };
+      await Router.setState({ messages: [message] });
+      ASRouterTargeting.findMatchingMessage.callsFake(
+        ({ messages }) => messages[0] || null
+      );
+
+      assert.deepEqual(
+        await Router.handleMessageRequest({ triggerId: "foo" }),
+        message
+      );
+      assert.deepEqual(
+        await Router.handleMessageRequest({ triggerId: "bar" }),
+        message
+      );
+    });
+    it("should filter out a multi-trigger message when no trigger id matches", async () => {
+      const message = {
+        id: "MULTI",
+        campaign: "foocampaign",
+        triggers: [{ id: "foo" }, { id: "bar" }],
+        groups: ["cfr"],
+        provider: "cfr",
+      };
+      await Router.setState({ messages: [message] });
+      ASRouterTargeting.findMatchingMessage.callsFake(
+        ({ messages }) => messages[0] || null
+      );
+
+      const result = await Router.handleMessageRequest({ triggerId: "baz" });
+
+      assert.isNull(result);
     });
     it("should have messageImpressions in the message context", () => {
       assert.propertyVal(

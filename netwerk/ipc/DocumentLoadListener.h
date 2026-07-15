@@ -5,12 +5,12 @@
 #ifndef mozilla_net_DocumentLoadListener_h
 #define mozilla_net_DocumentLoadListener_h
 
+#include "EarlyHintsService.h"
 #include "mozilla/MozPromise.h"
 #include "mozilla/Variant.h"
 #include "mozilla/WeakPtr.h"
-#include "mozilla/ipc/Endpoint.h"
 #include "mozilla/dom/SessionHistoryEntry.h"
-#include "EarlyHintsService.h"
+#include "mozilla/ipc/Endpoint.h"
 #include "mozilla/net/NeckoCommon.h"
 #include "mozilla/net/NeckoParent.h"
 #include "mozilla/net/PDocumentChannelParent.h"
@@ -32,6 +32,7 @@
 namespace mozilla {
 namespace dom {
 class CanonicalBrowsingContext;
+class ParentProcessChannelHandle;
 struct NavigationIsolationOptions;
 }  // namespace dom
 namespace net {
@@ -588,6 +589,11 @@ class DocumentLoadListener : public nsIInterfaceRequestor,
 
   // Parent-initiated loads do not support redirects to real channels.
   bool mSupportsRedirectToRealChannel = true;
+
+  // Handle which will be passed to the content process. This will be passed to
+  // the WindowGlobalParent via. the content process to allow correlating the
+  // channel to the final document.
+  RefPtr<dom::ParentProcessChannelHandle> mParentProcessChannelHandle;
 
   Maybe<nsCString> mRemoteTypeOverride;
 

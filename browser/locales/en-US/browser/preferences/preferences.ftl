@@ -85,8 +85,8 @@ pane-appearance-title = Appearance
 pane-downloads-title2 = Downloads
   .title = Downloads
 
-pane-downloads2 =
-    .heading = { pane-downloads-title2 }
+pane-downloads3 =
+    .heading = Downloads
 
 pane-accessibility-title = Accessibility
   .title = { pane-accessibility-title }
@@ -94,8 +94,8 @@ pane-accessibility-title = Accessibility
 pane-languages-title2 = Languages
   .title = Languages
 
-preferences-languages-header2 =
-    .heading = { pane-languages-title2 }
+preferences-languages-header3 =
+    .heading = Languages
 
 settings-pane-labs-title2 = { -firefoxlabs-brand-name }
   .title = { -firefoxlabs-brand-name }
@@ -199,6 +199,11 @@ windows-launch-on-login =
     .label = Open { -brand-short-name } automatically when your computer starts up
     .accesskey = O
 windows-launch-on-login-disabled = This preference has been disabled in Windows. To change, visit <a data-l10n-name="startup-link">Startup Apps</a> in System settings.
+
+# Option to also opens a new tab, in addition to restoring previous tabs and windows
+windows-launch-on-login-open-new-tab =
+    .label = Also open a new tab
+    .accesskey = n
 
 disable-extension =
     .label = Disable Extension
@@ -411,8 +416,8 @@ preferences-contrast-control-custom =
     .label = Custom
     .accesskey = C
 
-preferences-colors-manage-button =
-    .label = Manage Colors…
+preferences-colors-manage-button2 =
+    .label = Manage colors
     .accesskey = C
 
 preferences-fonts-header2 =
@@ -795,7 +800,7 @@ update-setting-write-failure-title2 = Error saving Update settings
 # The newlines between the main text and the line containing the path is
 # intentional so the path is easier to identify.
 update-setting-write-failure-message2 =
-    { -brand-short-name } encountered an error and didn’t save this change. Note that changing this update setting requires permission to write to the file below. You or a system administrator may be able resolve the error by granting the Users group full control to this file.
+    { -brand-short-name } encountered an error and didn’t save this change. Note that changing this update setting requires permission to write to the file below. You or a system administrator may be able to resolve the error by granting the Users group full control to this file.
 
     Could not write to file: { $path }
 
@@ -880,6 +885,12 @@ browsing-search-on-start-typing =
     .label = Search for text when you start typing
     .accesskey = x
 
+settings-keyboard-shortcuts-group =
+    .label = Keyboard shortcuts
+    .description = Control how you move around and interact with { -brand-short-name }.
+settings-keyboard-shortcuts-customkeys-link =
+    .label = Customize keyboard shortcuts
+
 settings-media-group =
     .label = Media
 
@@ -942,18 +953,9 @@ set-as-my-default-browser-2 =
 
 ## Home Section - Home Page Customization
 
-home-homepage-title =
-    .label = Homepage
-
 home-homepage-mode-label = Homepage and new windows
 
-home-homepage-new-windows =
-    .label = New windows
-
 home-newtabs-mode-label = New tabs
-
-home-homepage-new-tabs =
-    .label = New tabs
 
 home-restore-defaults =
     .label = Restore Defaults
@@ -975,46 +977,12 @@ home-homepage-custom-url =
 home-homepage-manage-extension-button =
     .label = Manage extension
 
-# This option leads to the "Custom Homepage" subpage
-home-homepage-custom-homepage-button =
-    .label = Choose a specific site
-
 ## Custom Homepage subpage
 
 home-custom-homepage-header = Custom Homepage
 
 home-custom-homepage-subpage =
     .heading = Custom Homepage
-
-# Subheader on the Custom Homepage subpage. Followed by a form to enter URLs and a list of URLs already saved, if any.
-home-custom-homepage-card-header =
-    .label = Website address(es)
-
-home-custom-homepage-address =
-    .placeholder = Enter address
-home-custom-homepage-address-button =
-    .label = Add address
-
-# Shown when no custom websites/URLs to use as a homepage have been added yet
-home-custom-homepage-no-results =
-    .label = No websites added yet.
-
-home-custom-homepage-delete-address-button =
-    .aria-label = Delete address
-    .title = Delete address
-
-# Further options to use when setting the home page. Two action buttons are placed in line with this prompt
-# to replace the current home page with a currently open page or bookmark.
-home-custom-homepage-replace-with-prompt =
-    .label = Replace with
-
-# Button that appears in-line after text "Replace with" (home-custom-homepage-replace-with-prompt)
-home-custom-homepage-current-pages-button =
-    .label = Current opened pages
-
-# Button that appears in-line after text "Replace with" (home-custom-homepage-replace-with-prompt)
-home-custom-homepage-bookmarks-button =
-    .label = Bookmarks…
 
 # This string has a special case for '1' and [other] (default). If necessary for
 # your language, you can add {$tabCount} to your translations and use the
@@ -1034,23 +1002,14 @@ choose-bookmark =
 
 ## Home Section - Firefox Home Content Customization
 
-home-prefs-content-header =
-    .label = { -firefox-home-brand-name }
 home-prefs-content-header2 = { -firefox-home-brand-name } Content
 home-prefs-content-description2 = Choose what content you want on your { -firefox-home-brand-name } screen.
 
-home-prefs-firefox-logo-header =
-    .label = { -brand-short-name } logo
-
 home-prefs-search-header =
     .label = Web Search
-home-prefs-search-header2 =
-    .label = Search
 home-prefs-shortcuts-header =
     .label = Shortcuts
 home-prefs-shortcuts-description = Sites you save or visit
-home-prefs-shortcuts-select =
-    .aria-label = Shortcuts
 home-prefs-shortcuts-by-option-sponsored =
     .label = Sponsored shortcuts
 
@@ -1061,10 +1020,6 @@ home-prefs-recommended-by-description-generic = Exceptional content curated by t
 home-prefs-stories-header =
     .label = Stories
 home-prefs-stories-description = Personalized stories based on your activity
-
-home-prefs-stories-header2 =
-    .label = Stories
-    .description = Exceptional content curated by the { -brand-product-name } family
 
 ##
 
@@ -1082,63 +1037,6 @@ home-prefs-highlights-option-most-recent-download =
 home-prefs-recent-activity-header =
     .label = Recent activity
 home-prefs-recent-activity-description = A selection of recent sites and content
-home-prefs-recent-activity-select =
-    .aria-label = Recent activity
-home-prefs-weather-header =
-  .label = Weather
-home-prefs-weather-description = Today’s forecast at a glance
-home-prefs-weather-learn-more-link = Learn more
-
-home-prefs-widgets-header =
-    .label = Widgets
-
-# Lists is a widget on New Tab, similar to a to-do widget
-home-prefs-lists-header =
-    .label = Lists
-
-# Timer is a widget on New Tab, similar to the Pomodoro timer.
-home-prefs-timer-header =
-    .label = Timer
-
-# Sports is a widget on New Tab showing sports scores and schedules.
-home-prefs-sports-widget-header =
-    .label = Sports
-
-# Clock is a widget on New Tab that displays time zones around the world.
-home-prefs-clocks-header =
-    .label = Clock
-
-# "Support" here means to help sustain or contribute to something, especially through funding or sponsorship.
-home-prefs-support-firefox-header =
-    .label = Support { -brand-product-name }
-
-home-prefs-mission-message = Our sponsors support our mission to build a better web
-home-prefs-mission-message-learn-more-link = Find out how
-
-home-prefs-mission-message2 =
-    .message = Our sponsors support our mission to build a better web.
-
-home-prefs-manage-topics-link = Manage topics
-
-home-prefs-manage-topics-link2 =
-    .label = Manage topics
-
-home-prefs-choose-wallpaper-link = Choose a wallpaper
-
-home-prefs-choose-wallpaper-link2 =
-    .label = Choose a wallpaper
-
-# Informational message bar that appears in the Firefox Home section when the options are disabled.
-# The user must select Firefox Home as their homepage for either new tabs or new windows to enable
-# the features in settings.
-home-prefs-firefox-home-disabled-notice =
-    .message = To use these features, set new tabs or new windows to { -firefox-home-brand-name }.
-
-# Dropdown option shown when an extension replaces the contents of new windows or tabs.
-# Variables:
-#   $extension (string) - Name of the extension
-home-prefs-homepage-extension-option =
-    .label = Extension ({ $extension })
 
 # Variables:
 #   $num (number) - Number of rows displayed
@@ -1148,6 +1046,21 @@ home-prefs-sections-rows-option =
             [one] { $num } row
            *[other] { $num } rows
         }
+home-prefs-weather-header =
+  .label = Weather
+home-prefs-weather-description = Today’s forecast at a glance
+home-prefs-weather-learn-more-link = Learn more
+
+# "Support" here means to help sustain or contribute to something, especially through funding or sponsorship.
+home-prefs-support-firefox-header =
+    .label = Support { -brand-product-name }
+
+home-prefs-mission-message = Our sponsors support our mission to build a better web
+home-prefs-mission-message-learn-more-link = Find out how
+
+home-prefs-manage-topics-link = Manage topics
+
+home-prefs-choose-wallpaper-link = Choose a wallpaper
 
 ## Search Section
 
@@ -1325,23 +1238,23 @@ remove-addon-engine-alert = To remove this search engine, remove the associated 
 
 ## Containers Section
 
-containers-back-button2 =
-    .aria-label = Back to Settings
-containers-header = Container Tabs
-containers-section-header =
-    .heading = Container Tabs
-containers-add-button =
-    .label = Add New Container
+containers-section-header2 =
+    .heading = Container settings
+containers-card-header2 =
+    .label = Containers
+    .description = Separate cookies by container so you can use different accounts on the same site and limit cross-site tracking.
+containers-add-button2 =
+    .label = Add new container
     .accesskey = A
 
-containers-new-tab-check =
+containers-new-tab-check3 =
     .label = Select a container for each new tab
     .accesskey = S
 
-containers-settings-button =
-    .label = Settings
-containers-remove-button =
-    .label = Remove
+containers-settings-button2 =
+    .title = Settings
+containers-remove-button3 =
+    .title = Delete
 
 ## Account and sync
 
@@ -1356,6 +1269,10 @@ sync-group-label =
 
 account-group-label2 =
     .label = Account
+
+account-disabled-group =
+    .label = Account
+    .description = Account settings are unavailable.
 
 account-placeholder2 =
     .label = You’re not signed in
@@ -1678,8 +1595,7 @@ forms-primary-pw-use-2 =
     .accesskey = U
 forms-primary-pw-set =
     .label = Set primary password
-forms-primary-pw-on =
-    .label = Primary password is ON
+forms-primary-pw-on-2 = Primary password is <strong>ON</strong>
 forms-primary-pw-change-2 =
     .label = Change primary password
 # Label for button to disable primary password.
@@ -1851,6 +1767,10 @@ history-clear-on-close-option =
 history-clear-on-close-settings =
     .label = Settings…
     .accesskey = t
+
+history-shutdown-exceptions =
+    .label = Manage Exceptions
+    .accesskey = x
 
 history-clear-button =
     .label = Clear History…
@@ -2466,6 +2386,36 @@ browser-theme-group =
 browser-theme-manage-link =
     .label = Manage { -brand-short-name } themes
 
+appearance-window-density-group =
+    .label = Window density
+    .description = Adjust the spacing around window elements like toolbar, tabs, and sidebar.
+
+appearance-window-density-radio-group =
+    .aria-label = Window density
+
+appearance-window-density-automatic =
+    .label = Automatic (default)
+    .description = Standard, compact, or touch spacing is applied automatically
+
+appearance-window-density-automatic-no-touch =
+    .label = Automatic (default)
+    .description = Standard or compact spacing is applied automatically
+
+appearance-window-density-standard =
+    .label = Standard
+    .description = Balanced spacing for most screens
+
+appearance-window-density-auto-touch-mode =
+    .label = Use touch spacing for tablet mode
+
+appearance-window-density-compact =
+    .label = Compact
+    .description = Reduced spacing for smaller screens
+
+appearance-window-density-touch =
+    .label = Touch
+    .description = Larger window elements and click targets, optimized for touch screens
+
 related-settings-group =
     .label = Related settings
 
@@ -2510,8 +2460,8 @@ motion-and-link-group =
 
 ## AI controls page
 
-preferences-ai-controls-header2 =
-    .heading = { pane-ai-controls-title2 }
+preferences-ai-controls-header3 =
+    .heading = AI controls
 
 preferences-ai-controls-description = You always have a choice in { -brand-short-name }, including whether to use features enhanced with AI. More controls coming soon.
 

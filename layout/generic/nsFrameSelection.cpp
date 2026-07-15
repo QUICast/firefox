@@ -215,6 +215,8 @@ inline int8_t GetIndexFromSelectionType(SelectionType aSelectionType) {
   return kIndexOfSelections[static_cast<int8_t>(aSelectionType) + 1];
 }
 
+namespace mozilla {
+
 /*
 The limiter is used specifically for the text areas and textfields
 In that case it is the DIV tag that is anonymously created for the text
@@ -228,16 +230,7 @@ If its parent it the limiter then the point is also valid.  In the case of
 NO limiter all points are valid since you are in a topmost iframe. (browser
 or composer)
 */
-bool nsFrameSelection::NodeIsInLimiters(const nsINode* aContainerNode) const {
-  return NodeIsInLimiters(aContainerNode, GetIndependentSelectionRootElement(),
-                          GetAncestorLimiter());
-}
-
-// static
-bool nsFrameSelection::NodeIsInLimiters(
-    const nsINode* aContainerNode,
-    const Element* aIndependentSelectionLimiterElement,
-    const Element* aSelectionAncestorLimiter) {
+bool SelectionLimiters::NodeIsInLimiters(const nsINode* aContainerNode) const {
   if (!aContainerNode) {
     return false;
   }
@@ -246,15 +239,14 @@ bool nsFrameSelection::NodeIsInLimiters(
   // control.  The <div> should have only one Text and/or a <br>.  Therefore,
   // when it's non-nullptr, selection range containers must be the container or
   // the Text in it.
-  if (aIndependentSelectionLimiterElement) {
-    MOZ_ASSERT(aIndependentSelectionLimiterElement->GetPseudoElementType() ==
+  if (mIndependentSelectionRootElement) {
+    MOZ_ASSERT(mIndependentSelectionRootElement->GetPseudoElementType() ==
                PseudoStyleType::MozTextControlEditingRoot);
-    MOZ_ASSERT(
-        aIndependentSelectionLimiterElement->IsHTMLElement(nsGkAtoms::div));
-    if (aIndependentSelectionLimiterElement == aContainerNode) {
+    MOZ_ASSERT(mIndependentSelectionRootElement->IsHTMLElement(nsGkAtoms::div));
+    if (mIndependentSelectionRootElement == aContainerNode) {
       return true;
     }
-    if (aIndependentSelectionLimiterElement == aContainerNode->GetParent()) {
+    if (mIndependentSelectionRootElement == aContainerNode->GetParent()) {
       NS_WARNING_ASSERTION(aContainerNode->IsText(),
                            ToString(*aContainerNode).c_str());
       MOZ_ASSERT(aContainerNode->IsText());
@@ -266,11 +258,10 @@ bool nsFrameSelection::NodeIsInLimiters(
   // XXX We might need to return `false` if aContainerNode is in a native
   // anonymous subtree, but doing it will make it impossible to select the
   // anonymous subtree text in <details>.
-  return !aSelectionAncestorLimiter ||
-         aContainerNode->IsInclusiveDescendantOf(aSelectionAncestorLimiter);
+  return !mAncestorLimiter ||
+         aContainerNode->IsInclusiveDescendantOf(mAncestorLimiter);
 }
 
-namespace mozilla {
 struct MOZ_RAII AutoPrepareFocusRange {
   AutoPrepareFocusRange(Selection* aSelection,
                         const bool aMultiRangeSelection) {
@@ -1035,6 +1026,11 @@ nsFrameSelection::CreatePeekOffsetOptionsForCaretMove(
   if (static_cast<bool>(aForceEditableRegion)) {
     options += PeekOffsetOption::ForceEditableRegion;
   }
+  // A caret move wants paragraph peeking to resolve to a leaf frame at a block
+  // boundary so the caret has a precise text position for scrolling-into-view
+  // (bug 2041228). Selection paths build their own options and intentionally
+  // omit this so the block container remains the boundary.
+  options += PeekOffsetOption::ForCaretMove;
   return options;
 }
 
@@ -1176,8 +1172,9 @@ void nsFrameSelection::MaintainedRange::AdjustNormalSelection(
 
   NS_ASSERTION(aOffset >= 0, "aOffset should not be negative");
   const Maybe<int32_t> relToStart =
-      nsContentUtils::ComparePoints_AllowNegativeOffsets(
-          rangeStartNode, rangeStartOffset, aContent, aOffset);
+      nsContentUtils::ComparePoints_AllowNegativeOffsets<
+          TreeKind::ShadowIncludingDOM>(rangeStartNode, rangeStartOffset,
+                                        aContent, aOffset);
   if (NS_WARN_IF(!relToStart)) {
     // Potentially handle this properly when Selection across Shadow DOM
     // boundary is implemented
@@ -1186,8 +1183,9 @@ void nsFrameSelection::MaintainedRange::AdjustNormalSelection(
   }
 
   const Maybe<int32_t> relToEnd =
-      nsContentUtils::ComparePoints_AllowNegativeOffsets(
-          rangeEndNode, rangeEndOffset, aContent, aOffset);
+      nsContentUtils::ComparePoints_AllowNegativeOffsets<
+          TreeKind::ShadowIncludingDOM>(rangeEndNode, rangeEndOffset, aContent,
+                                        aOffset);
   if (NS_WARN_IF(!relToEnd)) {
     // Potentially handle this properly when Selection across Shadow DOM
     // boundary is implemented
@@ -1213,9 +1211,11 @@ void nsFrameSelection::MaintainedRange::AdjustContentOffsets(
     nsIFrame::ContentOffsets& aOffsets, StopAtScroller aStopAtScroller) const {
   // Adjust offsets according to maintained amount
   if (mRange && mAmount != eSelectNoAmount) {
-    const Maybe<int32_t> relativePosition = nsContentUtils::ComparePoints(
-        mRange->StartRef(), RawRangeBoundary(aOffsets.content, aOffsets.offset,
-                                             RangeBoundarySetBy::Offset));
+    const Maybe<int32_t> relativePosition =
+        nsContentUtils::ComparePoints<TreeKind::ShadowIncludingDOM>(
+            mRange->StartRef(),
+            RawRangeBoundary(aOffsets.content, aOffsets.offset,
+                             RangeBoundarySetBy::Offset));
     if (NS_WARN_IF(!relativePosition)) {
       // Potentially handle this properly when Selection across Shadow DOM
       // boundary is implemented
@@ -1822,31 +1822,33 @@ nsIFrame* nsFrameSelection::GetFrameToPageSelect() const {
     return nullptr;
   }
 
-  nsIFrame* rootFrameToSelect;
-  if (mLimiters.mIndependentSelectionRootElement) {
-    rootFrameToSelect =
-        mLimiters.mIndependentSelectionRootElement->GetPrimaryFrame();
-    if (NS_WARN_IF(!rootFrameToSelect)) {
-      return nullptr;
+  nsIFrame* rootFrameToSelect = [&]() -> nsIFrame* {
+    if (mLimiters.mIndependentSelectionRootElement) {
+      return mLimiters.mIndependentSelectionRootElement->GetPrimaryFrame();
     }
-  } else if (mLimiters.mAncestorLimiter) {
-    rootFrameToSelect = mLimiters.mAncestorLimiter->GetPrimaryFrame();
-    if (NS_WARN_IF(!rootFrameToSelect)) {
-      return nullptr;
+    if (mLimiters.mAncestorLimiter) {
+      return mLimiters.mAncestorLimiter->GetPrimaryFrame();
     }
-  } else {
-    rootFrameToSelect = mPresShell->GetRootScrollContainerFrame();
-    if (NS_WARN_IF(!rootFrameToSelect)) {
-      return nullptr;
-    }
+    return mPresShell->GetRootScrollContainerFrame();
+  }();
+
+  if (NS_WARN_IF(!rootFrameToSelect)) {
+    return nullptr;
   }
 
-  nsCOMPtr<nsIContent> contentToSelect = mPresShell->GetContentForScrolling();
-  if (contentToSelect) {
-    // If there is selected content, look for nearest and vertical scrollable
-    // parent under the root frame.
-    for (nsIFrame* frame = contentToSelect->GetPrimaryFrame();
-         frame && frame != rootFrameToSelect; frame = frame->GetParent()) {
+  // If there is selected content, and it's under our root, look for nearest
+  // and vertical scrollable parent under the root frame.
+  nsIFrame* innerScrollableFrame = [&]() -> nsIFrame* {
+    RefPtr contentToSelect = mPresShell->GetContentForScrolling();
+    if (!contentToSelect) {
+      return nullptr;
+    }
+    nsIFrame* frame = contentToSelect->GetPrimaryFrame();
+    if (!frame ||
+        !nsLayoutUtils::IsProperAncestorFrame(rootFrameToSelect, frame)) {
+      return nullptr;
+    }
+    for (; frame != rootFrameToSelect; frame = frame->GetParent()) {
       ScrollContainerFrame* scrollContainerFrame = do_QueryFrame(frame);
       if (!scrollContainerFrame) {
         continue;
@@ -1862,12 +1864,13 @@ nsIFrame* nsFrameSelection::GetFrameToPageSelect() const {
         return frame;
       }
     }
-  }
-  // Otherwise, i.e., there is no scrollable frame or only the root frame is
-  // scrollable, let's return the root frame because Shift + PageUp/PageDown
-  // should expand the selection in the root content even if it's not
-  // scrollable.
-  return rootFrameToSelect;
+    // Otherwise, i.e., there is no scrollable frame or only the root frame is
+    // scrollable, let's return the root frame because Shift + PageUp/PageDown
+    // should expand the selection in the root content even if it's not
+    // scrollable.
+    return nullptr;
+  }();
+  return innerScrollableFrame ? innerScrollableFrame : rootFrameToSelect;
 }
 
 nsresult nsFrameSelection::PageMove(bool aForward, bool aExtend,
@@ -3181,7 +3184,24 @@ void nsFrameSelection::SetAncestorLimiter(Element* aLimiter) {
     const Selection& sel = NormalSelection();
     LogSelectionAPI(&sel, __FUNCTION__, "aLimiter", aLimiter);
 
-    if (!NodeIsInLimiters(sel.GetFocusNode())) {
+    const bool hasOutOfBoundsRanges = [&]() {
+      if (!mLimiters.HasLimiters()) {
+        return false;
+      }
+      for (const uint32_t i : IntegerRange(sel.RangeCount())) {
+        const auto* range = sel.GetRangeAt(i);
+        MOZ_ASSERT(range);
+        if (!RangeInLimiters(*range)) {
+          NS_WARNING(fmt::format("{} (index: {}) is not in the limiters {}",
+                                 RefPtr{range}, i, mLimiters)
+                         .c_str());
+          return true;
+        }
+      }
+      return false;
+    }();
+
+    if (hasOutOfBoundsRanges) {
       ClearNormalSelection();
       if (mLimiters.mAncestorLimiter) {
         SetChangeReasons(nsISelectionListener::NO_REASON);

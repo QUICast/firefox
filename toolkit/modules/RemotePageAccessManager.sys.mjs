@@ -77,12 +77,21 @@ export let RemotePageAccessManager = {
     "about:certificate": {
       RPMSendQuery: ["getCertificates"],
     },
+    "about:pdf": {
+      RPMCanSetDefaultPDFHandler: ["*"],
+      RPMGetBoolPref: ["browser.aboutpdf.promo.dismissed"],
+      RPMOpenPDFFile: ["*"],
+      RPMSetDefaultPDFHandler: ["*"],
+      RPMSetPref: ["browser.aboutpdf.promo.dismissed"],
+    },
     "about:keyboard": {
       RPMAddMessageListener: ["CustomKeys:CapturedKey"],
+      RPMGetFormatURLPref: ["app.support.baseURL"],
       RPMSendAsyncMessage: ["CustomKeys:CaptureKey"],
       RPMSendQuery: [
         "CustomKeys:ChangeKey",
         "CustomKeys:ClearKey",
+        "CustomKeys:Confirm",
         "CustomKeys:GetDefaultKey",
         "CustomKeys:GetKeys",
         "CustomKeys:ResetAll",
@@ -158,6 +167,7 @@ export let RemotePageAccessManager = {
       RPMRemoveMessageListener: ["*"],
       RPMGetFormatURLPref: ["app.support.baseURL"],
       RPMIsWindowPrivate: ["*"],
+      RPMGetBoolPref: ["browser.nova.enabled"],
     },
     "about:deleteprofile": {
       RPMSendQuery: ["Profiles:GetDeleteProfileContent"],

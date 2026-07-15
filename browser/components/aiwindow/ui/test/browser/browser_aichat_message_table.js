@@ -37,8 +37,9 @@ describe("chat message table rendering", () => {
         const message = content.document.createElement("ai-chat-message");
         content.document.body.appendChild(message);
 
-        message.role = "assistant";
-        message.setAttribute("role", "assistant");
+        // `role` reflects to the `data-message-role` attribute (it can't use the
+        // `role` attribute, which is the native ARIA role), so drive it via that.
+        message.setAttribute("data-message-role", "assistant");
         message.message = tableMarkdown;
         message.setAttribute("message", tableMarkdown);
 
@@ -90,8 +91,7 @@ describe("chat message table rendering", () => {
       const invalidTableMarkdown = `| Header 1 | Header 2 |
 | A        | B        |`;
 
-      message.role = "assistant";
-      message.setAttribute("role", "assistant");
+      message.setAttribute("data-message-role", "assistant");
       message.message = invalidTableMarkdown;
       message.setAttribute("message", invalidTableMarkdown);
 
@@ -165,6 +165,64 @@ describe("chat message table rendering", () => {
         !table.shadowRoot.querySelector(".table-copy-button"),
         "Copy button should not exist"
       );
+    });
+  });
+
+  it("should show scroll indicator when table overflows", async () => {
+    await SpecialPowers.spawn(chatTab.linkedBrowser, [], async () => {
+      await content.customElements.whenDefined("ai-chat-table");
+
+      const table = content.document.createElement("ai-chat-table");
+      table.style.display = "block";
+      table.style.width = "100px";
+
+      const innerTable = content.document.createElement("table");
+      let headerCells = "";
+      for (let i = 0; i < 10; i++) {
+        headerCells += `<th style="white-space: nowrap">Long header ${i}</th>`;
+      }
+      innerTable.innerHTML = `<thead><tr>${headerCells}</tr></thead>`;
+      table.appendChild(innerTable);
+
+      content.document.body.appendChild(table);
+      await table.updateComplete;
+
+      await ContentTaskUtils.waitForCondition(
+        () => table.shadowRoot.querySelector(".table-scroll-indicator"),
+        "Scroll indicator should appear for an overflowing table"
+      );
+
+      table.remove();
+    });
+  });
+
+  it("should not show scroll indicator when table fits", async () => {
+    await SpecialPowers.spawn(chatTab.linkedBrowser, [], async () => {
+      await content.customElements.whenDefined("ai-chat-table");
+
+      const table = content.document.createElement("ai-chat-table");
+      table.style.display = "block";
+      table.style.width = "600px";
+
+      const innerTable = content.document.createElement("table");
+      innerTable.innerHTML = `<thead><tr><th>A</th><th>B</th></tr></thead>`;
+      table.appendChild(innerTable);
+
+      content.document.body.appendChild(table);
+      await table.updateComplete;
+
+      await new Promise(resolve =>
+        content.requestAnimationFrame(() =>
+          content.requestAnimationFrame(resolve)
+        )
+      );
+
+      Assert.ok(
+        !table.shadowRoot.querySelector(".table-scroll-indicator"),
+        "Scroll indicator should not render when the table fits"
+      );
+
+      table.remove();
     });
   });
 

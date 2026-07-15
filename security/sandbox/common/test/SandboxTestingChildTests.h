@@ -45,6 +45,7 @@
 #endif
 
 #ifdef XP_MACOSX
+#  include "mozilla/Sandbox.h"
 #  if defined(__SSE2__) || defined(_M_X64) || \
       (defined(_M_IX86_FP) && _M_IX86_FP >= 2)
 #    include "emmintrin.h"
@@ -903,7 +904,7 @@ void RunTestsRDD(SandboxTestingChild* child) {
   });
 
 #  elif XP_MACOSX
-  RunMacTestLaunchProcess(child);
+  RunMacTestLaunchProcess(child, EPERM);
   RunMacTestWindowServer(child);
   RunMacTestAudioAPI(child, true);
 #  endif
@@ -1348,7 +1349,7 @@ void RunTestsGPU(SandboxTestingChild* child) {
 
   RunMacTestLaunchProcess(child, EPERM);
   RunMacTestAudioAPI(child);
-  RunMacTestWindowServer(child, true);
+  RunMacTestWindowServer(child, ProcessIsX86_64());
 
 #else   // defined(XP_WIN)
     child->ReportNoTests();

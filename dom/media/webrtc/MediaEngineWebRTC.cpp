@@ -284,17 +284,33 @@ void MediaEngineWebRTC::EnumerateDevices(
   }
 }
 
+void MediaEngineWebRTC::InvalidateDesktopCaptureDeviceCache(
+    MediaSourceEnum aMediaSource) {
+  AssertIsOnOwningThread();
+  switch (aMediaSource) {
+    case MediaSourceEnum::Browser:
+    case MediaSourceEnum::Screen:
+    case MediaSourceEnum::Window:
+      GetChildAndCall(
+          &CamerasChild::InvalidateDesktopCaptureDeviceCache,
+          MediaEngineRemoteVideoSource::CaptureEngine(aMediaSource));
+      break;
+    default:
+      break;
+  }
+}
+
 RefPtr<MediaEngineSource> MediaEngineWebRTC::CreateSource(
     const MediaDevice* aMediaDevice) {
   MOZ_ASSERT(aMediaDevice->mEngine == this);
   if (MediaEngineSource::IsVideo(aMediaDevice->mMediaSource)) {
-    return new MediaEngineRemoteVideoSource(aMediaDevice);
+    return MakeRefPtr<MediaEngineRemoteVideoSource>(aMediaDevice);
   }
   switch (aMediaDevice->mMediaSource) {
     case MediaSourceEnum::AudioCapture:
-      return new MediaEngineWebRTCAudioCaptureSource(aMediaDevice);
+      return MakeRefPtr<MediaEngineWebRTCAudioCaptureSource>(aMediaDevice);
     case MediaSourceEnum::Microphone:
-      return new MediaEngineWebRTCMicrophoneSource(aMediaDevice);
+      return MakeRefPtr<MediaEngineWebRTCMicrophoneSource>(aMediaDevice);
     default:
       MOZ_CRASH("Unsupported source type");
       return nullptr;

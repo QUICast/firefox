@@ -17,6 +17,10 @@ const { IPPProxyManager, IPPProxyStates } = ChromeUtils.importESModule(
   "moz-src:///toolkit/components/ipprotection/IPPProxyManager.sys.mjs"
 );
 
+const { IPPExceptionsManager, IPPPrincipalRules } = ChromeUtils.importESModule(
+  "moz-src:///toolkit/components/ipprotection/IPPExceptionsManager.sys.mjs"
+);
+
 const { IPProtectionAlertManager } = ChromeUtils.importESModule(
   "moz-src:///browser/components/ipprotection/IPProtectionAlertManager.sys.mjs"
 );
@@ -367,6 +371,7 @@ add_setup(async function setupVPN() {
     Services.prefs.clearUserPref(
       "browser.ipProtection.locationButtonBadgeDismissed"
     );
+    Services.perms.removeByType("ipp-vpn");
   });
 });
 
@@ -406,17 +411,9 @@ function setupService({
   proxyPass,
   usageInfo,
 } = DEFAULT_SERVICE_STATUS) {
-  if (typeof isReady != "undefined") {
-    if (isReady) {
-      IPPDummyAuthProvider.simulateSignIn(true);
-      IPPDummyAuthProvider.setEntitlement(
-        createTestEntitlement({ subscribed: !!hasUpgraded })
-      );
-    } else {
-      IPPDummyAuthProvider.simulateSignIn(false);
-    }
-  }
-
+  // Seed the provider's responses before triggering sign-in, so that the
+  // transition into READY (which schedules a usage refresh) reads the seeded
+  // usage instead of a stale default.
   if (typeof canEnroll != "undefined") {
     IPPDummyAuthProvider.setEnrollResponse({
       isEnrolledAndEntitled: canEnroll,
@@ -430,6 +427,17 @@ function setupService({
 
   if (typeof usageInfo != "undefined") {
     IPPDummyAuthProvider.setProxyUsage(usageInfo);
+  }
+
+  if (typeof isReady != "undefined") {
+    if (isReady) {
+      IPPDummyAuthProvider.simulateSignIn(true);
+      IPPDummyAuthProvider.setEntitlement(
+        createTestEntitlement({ subscribed: !!hasUpgraded })
+      );
+    } else {
+      IPPDummyAuthProvider.simulateSignIn(false);
+    }
   }
 }
 /* exported setupService */

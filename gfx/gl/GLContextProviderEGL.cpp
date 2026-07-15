@@ -29,18 +29,14 @@
 #  ifdef MOZ_WIDGET_ANDROID
 #    include <android/native_window.h>
 #    include <android/native_window_jni.h>
+
 #    include "mozilla/jni/Utils.h"
 #    include "mozilla/widget/AndroidCompositorWidget.h"
 #  endif
 
-#  define GLES2_LIB "libGLESv2.so"
-#  define GLES2_LIB2 "libGLESv2.so.2"
-
 #elif defined(XP_WIN)
 #  include "mozilla/widget/WinCompositorWidget.h"
 #  include "nsIFile.h"
-
-#  define GLES2_LIB "libGLESv2.dll"
 
 #  ifndef WIN32_LEAN_AND_MEAN
 #    define WIN32_LEAN_AND_MEAN 1
@@ -51,33 +47,34 @@
 #  error "Platform not recognized"
 #endif
 
-#include "gfxCrashReporterUtils.h"
-#include "gfxFailure.h"
-#include "gfxPlatform.h"
-#include "gfxUtils.h"
 #include "GLBlitHelper.h"
 #include "GLContextEGL.h"
 #include "GLContextProvider.h"
 #include "GLLibraryEGL.h"
 #include "GLLibraryLoader.h"
+#include "ScopedGLHelpers.h"
+#include "gfxCrashReporterUtils.h"
+#include "gfxFailure.h"
+#include "gfxPlatform.h"
+#include "gfxUtils.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/Services.h"
 #include "mozilla/StaticPrefs_gfx.h"
-#include "mozilla/gfx/gfxVars.h"
 #include "mozilla/gfx/BuildConstants.h"
 #include "mozilla/gfx/Logging.h"
+#include "mozilla/gfx/gfxVars.h"
 #include "mozilla/layers/CompositorOptions.h"
 #include "mozilla/widget/CompositorWidget.h"
 #include "nsDebug.h"
 #include "nsIWidget.h"
 #include "nsThreadUtils.h"
-#include "ScopedGLHelpers.h"
 
 #if defined(MOZ_WIDGET_GTK)
 #  include "mozilla/widget/GtkCompositorWidget.h"
 #  if defined(MOZ_WAYLAND)
 #    include <gdk/gdkwayland.h>
 #    include <wayland-egl.h>
+
 #    include "mozilla/WidgetUtilsGtk.h"
 #    include "mozilla/widget/nsWaylandDisplay.h"
 #  endif
@@ -567,6 +564,49 @@ bool GLContextEGL::HasExtBufferAge() const {
 
 bool GLContextEGL::HasKhrPartialUpdate() const {
   return mEgl->IsExtensionSupported(EGLExtension::KHR_partial_update);
+}
+
+EGLint GLContextEGL::GetBindToTextureTargetANGLE() const {
+  if (mBindToTextureTargetANGLE) {
+    return *mBindToTextureTargetANGLE;
+  }
+
+  if (!mEgl->IsExtensionSupported(
+          mozilla::gl::EGLExtension::ANGLE_iosurface_client_buffer)) {
+    gfxCriticalErrorOnce()
+        << "Extension EGL_ANGLE_iosurface_client_buffer not supported";
+    mBindToTextureTargetANGLE.emplace(LOCAL_EGL_TEXTURE_2D);
+    return LOCAL_EGL_TEXTURE_2D;
+  }
+
+  EGLint eglTarget;
+  if (!mEgl->fGetConfigAttrib(
+          mSurfaceConfig, LOCAL_EGL_BIND_TO_TEXTURE_TARGET_ANGLE, &eglTarget)) {
+    const EGLint err = mEgl->mLib->fGetError();
+    gfxCriticalErrorOnce()
+        << "Querying EGL_BIND_TO_TEXTURE_TARGET_ANGLE failed: "
+        << gfx::hexa(err);
+    mBindToTextureTargetANGLE.emplace(LOCAL_EGL_TEXTURE_2D);
+    return LOCAL_EGL_TEXTURE_2D;
+  }
+  mBindToTextureTargetANGLE.emplace(eglTarget);
+  return eglTarget;
+}
+
+GLenum GLContextEGL::GetPreferredMacIOSurfaceTextureTarget() const {
+  const auto eglTarget = GetBindToTextureTargetANGLE();
+  switch (eglTarget) {
+    case LOCAL_EGL_TEXTURE_2D:
+      return LOCAL_GL_TEXTURE_2D;
+      break;
+    case LOCAL_EGL_TEXTURE_RECTANGLE_ANGLE:
+      return LOCAL_GL_TEXTURE_RECTANGLE_ARB;
+      break;
+    default:
+      gfxCriticalErrorOnce() << "Unexpected EGL_BIND_TO_TEXTURE_TARGET_ANGLE: "
+                             << gfx::hexa(eglTarget);
+      return LOCAL_GL_TEXTURE_2D;
+  }
 }
 
 GLint GLContextEGL::GetBufferAge() const {

@@ -16,37 +16,38 @@
 #include "ScaledFontBase.h"
 
 #if defined(WIN32)
-#  include "ScaledFontWin.h"
 #  include "NativeFontResourceGDI.h"
+#  include "ScaledFontWin.h"
 #  include "UnscaledFontGDI.h"
 #endif
 
 #ifdef XP_DARWIN
-#  include "ScaledFontMac.h"
 #  include "NativeFontResourceMac.h"
+#  include "ScaledFontMac.h"
 #  include "UnscaledFontMac.h"
 #endif
 
 #ifdef MOZ_WIDGET_GTK
-#  include "ScaledFontFontconfig.h"
 #  include "NativeFontResourceFreeType.h"
+#  include "ScaledFontFontconfig.h"
 #  include "UnscaledFontFreeType.h"
 #endif
 
 #ifdef MOZ_WIDGET_ANDROID
-#  include "ScaledFontFreeType.h"
 #  include "NativeFontResourceFreeType.h"
+#  include "ScaledFontFreeType.h"
 #  include "UnscaledFontFreeType.h"
 #endif
 
 #ifdef WIN32
-#  include "ScaledFontDWrite.h"
-#  include "NativeFontResourceDWrite.h"
-#  include "UnscaledFontDWrite.h"
 #  include <d3d10_1.h>
 #  include <stdlib.h>
+
 #  include "HelpersWin.h"
 #  include "ImageContainer.h"
+#  include "NativeFontResourceDWrite.h"
+#  include "ScaledFontDWrite.h"
+#  include "UnscaledFontDWrite.h"
 #  include "mozilla/layers/LayersSurfaces.h"
 #  include "mozilla/layers/TextureD3D11.h"
 #  include "mozilla/layers/VideoProcessorD3D11.h"
@@ -56,9 +57,7 @@
 #include "DrawTargetOffset.h"
 #include "DrawTargetRecording.h"
 #include "PathRecording.h"
-
 #include "SourceSurfaceRawData.h"
-
 #include "mozilla/CheckedInt.h"
 
 #ifdef MOZ_ENABLE_FREETYPE
@@ -358,7 +357,7 @@ already_AddRefed<DrawTarget> Factory::CreateDrawTargetForData(
 
 already_AddRefed<DrawTarget> Factory::CreateOffsetDrawTarget(
     DrawTarget* aDrawTarget, IntPoint aTileOrigin) {
-  RefPtr<DrawTargetOffset> dt = new DrawTargetOffset();
+  RefPtr dt = MakeRefPtr<DrawTargetOffset>();
 
   if (!dt->Init(aDrawTarget, aTileOrigin)) {
     return nullptr;
@@ -723,7 +722,7 @@ already_AddRefed<ScaledFont> Factory::CreateScaledFontForGDIFont(
 
 already_AddRefed<DrawTarget> Factory::CreateDrawTargetWithSkCanvas(
     SkCanvas* aCanvas) {
-  RefPtr<DrawTargetSkia> newTarget = new DrawTargetSkia();
+  RefPtr newTarget = MakeRefPtr<DrawTargetSkia>();
   if (!newTarget->Init(aCanvas)) {
     return nullptr;
   }
@@ -741,7 +740,7 @@ already_AddRefed<DrawTarget> Factory::CreateDrawTargetForCairoSurface(
   RefPtr<DrawTarget> retVal;
 
 #ifdef USE_CAIRO
-  RefPtr<DrawTargetCairo> newTarget = new DrawTargetCairo();
+  RefPtr newTarget = MakeRefPtr<DrawTargetCairo>();
 
   if (newTarget->Init(aSurface, aSize, aFormat)) {
     retVal = newTarget;
@@ -781,7 +780,7 @@ already_AddRefed<DataSourceSurface> Factory::CreateWrappingDataSourceSurface(
 
   MOZ_ASSERT(aData);
 
-  RefPtr<SourceSurfaceRawData> newSurf = new SourceSurfaceRawData();
+  RefPtr newSurf = MakeRefPtr<SourceSurfaceRawData>();
   newSurf->InitWrappingData(aData, aSize, aStride, aFormat, aDeallocator,
                             aClosure);
 
@@ -800,8 +799,7 @@ already_AddRefed<DataSourceSurface> Factory::CreateDataSourceSurface(
   bool clearSurface = aZero || aFormat == SurfaceFormat::B8G8R8X8;
   uint8_t clearValue = aFormat == SurfaceFormat::B8G8R8X8 ? 0xFF : 0;
 
-  RefPtr<SourceSurfaceAlignedRawData> newSurf =
-      new SourceSurfaceAlignedRawData();
+  RefPtr newSurf = MakeRefPtr<SourceSurfaceAlignedRawData>();
   if (newSurf->Init(aSize, aFormat, clearSurface, clearValue)) {
     return newSurf.forget();
   }
@@ -824,8 +822,7 @@ already_AddRefed<DataSourceSurface> Factory::CreateDataSourceSurfaceWithStride(
   bool clearSurface = aZero || aFormat == SurfaceFormat::B8G8R8X8;
   uint8_t clearValue = aFormat == SurfaceFormat::B8G8R8X8 ? 0xFF : 0;
 
-  RefPtr<SourceSurfaceAlignedRawData> newSurf =
-      new SourceSurfaceAlignedRawData();
+  RefPtr newSurf = MakeRefPtr<SourceSurfaceAlignedRawData>();
   if (newSurf->Init(aSize, aFormat, clearSurface, clearValue, aStride)) {
     return newSurf.forget();
   }

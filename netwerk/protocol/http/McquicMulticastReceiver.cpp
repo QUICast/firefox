@@ -2,12 +2,11 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "HttpLog.h"
+#include "McquicMulticastReceiver.h"
 
 #include <inttypes.h>
 
-#include "McquicMulticastReceiver.h"
-
+#include "HttpLog.h"
 #include "mozilla/StaticPrefs_network.h"
 #include "nsSocketTransportService2.h"
 

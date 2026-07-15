@@ -14,8 +14,8 @@ add_task(async function () {
 
     let dialogPromise = promiseLoadSubDialog(CONTAINERS_URL);
 
-    let addButton = doc.getElementById("containersAdd");
-    addButton.doCommand();
+    let addButton = doc.getElementById("containers-add-button");
+    addButton.click();
 
     let dialog = await dialogPromise;
 
@@ -33,7 +33,7 @@ add_task(async function () {
 
   let doc = await openDialog();
 
-  let name = doc.getElementById("name");
+  let name = doc.querySelector("moz-input-text[name=name]");
   let btnApplyChanges = doc.querySelector("dialog").getButton("accept");
 
   Assert.equal(name.value, "", "The name textbox should initlally be empty");
@@ -45,7 +45,10 @@ add_task(async function () {
   function setName(value) {
     name.value = value;
 
-    let event = new doc.defaultView.InputEvent("input", { data: value });
+    let event = new doc.defaultView.InputEvent("input", {
+      data: value,
+      bubbles: true,
+    });
     SpecialPowers.dispatchEvent(doc.defaultView, name, event);
   }
 

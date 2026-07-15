@@ -12,8 +12,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
-import mozilla.appservices.places.BookmarkRoot
-import mozilla.components.browser.state.ext.getUrl
+import mozilla.components.browser.state.state.SessionState
 import mozilla.components.browser.state.state.TabSessionState
 import mozilla.components.concept.engine.webextension.InstallationMethod
 import mozilla.components.concept.storage.BookmarksStorage
@@ -36,17 +35,18 @@ import org.mozilla.fenix.components.appstate.AppAction
 import org.mozilla.fenix.components.appstate.AppAction.BookmarkAction
 import org.mozilla.fenix.components.appstate.AppAction.FindInPageAction
 import org.mozilla.fenix.components.appstate.AppAction.ReaderViewAction
+import org.mozilla.fenix.components.appstate.AppAction.ShortcutAction
 import org.mozilla.fenix.components.bookmarks.BookmarksUseCase
 import org.mozilla.fenix.components.menu.store.BookmarkState
 import org.mozilla.fenix.components.menu.store.MenuAction
 import org.mozilla.fenix.components.menu.store.MenuState
 import org.mozilla.fenix.components.menu.store.SummarizationMenuState
 import org.mozilla.fenix.components.metrics.MetricsUtils
+import org.mozilla.fenix.home.topsites.AddShortcutEntryPoint
+import org.mozilla.fenix.home.topsites.AddShortcutSource
 import org.mozilla.fenix.summarization.eligibility.SummarizationEligibilityChecker
 import org.mozilla.fenix.summarization.onboarding.SummarizationFeatureDiscoveryConfiguration
 import org.mozilla.fenix.summarization.onboarding.SummarizeDiscoveryEvent
-import org.mozilla.fenix.tabstray.ext.isNormalTab
-import org.mozilla.fenix.utils.LastSavedFolderCache
 import org.mozilla.fenix.utils.Settings
 
 /**
@@ -82,7 +82,6 @@ import org.mozilla.fenix.utils.Settings
  * @param onDismiss Callback invoked to dismiss the menu dialog.
  * @param onSendPendingIntentWithUrl Callback invoked to send the pending intent of a custom menu item
  * with the url of the custom tab.
- * @param lastSavedFolderCache used to fetch the guid of the folder to save a bookmark in.
  * @param mainDispatcher The [CoroutineDispatcher] for performing UI updates.
  */
 @Suppress("LongParameterList", "CyclomaticComplexMethod")
@@ -105,7 +104,6 @@ class MenuDialogMiddleware(
     private val onDeleteAndQuit: () -> Unit,
     private val onDismiss: suspend () -> Unit,
     private val onSendPendingIntentWithUrl: (intent: PendingIntent, url: String?) -> Unit,
-    private val lastSavedFolderCache: LastSavedFolderCache,
     private val mainDispatcher: CoroutineDispatcher = Dispatchers.Main,
 ) : Middleware<MenuState, MenuAction> {
 
@@ -133,14 +131,13 @@ class MenuDialogMiddleware(
             is MenuAction.InstallAddonSuccess -> installAddonSuccess()
             is MenuAction.CustomMenuItemAction -> customMenuItemAction(action.intent, action.url)
             is MenuAction.CustomizeReaderView -> customizeReaderView()
-            is MenuAction.OnCFRShown -> onCFRShown()
             is MenuAction.OnSummarizationMenuExposed -> cacheMenuExposure(store)
             is MenuAction.OnMoreMenuClicked -> cacheMoreMenuClick(store)
             is MenuAction.MoveToNonPrivateTab -> migratePrivateTab(store)
             is MenuAction.RequestDesktopSite,
             is MenuAction.RequestMobileSite,
             -> requestSiteMode(
-                tabId = currentState.customTabSessionId ?: currentState.browserMenuState?.selectedTab?.id,
+                tabId = currentState.browserMenuState?.selectedTab?.id,
                 shouldRequestDesktopMode = !currentState.isDesktopMode,
             )
 
@@ -160,18 +157,17 @@ class MenuDialogMiddleware(
     }
 
     private suspend fun setupPageSummarizationState(store: Store<MenuState, MenuAction>) {
-        val isNormalTab = store.state.browserMenuState?.selectedTab?.isNormalTab() ?: false
-        val isLoading = store.state.browserMenuState?.isLoading ?: false
+        val selectedTab = store.state.browserMenuState?.selectedTab
+        val isNormalTab = selectedTab?.isNormalTab() ?: false
+        val isSummarizationEligible = selectedTab.checkSummarizationEligibility()
+        val showMenuItem = summarizeMenuSettings.showMenuItem
 
         val summarizationState = SummarizationMenuState.Default.copy(
-            visible = summarizeMenuSettings.showMenuItem,
+            visible = showMenuItem,
             highlighted = summarizeMenuSettings.shouldHighlightMenuItem && isNormalTab,
             overflowMenuHighlighted = summarizeMenuSettings.shouldHighlightOverflowMenuItem && isNormalTab,
             showNewFeatureBadge = true,
-            enabled = summarizeMenuSettings.showMenuItem &&
-                    isNormalTab &&
-                    !isLoading &&
-                    store.state.browserMenuState?.selectedTab.checkSummarizationEligibility(),
+            enabled = showMenuItem && isNormalTab && isSummarizationEligible,
         )
         store.dispatch(
             MenuAction.InitializeSummarizationMenuState(summarizationState),
@@ -183,7 +179,7 @@ class MenuDialogMiddleware(
         }
     }
 
-    private suspend fun TabSessionState?.checkSummarizationEligibility(): Boolean =
+    private suspend fun SessionState?.checkSummarizationEligibility(): Boolean =
         this@checkSummarizationEligibility?.engineState?.engineSession?.let { session ->
             summarizationEligibilityChecker.checkLanguage(session).getOrDefault(false)
         } ?: false
@@ -210,7 +206,9 @@ class MenuDialogMiddleware(
     private suspend fun setupPinnedState(
         store: Store<MenuState, MenuAction>,
     ) {
-        val url = store.state.browserMenuState?.selectedTab?.content?.url ?: return
+        val selectedTab = store.state.browserMenuState?.selectedTab
+        if (selectedTab.isCustomTab()) return
+        val url = selectedTab?.content?.url ?: return
         pinnedSiteStorage.getPinnedSites()
             .firstOrNull { it.url == url } ?: return
 
@@ -260,38 +258,29 @@ class MenuDialogMiddleware(
         }
 
         val selectedTab = browserMenuState.selectedTab
-        val url = selectedTab.getUrl() ?: return@launch
+        val url = selectedTab.getTabUrl() ?: return@launch
 
-        // get the last saved folder id
-        val targetParentFolderId = lastSavedFolderCache.getGuid() ?: BookmarkRoot.Mobile.id
-
-        // get the corresponding bookmark and fallback to mobile root bookmark node
-        // this is necessary because it's possible that the last saved folder no longer exists (
-        // e.g. if the folder is removed through sync)
-        val parentNode = bookmarksStorage.getBookmark(targetParentFolderId).getOrNull()
-            ?: bookmarksStorage.getBookmark(BookmarkRoot.Mobile.id).getOrNull()
-
-        val parentGuid = parentNode?.guid ?: BookmarkRoot.Mobile.id
-
-        if (targetParentFolderId != parentGuid) {
-            lastSavedFolderCache.setGuid(null)
-        }
-
-        val guidToEdit = addBookmarkUseCase(
+        val result = addBookmarkUseCase(
             url = url,
             title = selectedTab.content.title,
-            parentGuid = parentGuid,
         )
 
         appStore.dispatch(
             BookmarkAction.BookmarkAdded(
-                guidToEdit = guidToEdit,
-                parentNode = parentNode,
+                guidToEdit = result.guidToEdit,
+                parentNode = result.parentNode,
                 source = MetricsUtils.BookmarkAction.Source.MENU_DIALOG,
             ),
         )
 
         onDismiss()
+    }
+
+    private fun SessionState.isNormalTab(): Boolean {
+        return when (this) {
+            is TabSessionState -> !content.private
+            else -> false
+        }
     }
 
     private fun addShortcut(
@@ -322,7 +311,7 @@ class MenuDialogMiddleware(
         }
 
         val selectedTab = browserMenuState.selectedTab
-        val url = selectedTab.getUrl() ?: return@launch
+        val url = selectedTab.getTabUrl() ?: return@launch
 
         addPinnedSiteUseCase(
             title = selectedTab.content.title,
@@ -330,7 +319,10 @@ class MenuDialogMiddleware(
         )
 
         appStore.dispatch(
-            AppAction.ShortcutAction.ShortcutAdded,
+            ShortcutAction.ShortcutAdded(
+                source = AddShortcutSource.MANUAL,
+                entryPoint = AddShortcutEntryPoint.PAGE_MENU,
+            ),
         )
 
         onDismiss()
@@ -346,7 +338,7 @@ class MenuDialogMiddleware(
         }
 
         val selectedTab = browserMenuState.selectedTab
-        val url = selectedTab.getUrl() ?: return@launch
+        val url = selectedTab.getTabUrl() ?: return@launch
         val topSite = pinnedSiteStorage.getPinnedSites()
             .firstOrNull { it.url == url } ?: return@launch
 
@@ -445,11 +437,6 @@ class MenuDialogMiddleware(
     ) = scope.launch {
         onSendPendingIntentWithUrl(intent, url)
         onDismiss()
-    }
-
-    private fun onCFRShown() = scope.launch {
-        settings.shouldShowMenuCFR = false
-        settings.lastCfrShownTimeInMillis = System.currentTimeMillis()
     }
 
     private fun cacheMenuExposure(store: Store<MenuState, MenuAction>) = scope.launch {

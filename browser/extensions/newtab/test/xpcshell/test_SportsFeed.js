@@ -429,17 +429,19 @@ add_task(async function test_fetchSportsData_dispatches_teams_and_matches() {
 });
 
 add_task(
-  async function test_fetchSportsData_filters_live_to_status_type_live() {
+  async function test_fetchSportsData_filters_live_to_in_progress_statuses() {
     // The /live endpoint is meant to be pre-filtered by the backend, but the
-    // feed re-filters on `status_type === "live"` as a defensive guard so the
-    // Now tab only ever surfaces actually-live matches.
+    // feed re-filters against the in-progress allowlist (live/halftime/extra
+    // time) as a defensive guard so the Now tab only ever surfaces actually-
+    // live matches.
     const feed = makeFeed();
     const mockLive = {
       matches: [
         { id: "live1", status_type: "live", query: "team1 vs team2" },
-        { id: "scheduled1", status_type: "scheduled", query: "team3 vs team4" },
-        { id: "ended1", status_type: "ended", query: "team5 vs team6" },
-        { id: "live2", status_type: "live", query: "team7 vs team8" },
+        { id: "halftime1", status_type: "Halftime", query: "team3 vs team4" },
+        { id: "extra1", status_type: "extra time", query: "team5 vs team6" },
+        { id: "scheduled1", status_type: "scheduled", query: "team7 vs team8" },
+        { id: "ended1", status_type: "ended", query: "team9 vs team10" },
       ],
     };
     sinon
@@ -464,8 +466,8 @@ add_task(
     const [dispatchedAction] = feed.store.dispatch.firstCall.args;
     Assert.deepEqual(
       dispatchedAction.data.live.map(m => m.id),
-      ["live1", "live2"],
-      "only matches with status_type === 'live' survive the filter"
+      ["live1", "halftime1", "extra1"],
+      "only in-progress matches (live/halftime/extra time, case-insensitive) survive the filter"
     );
   }
 );
@@ -1606,6 +1608,7 @@ add_task(
     const feed = makeLiveFeed({ visible: false });
     feed.pollingState = "LIVE";
     feed.pollTimer = 42; // a poll is already scheduled (another tab)
+    feed.lastFetchAt = Date.now(); // and data is fresh from that polling cycle
     stubTimers(feed);
     const fetchNowStub = sinon.stub(feed, "fetchNow");
 
@@ -1628,6 +1631,7 @@ add_task(async function test_LIVE_VISIBLE_rapid_tabs_does_not_multifetch() {
   const feed = makeLiveFeed({ visible: false });
   feed.pollingState = "LIVE";
   feed.pollTimer = 7;
+  feed.lastFetchAt = Date.now(); // recent data from the active polling cycle
   stubTimers(feed);
   const fetchNowStub = sinon.stub(feed, "fetchNow");
 
@@ -1641,6 +1645,169 @@ add_task(async function test_LIVE_VISIBLE_rapid_tabs_does_not_multifetch() {
     "no fetchNow fired for any of the three rapid new tabs"
   );
 });
+
+// Verify lastFetchAt is updated after a successful tick in every
+// polling state. The visibility-resume gate uses lastFetchAt to decide
+// freshness, so it must stay current in IDLE and MATCH_DAY too, not
+// only LIVE (where lastLiveUpdated is set instead).
+add_task(async function test_tick_updates_lastFetchAt_on_success() {
+  for (const state of ["IDLE", "MATCH_DAY", "LIVE"]) {
+    const feed = makeLiveFeed();
+    feed.pollingState = state;
+    stubTimers(feed);
+    sinon.stub(feed, "fetchAndDispatch").resolves(true);
+    feed.lastFetchAt = null;
+    feed.lastLiveUpdated = null;
+
+    await feed.tick();
+
+    Assert.equal(
+      typeof feed.lastFetchAt,
+      "number",
+      `lastFetchAt populated after successful tick in ${state}`
+    );
+  }
+});
+
+// Pair with the previous test: verify lastLiveUpdated is left alone
+// when a tick runs outside the LIVE state. We exercise MATCH_DAY here;
+// the LIVE-branch case is covered by
+// test_fetchAndDispatch_live_dispatches_and_resets_retry.
+add_task(async function test_tick_leaves_lastLiveUpdated_alone_outside_LIVE() {
+  const feed = makeLiveFeed();
+  feed.pollingState = "MATCH_DAY";
+  stubTimers(feed);
+  sinon.stub(feed, "fetchAndDispatch").resolves(true);
+  feed.lastFetchAt = null;
+  feed.lastLiveUpdated = null;
+
+  await feed.tick();
+
+  Assert.equal(
+    feed.lastLiveUpdated,
+    null,
+    "lastLiveUpdated stays null outside the LIVE branch (asymmetry pin)"
+  );
+});
+
+// Verify the threshold formula: poll interval / 3, but never less than
+// MIN_POLL_INTERVAL_MS. Defaults give 1 min LIVE, 10 min MATCH_DAY, 2 h IDLE.
+add_task(
+  async function test_resolveFreshnessThresholdMs_scales_with_polling_state() {
+    const feed = makeLiveFeed();
+
+    feed.pollingState = "LIVE";
+    Assert.equal(
+      feed.resolveFreshnessThresholdMs(),
+      60000,
+      "LIVE threshold is 1 min (3 min / 3)"
+    );
+
+    feed.pollingState = "MATCH_DAY";
+    Assert.equal(
+      feed.resolveFreshnessThresholdMs(),
+      600000,
+      "MATCH_DAY threshold is 10 min (30 min / 3)"
+    );
+
+    feed.pollingState = "IDLE";
+    Assert.equal(
+      feed.resolveFreshnessThresholdMs(),
+      7200000,
+      "IDLE threshold is 2 h (6 h / 3)"
+    );
+
+    // The threshold should never drop below MIN_POLL_INTERVAL_MS (10 s),
+    // even if the polling pref is set to something tiny.
+    feed.pollingState = "LIVE";
+    feed.store.state.Prefs.values[PREF_POLL_LIVE_MS] = 100;
+    Assert.equal(
+      feed.resolveFreshnessThresholdMs(),
+      10000,
+      "floor at MIN_POLL_INTERVAL_MS when interval is pathologically small"
+    );
+  }
+);
+
+// Bug reproduction: returning to a New Tab after a kickoff happened
+// while the tab was hidden. lastFetchAt is older than the MATCH_DAY
+// threshold, so the gate must fire fetchNow even though pollTimer is
+// still pending.
+add_task(async function test_LIVE_VISIBLE_resume_after_stale_data_fetches() {
+  const feed = makeLiveFeed({ visible: false });
+  feed.pollingState = "MATCH_DAY";
+  feed.pollTimer = 42;
+  feed.lastFetchAt = Date.now() - 15 * 60 * 1000; // 15 min ago, past the 10 min MATCH_DAY threshold
+  stubTimers(feed);
+  const fetchNowStub = sinon.stub(feed, "fetchNow");
+
+  await feed.onAction(liveVisibleAction("port-resume"));
+
+  Assert.ok(
+    fetchNowStub.calledOnce,
+    "stale data on resume triggers fetchNow even with a pending pollTimer"
+  );
+});
+
+// When the widget becomes visible again (e.g. after a brief scroll
+// or tab switch) while data is still fresh, we should not fetch —
+// the scheduled poll will refresh it.
+add_task(async function test_LIVE_VISIBLE_resume_with_fresh_data_skips_fetch() {
+  const feed = makeLiveFeed({ visible: false });
+  feed.pollingState = "LIVE";
+  feed.pollTimer = 42;
+  feed.lastFetchAt = Date.now() - 10 * 1000; // 10 s ago, well inside the 60 s LIVE threshold
+  stubTimers(feed);
+  const fetchNowStub = sinon.stub(feed, "fetchNow");
+
+  await feed.onAction(liveVisibleAction("port-resume"));
+
+  Assert.ok(
+    fetchNowStub.notCalled,
+    "fresh data on resume does not trigger fetchNow; pending timer covers it"
+  );
+});
+
+// First-ever visibility event after init: lastFetchAt is null, the gate
+// must fire fetchNow regardless of pollTimer state. This is what bootstraps
+// the polling loop from the visibility path (see init() comment).
+add_task(async function test_LIVE_VISIBLE_null_lastFetchAt_always_fetches() {
+  const feed = makeLiveFeed({ visible: false });
+  feed.pollingState = "LIVE";
+  feed.pollTimer = 42;
+  feed.lastFetchAt = null;
+  stubTimers(feed);
+  const fetchNowStub = sinon.stub(feed, "fetchNow");
+
+  await feed.onAction(liveVisibleAction("port-first"));
+
+  Assert.ok(
+    fetchNowStub.calledOnce,
+    "null lastFetchAt forces fetchNow regardless of pollTimer"
+  );
+});
+
+// Verify the bootstrap case: when a previous tick exited without
+// arming the next timer (e.g. liveEnabled was toggled off and then
+// on while the tab was hidden), pollTimer is null but lastFetchAt may
+// still be fresh. The gate must fetch anyway to restart the loop.
+add_task(
+  async function test_LIVE_VISIBLE_bootstrap_with_fresh_lastFetchAt_but_no_timer() {
+    const feed = makeLiveFeed({ visible: false });
+    feed.pollingState = "LIVE";
+    feed.pollTimer = null;
+    feed.lastFetchAt = Date.now() - 10 * 1000; // 10 s ago, well inside LIVE threshold
+    stubTimers(feed);
+    const fetchNowStub = sinon.stub(feed, "fetchNow");
+
+    await feed.onAction(liveVisibleAction("port-restart"));
+
+    Assert.ok(
+      fetchNowStub.calledOnce,
+      "fresh data with no scheduled poll still fetches to restart the loop"
+    );
+  }
+);
 
 add_task(async function test_stopLive_clears_timers_and_resets() {
   const feed = makeLiveFeed();
@@ -2141,6 +2308,54 @@ add_task(async function test_persistSportsData_called_after_live_update() {
   Assert.equal(setStub.firstCall.args[0], "sportsData");
 });
 
+// persistSportsData must NOT overwrite cached matches with the current
+// redux matches, because load-more appends are kept in redux only — they
+// should not be persisted across sessions. The cached `matches` field is
+// the source of truth for the backend's fresh ±21 day window.
+add_task(
+  async function test_persistSportsData_preserves_cached_matches_over_redux() {
+    const feed = makeFeed();
+    const cachedMatches = {
+      previous: [{ global_event_id: 1 }],
+      current: [],
+      next: [{ global_event_id: 2 }],
+    };
+    const cachedTeams = [{ key: "ENG" }];
+    // Redux has appended matches via load-more that are NOT in the cache.
+    const reduxNextWithAppends = [
+      { global_event_id: 2 },
+      { global_event_id: 999, _appended: true },
+    ];
+    feed.store.state.SportsWidget = {
+      data: {
+        teams: cachedTeams,
+        matches: { previous: [], current: [], next: reduxNextWithAppends },
+        live: [{ global_event_id: 7, home_score: 3 }],
+      },
+    };
+    sinon.stub(feed.cache, "get").resolves({
+      sportsData: { teams: cachedTeams, matches: cachedMatches, live: [] },
+    });
+    const setStub = sinon.stub(feed.cache, "set").resolves();
+
+    await feed.persistSportsData();
+
+    Assert.ok(setStub.calledOnce, "cache.set called once");
+    const [key, written] = setStub.firstCall.args;
+    Assert.equal(key, "sportsData");
+    Assert.deepEqual(
+      written.matches,
+      cachedMatches,
+      "cached matches are preserved; redux's appended matches are dropped"
+    );
+    Assert.deepEqual(
+      written.live,
+      [{ global_event_id: 7, home_score: 3 }],
+      "live snapshot is updated from redux as before"
+    );
+  }
+);
+
 // #10: reentrancy guard — two back-to-back tick() calls (e.g. a poll timer
 // firing just as a WIDGETS_SPORTS_LIVE_VISIBLE resume lands) must not stack
 // parallel tick()s issuing duplicate /wcs/live requests.
@@ -2353,6 +2568,7 @@ add_task(async function test_LIVE_VISIBLE_no_fetchNow_when_already_polling() {
   feed.visibleTabs = new Set(["port-already-visible"]);
   feed.pollingState = "LIVE";
   feed.pollTimer = 1; // a poll is already scheduled
+  feed.lastFetchAt = Date.now(); // and data is fresh from the active polling cycle
   stubTimers(feed);
   const fetchNowStub = sinon.stub(feed, "fetchNow");
 
@@ -2373,6 +2589,8 @@ add_task(async function test_LIVE_VISIBLE_skips_fetchNow_when_ticking() {
   feed.visibleTabs = new Set();
   feed.pollingState = "LIVE";
   feed.ticking = true;
+  // pollTimer/lastFetchAt left at defaults; the !ticking guard
+  // short-circuits before the bootstrap/stale check.
   stubTimers(feed);
   const fetchNowStub = sinon.stub(feed, "fetchNow");
 
@@ -2398,6 +2616,7 @@ add_task(
     feed.visibleTabs = new Set();
     feed.pollingState = "LIVE";
     feed.pollTimer = 42; // simulate armed poll timer
+    feed.lastFetchAt = Date.now(); // and data is still fresh
     stubTimers(feed);
     const fetchNowStub = sinon.stub(feed, "fetchNow");
 
@@ -2421,6 +2640,7 @@ add_task(
     feed.visibleTabs = new Set(["port-1"]);
     feed.pollingState = "LIVE";
     feed.pollTimer = 555; // a poll is scheduled mid-interval
+    feed.lastFetchAt = Date.now(); // data is still fresh within the interval
     const { clearTimeoutStub } = stubTimers(feed);
     const fetchNowStub = sinon.stub(feed, "fetchNow");
 
@@ -2448,6 +2668,8 @@ add_task(
     feed.visibleTabs = new Set();
     feed.pollingState = "LIVE";
     feed.retryTimer = 99; // simulate armed retry timer
+    // pollTimer/lastFetchAt left at defaults; the !retryTimer guard
+    // short-circuits before the bootstrap/stale check.
     stubTimers(feed);
     const fetchNowStub = sinon.stub(feed, "fetchNow");
 
@@ -2460,8 +2682,9 @@ add_task(
   }
 );
 
-// scheduleNext's setTimeout callback must null pollTimer so that a later
-// VISIBLE event can correctly detect that polling is no longer scheduled.
+// The setTimeout callback must clear pollTimer. Without this, when a
+// tab next becomes visible the check still sees a scheduled poll and
+// skips the fetch needed to restart polling.
 add_task(async function test_scheduleNext_callback_nulls_pollTimer() {
   const feed = makeLiveFeed();
   let firedCallback = null;
@@ -2766,3 +2989,623 @@ add_task(async function test_fetchSportsData_dispatches_matches_invalid_url() {
     "fetchError reports matches_invalid_url when the matches URL is unparseable"
   );
 });
+
+// --- Celebration bookkeeping -------------------------------------------------
+
+// Returns the celebrations object the feed wrote via setCelebrations (the
+// second arg to cache.set("celebrations", ...)).
+function lastCelebrationsSet(setStub) {
+  const call = setStub.getCalls().findLast(c => c.args[0] === "celebrations");
+  return call?.args[1];
+}
+
+add_task(async function test_recordEndedMatches_stamps_new_ids() {
+  const feed = makeFeed();
+  sinon.stub(feed.cache, "get").resolves({});
+  const setStub = sinon.stub(feed.cache, "set").resolves();
+
+  info("recordEndedMatches stamps each new id with the current time");
+  const before = Date.now();
+  await feed.recordEndedMatches(["m1", "m2"]);
+  const after = Date.now();
+
+  const written = lastCelebrationsSet(setStub);
+  Assert.deepEqual(
+    Object.keys(written.endedAt).sort(),
+    ["m1", "m2"],
+    "both new ids stamped"
+  );
+  for (const id of ["m1", "m2"]) {
+    Assert.greaterOrEqual(
+      written.endedAt[id],
+      before,
+      `${id} stamped >= before`
+    );
+    Assert.lessOrEqual(written.endedAt[id], after, `${id} stamped <= after`);
+  }
+  Assert.deepEqual(written.celebrated, [], "celebrated untouched");
+
+  const broadcast = feed.store.dispatch
+    .getCalls()
+    .find(c => c.args[0].type === actionTypes.WIDGETS_SPORTS_SET_CELEBRATIONS);
+  Assert.ok(broadcast, "broadcasts SET_CELEBRATIONS to content");
+});
+
+add_task(async function test_recordEndedMatches_skips_celebrated_and_dupes() {
+  const feed = makeFeed();
+  // A recent stamp so it survives the retention prune.
+  const existingStamp = Date.now();
+  sinon.stub(feed.cache, "get").resolves({
+    celebrations: { endedAt: { m1: existingStamp }, celebrated: ["m2"] },
+  });
+  const setStub = sinon.stub(feed.cache, "set").resolves();
+
+  info(
+    "recordEndedMatches keeps existing stamps, skips already-celebrated ids, stamps the rest"
+  );
+  await feed.recordEndedMatches(["m1", "m2", "m3"]);
+
+  const written = lastCelebrationsSet(setStub);
+  Assert.equal(
+    written.endedAt.m1,
+    existingStamp,
+    "existing m1 stamp preserved"
+  );
+  Assert.ok(!("m2" in written.endedAt), "celebrated m2 not stamped");
+  Assert.equal(typeof written.endedAt.m3, "number", "new m3 stamped");
+});
+
+add_task(async function test_recordEndedMatches_prunes_stale_entries() {
+  const feed = makeFeed();
+  // An ancient stamp (ts = 1) is well past the retention window.
+  sinon.stub(feed.cache, "get").resolves({
+    celebrations: { endedAt: { ancient: 1 }, celebrated: [] },
+  });
+  const setStub = sinon.stub(feed.cache, "set").resolves();
+
+  info("recordEndedMatches prunes entries older than the retention window");
+  await feed.recordEndedMatches(["m1"]);
+
+  const written = lastCelebrationsSet(setStub);
+  Assert.ok(!("ancient" in written.endedAt), "stale entry pruned");
+  Assert.equal(typeof written.endedAt.m1, "number", "new id stamped");
+});
+
+add_task(async function test_recordEndedMatches_retention_respects_window() {
+  const feed = makeFeed();
+  // A configured window longer than the default retention floor must not have
+  // its stamps pruned before the window expires.
+  feed.store.state.Prefs.values["widgets.sportsWidget.celebrations.windowMs"] =
+    14 * 24 * 60 * 60 * 1000;
+  const eightDaysAgo = Date.now() - 8 * 24 * 60 * 60 * 1000;
+  sinon.stub(feed.cache, "get").resolves({
+    celebrations: { endedAt: { recentish: eightDaysAgo }, celebrated: [] },
+  });
+  const setStub = sinon.stub(feed.cache, "set").resolves();
+
+  info("recordEndedMatches keeps stamps within a configured window past 7d");
+  await feed.recordEndedMatches(["m1"]);
+
+  const written = lastCelebrationsSet(setStub);
+  Assert.equal(
+    written.endedAt.recentish,
+    eightDaysAgo,
+    "entry within the configured window is retained"
+  );
+});
+
+add_task(async function test_resolveCelebrationWindowMs_precedence() {
+  const feed = makeFeed();
+  const WINDOW_PREF = "widgets.sportsWidget.celebrations.windowMs";
+
+  info("Falls back to the raw pref when no trainhopConfig override is set");
+  feed.store.state.Prefs.values.trainhopConfig = {};
+  feed.store.state.Prefs.values[WINDOW_PREF] = 5000;
+  Assert.equal(feed.resolveCelebrationWindowMs(), 5000);
+
+  info("Legacy trainhopConfig.sports.celebrationsWindowMs overrides the pref");
+  feed.store.state.Prefs.values.trainhopConfig = {
+    sports: { celebrationsWindowMs: 4000 },
+  };
+  Assert.equal(feed.resolveCelebrationWindowMs(), 4000);
+
+  info(
+    "Canonical trainhopConfig.widgets window overrides the legacy sports key"
+  );
+  feed.store.state.Prefs.values.trainhopConfig = {
+    sports: { celebrationsWindowMs: 4000 },
+    widgets: { sportsWidgetCelebrationsWindowMs: 3000 },
+  };
+  Assert.equal(feed.resolveCelebrationWindowMs(), 3000);
+
+  info("Dedicated trainhopConfig.sportsCelebrations namespace wins over all");
+  feed.store.state.Prefs.values.trainhopConfig = {
+    sports: { celebrationsWindowMs: 4000 },
+    widgets: { sportsWidgetCelebrationsWindowMs: 3000 },
+    sportsCelebrations: { windowMs: 2000 },
+  };
+  Assert.equal(feed.resolveCelebrationWindowMs(), 2000);
+});
+
+add_task(async function test_recordEndedMatches_noop_on_empty() {
+  const feed = makeFeed();
+  const setStub = sinon.stub(feed.cache, "set").resolves();
+
+  info("recordEndedMatches does nothing when given no ids");
+  await feed.recordEndedMatches([]);
+
+  Assert.ok(setStub.notCalled, "cache.set not called for an empty batch");
+});
+
+add_task(async function test_MARK_CELEBRATED_records_and_drops_endedAt() {
+  const feed = makeFeed();
+  sinon.stub(feed.cache, "get").resolves({
+    celebrations: { endedAt: { m1: 5, m2: 6 }, celebrated: [] },
+  });
+  const setStub = sinon.stub(feed.cache, "set").resolves();
+
+  info("MARK_CELEBRATED records the id and drops its pending endedAt stamp");
+  await feed.onAction({
+    type: actionTypes.WIDGETS_SPORTS_MARK_CELEBRATED,
+    data: "m1",
+  });
+
+  const written = lastCelebrationsSet(setStub);
+  Assert.deepEqual(written.endedAt, { m2: 6 }, "m1's endedAt stamp dropped");
+  Assert.deepEqual(written.celebrated, ["m1"], "m1 added to celebrated");
+});
+
+add_task(async function test_MARK_CELEBRATED_ignores_duplicates() {
+  const feed = makeFeed();
+  sinon.stub(feed.cache, "get").resolves({
+    celebrations: { endedAt: {}, celebrated: ["m1"] },
+  });
+  const setStub = sinon.stub(feed.cache, "set").resolves();
+
+  info("MARK_CELEBRATED is a no-op for an already-celebrated id");
+  await feed.onAction({
+    type: actionTypes.WIDGETS_SPORTS_MARK_CELEBRATED,
+    data: "m1",
+  });
+
+  Assert.ok(setStub.notCalled, "cache.set not called for a duplicate");
+});
+
+// =============================================================================
+// Manual live refresh (refresh button on the Now tab)
+// =============================================================================
+
+add_task(async function test_LIVE_REFRESH_calls_fetchNow_when_due() {
+  const feed = makeLiveFeed();
+  feed.pollingState = "LIVE";
+  // lastLiveUpdated far enough in the past that the manual cap has elapsed.
+  feed.lastLiveUpdated = Date.now() - 60000;
+  const fetchNowStub = sinon.stub(feed, "fetchNow");
+
+  await feed.onAction({ type: actionTypes.WIDGETS_SPORTS_LIVE_REFRESH });
+
+  Assert.ok(
+    fetchNowStub.calledOnce,
+    "fetchNow called when the manual refresh cap has elapsed"
+  );
+});
+
+add_task(async function test_LIVE_REFRESH_calls_fetchNow_when_never_fetched() {
+  const feed = makeLiveFeed();
+  feed.pollingState = "LIVE";
+  // No live fetch has happened yet — the cap is keyed off lastLiveUpdated, so
+  // a null timestamp must NOT block the very first manual refresh.
+  feed.lastLiveUpdated = null;
+  const fetchNowStub = sinon.stub(feed, "fetchNow");
+
+  await feed.onAction({ type: actionTypes.WIDGETS_SPORTS_LIVE_REFRESH });
+
+  Assert.ok(
+    fetchNowStub.calledOnce,
+    "fetchNow called when no prior live fetch has happened"
+  );
+});
+
+add_task(async function test_LIVE_REFRESH_throttled_within_15s() {
+  const feed = makeLiveFeed();
+  feed.pollingState = "LIVE";
+  // A live fetch landed 5 seconds ago — well under the 15s hard floor.
+  feed.lastLiveUpdated = Date.now() - 5000;
+  const fetchNowStub = sinon.stub(feed, "fetchNow");
+
+  await feed.onAction({ type: actionTypes.WIDGETS_SPORTS_LIVE_REFRESH });
+
+  Assert.ok(
+    fetchNowStub.notCalled,
+    "fetchNow suppressed when last live fetch was inside the 15s cap"
+  );
+});
+
+add_task(async function test_LIVE_REFRESH_skipped_when_live_disabled() {
+  const feed = makeLiveFeed({ liveEnabled: false });
+  feed.pollingState = "LIVE";
+  feed.lastLiveUpdated = null;
+  const fetchNowStub = sinon.stub(feed, "fetchNow");
+
+  await feed.onAction({ type: actionTypes.WIDGETS_SPORTS_LIVE_REFRESH });
+
+  Assert.ok(
+    fetchNowStub.notCalled,
+    "fetchNow skipped when live polling is disabled"
+  );
+});
+
+add_task(async function test_LIVE_REFRESH_skipped_when_not_in_LIVE_state() {
+  const feed = makeLiveFeed();
+  feed.pollingState = "IDLE";
+  feed.lastLiveUpdated = null;
+  const fetchNowStub = sinon.stub(feed, "fetchNow");
+
+  await feed.onAction({ type: actionTypes.WIDGETS_SPORTS_LIVE_REFRESH });
+
+  Assert.ok(
+    fetchNowStub.notCalled,
+    "fetchNow skipped outside the LIVE polling state"
+  );
+});
+
+add_task(async function test_LIVE_REFRESH_skipped_when_tick_in_flight() {
+  const feed = makeLiveFeed();
+  feed.pollingState = "LIVE";
+  feed.lastLiveUpdated = null;
+  feed.ticking = true;
+  const fetchNowStub = sinon.stub(feed, "fetchNow");
+
+  await feed.onAction({ type: actionTypes.WIDGETS_SPORTS_LIVE_REFRESH });
+
+  Assert.ok(
+    fetchNowStub.notCalled,
+    "fetchNow skipped while a tick is already in flight"
+  );
+});
+
+add_task(async function test_MARK_CELEBRATED_caps_celebrated_list() {
+  const feed = makeFeed();
+  // 100 already-celebrated ids (the cap). Adding one more must drop the oldest.
+  const existing = Array.from({ length: 100 }, (_, i) => `c${i}`);
+  sinon.stub(feed.cache, "get").resolves({
+    celebrations: { endedAt: {}, celebrated: existing },
+  });
+  const setStub = sinon.stub(feed.cache, "set").resolves();
+
+  info("MARK_CELEBRATED FIFO-trims the celebrated list to the cap");
+  await feed.onAction({
+    type: actionTypes.WIDGETS_SPORTS_MARK_CELEBRATED,
+    data: "newest",
+  });
+
+  const written = lastCelebrationsSet(setStub);
+  Assert.equal(written.celebrated.length, 100, "list stays capped at 100");
+  Assert.equal(written.celebrated[0], "c1", "oldest id (c0) dropped");
+  Assert.equal(
+    written.celebrated[99],
+    "newest",
+    "newest id appended at the end"
+  );
+});
+
+// --- fetchMoreMatches (Upcoming + Results) ---
+
+const ENDPOINT = "https://merino.services.mozilla.com/api/v1/wcs/matches";
+
+function makeLoadMoreFeed({
+  direction = "upcoming",
+  loadMore = {},
+  matchesEndpoint = ENDPOINT,
+} = {}) {
+  const feed = makeFeed();
+  feed.store.state.SportsWidget = {
+    loadMore: {
+      upcoming: { loading: false, exhausted: false, lastFetchedDate: null },
+      results: { loading: false, exhausted: false, lastFetchedDate: null },
+    },
+  };
+  feed.store.state.SportsWidget.loadMore[direction] = {
+    ...feed.store.state.SportsWidget.loadMore[direction],
+    ...loadMore,
+  };
+  if (matchesEndpoint !== undefined) {
+    feed.store.state.Prefs.values["sports.worldCup.matchesEndpoint"] =
+      matchesEndpoint;
+  }
+  return feed;
+}
+
+add_task(async function test_fetchMoreMatches_ignores_unknown_direction() {
+  const feed = makeLoadMoreFeed();
+  const matchesStub = sinon.stub(feed.merino, "fetchSportsMatches");
+
+  await feed.fetchMoreMatches("sideways");
+
+  Assert.ok(matchesStub.notCalled, "unknown direction is a no-op");
+  Assert.ok(feed.store.dispatch.notCalled, "no broadcast either");
+});
+
+add_task(async function test_fetchMoreMatches_upcoming_bails_when_loading() {
+  const feed = makeLoadMoreFeed({
+    direction: "upcoming",
+    loadMore: { loading: true },
+  });
+  const matchesStub = sinon.stub(feed.merino, "fetchSportsMatches");
+
+  await feed.fetchMoreMatches("upcoming");
+
+  Assert.ok(matchesStub.notCalled, "no fetch fired while already loading");
+  Assert.ok(
+    feed.store.dispatch.notCalled,
+    "no broadcast while already loading"
+  );
+});
+
+add_task(async function test_fetchMoreMatches_results_bails_when_loading() {
+  const feed = makeLoadMoreFeed({
+    direction: "results",
+    loadMore: { loading: true },
+  });
+  const matchesStub = sinon.stub(feed.merino, "fetchSportsMatches");
+
+  await feed.fetchMoreMatches("results");
+
+  Assert.ok(matchesStub.notCalled, "no fetch fired while already loading");
+});
+
+add_task(async function test_fetchMoreMatches_bails_when_exhausted() {
+  const feed = makeLoadMoreFeed({
+    direction: "upcoming",
+    loadMore: { exhausted: true },
+  });
+  const matchesStub = sinon.stub(feed.merino, "fetchSportsMatches");
+
+  await feed.fetchMoreMatches("upcoming");
+
+  Assert.ok(matchesStub.notCalled, "no fetch fired when exhausted");
+});
+
+add_task(async function test_fetchMoreMatches_upcoming_exhausts_past_final() {
+  // lastFetchedDate already at the tournament's final day — stepping
+  // forward by 21 days lands past the final and must short-circuit to
+  // exhausted without firing a fetch.
+  const feed = makeLoadMoreFeed({
+    direction: "upcoming",
+    loadMore: { lastFetchedDate: "2026-07-19" },
+  });
+  const matchesStub = sinon.stub(feed.merino, "fetchSportsMatches");
+
+  await feed.fetchMoreMatches("upcoming");
+
+  Assert.ok(matchesStub.notCalled, "no fetch past the tournament's final day");
+  const [dispatched] = feed.store.dispatch.firstCall.args;
+  Assert.equal(dispatched.type, actionTypes.WIDGETS_SPORTS_SET_LOAD_MORE);
+  Assert.equal(dispatched.data.direction, "upcoming");
+  Assert.equal(dispatched.data.exhausted, true);
+});
+
+add_task(async function test_fetchMoreMatches_results_exhausts_before_start() {
+  // lastFetchedDate already at the tournament's first day — stepping
+  // backward by 21 days lands before the start and must short-circuit to
+  // exhausted without firing a fetch.
+  const feed = makeLoadMoreFeed({
+    direction: "results",
+    loadMore: { lastFetchedDate: "2026-06-11" },
+  });
+  const matchesStub = sinon.stub(feed.merino, "fetchSportsMatches");
+
+  await feed.fetchMoreMatches("results");
+
+  Assert.ok(matchesStub.notCalled, "no fetch before the tournament's start");
+  const [dispatched] = feed.store.dispatch.firstCall.args;
+  Assert.equal(dispatched.data.direction, "results");
+  Assert.equal(dispatched.data.exhausted, true);
+});
+
+add_task(async function test_fetchMoreMatches_upcoming_steps_date_forward() {
+  const feed = makeLoadMoreFeed({
+    direction: "upcoming",
+    loadMore: { lastFetchedDate: "2026-06-01" },
+  });
+  const newMatches = [{ global_event_id: 1 }, { global_event_id: 2 }];
+  const matchesStub = sinon
+    .stub(feed.merino, "fetchSportsMatches")
+    .resolves({ data: { next: newMatches }, error: null });
+
+  await feed.fetchMoreMatches("upcoming");
+
+  Assert.ok(
+    matchesStub.calledWith({
+      source: "newtab",
+      endpointUrl: ENDPOINT,
+      date: "2026-06-22",
+    }),
+    "stepped 21 days forward from lastFetchedDate"
+  );
+  const [finalCall] = feed.store.dispatch.lastCall.args;
+  Assert.equal(finalCall.type, actionTypes.WIDGETS_SPORTS_SET_LOAD_MORE);
+  Assert.equal(finalCall.data.direction, "upcoming");
+  Assert.equal(finalCall.data.loading, false);
+  Assert.equal(finalCall.data.lastFetchedDate, "2026-06-22");
+  Assert.equal(finalCall.data.exhausted, false);
+  Assert.deepEqual(finalCall.data.matches, newMatches);
+});
+
+add_task(async function test_fetchMoreMatches_results_steps_date_backward() {
+  const feed = makeLoadMoreFeed({
+    direction: "results",
+    loadMore: { lastFetchedDate: "2026-07-05" },
+  });
+  const olderMatches = [{ global_event_id: 9 }, { global_event_id: 10 }];
+  const matchesStub = sinon
+    .stub(feed.merino, "fetchSportsMatches")
+    .resolves({ data: { previous: olderMatches }, error: null });
+
+  await feed.fetchMoreMatches("results");
+
+  Assert.ok(
+    matchesStub.calledWith({
+      source: "newtab",
+      endpointUrl: ENDPOINT,
+      date: "2026-06-14",
+    }),
+    "stepped 21 days backward from lastFetchedDate"
+  );
+  const [finalCall] = feed.store.dispatch.lastCall.args;
+  Assert.equal(finalCall.data.direction, "results");
+  Assert.equal(finalCall.data.lastFetchedDate, "2026-06-14");
+  Assert.equal(finalCall.data.exhausted, false);
+  Assert.deepEqual(finalCall.data.matches, olderMatches);
+});
+
+add_task(async function test_fetchMoreMatches_exhausts_on_empty_response() {
+  const feed = makeLoadMoreFeed({
+    direction: "upcoming",
+    loadMore: { lastFetchedDate: "2026-06-01" },
+  });
+  sinon
+    .stub(feed.merino, "fetchSportsMatches")
+    .resolves({ data: { next: [] }, error: null });
+
+  await feed.fetchMoreMatches("upcoming");
+
+  const [finalCall] = feed.store.dispatch.lastCall.args;
+  Assert.equal(finalCall.data.exhausted, true);
+  Assert.deepEqual(finalCall.data.matches, []);
+});
+
+add_task(async function test_fetchMoreMatches_does_not_exhaust_on_error() {
+  // A transient fetch error shouldn't permanently end load-more — the user
+  // should be able to scroll and retry next time. For the retry to hit
+  // the same window we missed, lastFetchedDate also needs to stay put;
+  // otherwise the next attempt would step past a window we never loaded.
+  const feed = makeLoadMoreFeed({
+    direction: "upcoming",
+    loadMore: { lastFetchedDate: "2026-06-01" },
+  });
+  sinon
+    .stub(feed.merino, "fetchSportsMatches")
+    .resolves({ data: null, error: "load_error" });
+
+  await feed.fetchMoreMatches("upcoming");
+
+  const [finalCall] = feed.store.dispatch.lastCall.args;
+  Assert.equal(finalCall.data.exhausted, false);
+  Assert.equal(finalCall.data.loading, false);
+  Assert.ok(
+    !("lastFetchedDate" in finalCall.data),
+    "lastFetchedDate is NOT included in the broadcast on error so the " +
+      "reducer leaves the previous value alone"
+  );
+});
+
+add_task(async function test_fetchMoreMatches_skips_when_endpoint_missing() {
+  const feed = makeLoadMoreFeed({
+    direction: "upcoming",
+    loadMore: { lastFetchedDate: "2026-06-01" },
+    matchesEndpoint: undefined,
+  });
+  // Clear out the matchesEndpoint default that makeLoadMoreFeed set.
+  delete feed.store.state.Prefs.values["sports.worldCup.matchesEndpoint"];
+  const matchesStub = sinon.stub(feed.merino, "fetchSportsMatches");
+
+  await feed.fetchMoreMatches("upcoming");
+
+  Assert.ok(
+    matchesStub.notCalled,
+    "no fetch when matches endpoint not configured"
+  );
+  const [dispatched] = feed.store.dispatch.firstCall.args;
+  Assert.equal(dispatched.data.exhausted, true);
+});
+
+add_task(
+  async function test_onAction_FETCH_MORE_MATCHES_calls_fetchMoreMatches() {
+    const feed = makeLoadMoreFeed({ direction: "upcoming" });
+    const stub = sinon.stub(feed, "fetchMoreMatches").resolves(undefined);
+
+    await feed.onAction({
+      type: actionTypes.WIDGETS_SPORTS_FETCH_MORE_MATCHES,
+      data: { direction: "results" },
+    });
+
+    Assert.ok(stub.calledOnceWith("results"), "feed forwards direction");
+  }
+);
+
+const WATCH_LIVE_ENDPOINT =
+  "https://merino.services.mozilla.com/api/v1/wcs/watch-links";
+
+function makeWatchLiveFeed({ live = [], watchLive } = {}) {
+  const feed = makeFeed();
+  feed.store.state.Prefs.values["sports.worldCup.watchLiveEndpoint"] =
+    WATCH_LIVE_ENDPOINT;
+  feed.store.state.SportsWidget = {
+    data: { live },
+    watchLive: watchLive ?? { loaded: false, data: null },
+  };
+  return feed;
+}
+
+add_task(async function test_maybeFetchWatchLive_fetches_when_live_present() {
+  const feed = makeWatchLiveFeed({
+    live: [{ global_event_id: 1, status_type: "live" }],
+  });
+  const stub = sinon.stub(feed, "fetchWatchLive").resolves();
+
+  await feed.maybeFetchWatchLive();
+
+  Assert.ok(
+    stub.calledOnce,
+    "fetches watch-live once a live game is present and nothing is loaded"
+  );
+});
+
+add_task(async function test_maybeFetchWatchLive_skips_when_no_live_games() {
+  const feed = makeWatchLiveFeed({ live: [] });
+  const stub = sinon.stub(feed, "fetchWatchLive").resolves();
+
+  await feed.maybeFetchWatchLive();
+
+  Assert.ok(stub.notCalled, "no proactive fetch without a live game");
+});
+
+add_task(async function test_maybeFetchWatchLive_skips_when_already_loaded() {
+  const feed = makeWatchLiveFeed({
+    live: [{ global_event_id: 1, status_type: "live" }],
+    watchLive: { loaded: true, data: { your_region: [], other_regions: [] } },
+  });
+  const stub = sinon.stub(feed, "fetchWatchLive").resolves();
+
+  await feed.maybeFetchWatchLive();
+
+  Assert.ok(
+    stub.notCalled,
+    "does not re-fetch once watch-live has settled this session"
+  );
+});
+
+add_task(
+  async function test_fetchWatchLive_settles_loaded_on_disallowed_endpoint() {
+    // A disallowed endpoint must still dispatch a SET so the proactive
+    // maybeFetchWatchLive caller doesn't retry the bad fetch every poll tick.
+    const feed = makeWatchLiveFeed({
+      live: [{ global_event_id: 1, status_type: "live" }],
+    });
+    feed.store.state.Prefs.values["sports.worldCup.watchLiveEndpoint"] =
+      "https://evil.example.com/watch-links";
+    const merinoStub = sinon.stub(feed.merino, "fetchWatchLive").resolves(null);
+
+    await feed.fetchWatchLive();
+
+    Assert.ok(merinoStub.notCalled, "disallowed endpoint is never fetched");
+    const [dispatched] = feed.store.dispatch.firstCall.args;
+    Assert.equal(
+      dispatched.type,
+      actionTypes.WIDGETS_SPORTS_WATCH_LIVE_SET,
+      "still dispatches WATCH_LIVE_SET to settle the loaded flag"
+    );
+    Assert.equal(dispatched.data, null, "with null data");
+  }
+);

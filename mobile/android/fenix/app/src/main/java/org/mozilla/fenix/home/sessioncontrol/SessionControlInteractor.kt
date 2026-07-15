@@ -19,6 +19,7 @@ import org.mozilla.fenix.home.logo.LogoController
 import org.mozilla.fenix.home.logo.TrackingProtectionController
 import org.mozilla.fenix.home.pocket.PocketRecommendedStoriesCategory
 import org.mozilla.fenix.home.pocket.controller.PocketStoriesController
+import org.mozilla.fenix.home.pocket.controller.StoriesImpressionSource
 import org.mozilla.fenix.home.privatebrowsing.controller.PrivateBrowsingController
 import org.mozilla.fenix.home.recentsyncedtabs.RecentSyncedTab
 import org.mozilla.fenix.home.recentsyncedtabs.controller.RecentSyncedTabController
@@ -35,6 +36,8 @@ import org.mozilla.fenix.home.sports.SportsCardType
 import org.mozilla.fenix.home.sports.SportsController
 import org.mozilla.fenix.home.termsofuse.PrivacyNoticeBannerController
 import org.mozilla.fenix.home.toolbar.ToolbarController
+import org.mozilla.fenix.home.topsites.AddShortcutEntryPoint
+import org.mozilla.fenix.home.topsites.AddShortcutSource
 import org.mozilla.fenix.home.topsites.controller.TopSiteController
 import org.mozilla.fenix.wallpapers.WallpaperState
 
@@ -180,6 +183,11 @@ interface TrackingProtectionInteractor {
      * Invoked when the longfox entry point text is clicked.
      */
     fun onLongfoxEntryPointClicked()
+
+    /**
+     * Invoked when the longfox entry point is shown.
+     */
+    fun onLongfoxEntryPointShown()
 }
 
 /**
@@ -272,6 +280,20 @@ class SessionControlInteractor(
 
     override fun onShortcutsLibraryViewed() {
         topSiteController.handleShortcutsLibraryViewed()
+    }
+
+    override fun onSaveShortcut(
+        title: String,
+        url: String,
+        source: AddShortcutSource,
+        entryPoint: AddShortcutEntryPoint,
+    ) {
+        topSiteController.handleSaveShortcut(
+            title = title,
+            url = url,
+            source = source,
+            entryPoint = entryPoint,
+        )
     }
 
     override fun showWallpapersOnboardingDialog(state: WallpaperState): Boolean {
@@ -372,16 +394,20 @@ class SessionControlInteractor(
         pocketStoriesController.handleStoryShown(storyShown, storyPosition)
     }
 
-    override fun onStoriesShown(storiesShown: List<PocketStory>) {
-        pocketStoriesController.handleStoriesShown(storiesShown)
+    override fun onStoriesShown(storiesShown: List<PocketStory>, source: StoriesImpressionSource) {
+        pocketStoriesController.handleStoriesShown(storiesShown, source)
     }
 
     override fun onCategoryClicked(categoryClicked: PocketRecommendedStoriesCategory) {
         pocketStoriesController.handleCategoryClick(categoryClicked)
     }
 
-    override fun onStoryClicked(storyClicked: PocketStory, storyPosition: Triple<Int, Int, Int>) {
-        pocketStoriesController.handleStoryClicked(storyClicked, storyPosition)
+    override fun onStoryClicked(
+        storyClicked: PocketStory,
+        storyPosition: Triple<Int, Int, Int>,
+        source: StoriesImpressionSource,
+    ) {
+        pocketStoriesController.handleStoryClicked(storyClicked, storyPosition, source)
     }
 
     override fun onDiscoverMoreClicked() {
@@ -452,8 +478,16 @@ class SessionControlInteractor(
         logoController.handleLongfoxEntryPointClicked()
     }
 
+    override fun onLongfoxEntryPointShown() {
+        logoController.handleLongfoxEntryPointShown()
+    }
+
     override fun onGetCustomWallpaperClicked() {
         sportsController.handleOnGetCustomWallpaperClicked()
+    }
+
+    override fun onSportsWidgetShareClicked() {
+        sportsController.handleSportsWidgetShareClicked()
     }
 
     override fun onMatchClicked(homeTeam: String?, awayTeam: String?, date: String?) {

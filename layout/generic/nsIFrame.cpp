@@ -597,6 +597,12 @@ bool nsIFrame::IsReplaced() const {
   return false;
 }
 
+bool nsIFrame::IsAtomicInline() const {
+  // See: https://drafts.csswg.org/css-display-4/#atomic-inline
+  return IsInlineOutside() &&
+         (IsReplaced() || !StyleDisplay()->IsInlineInsideStyle());
+}
+
 bool nsIFrame::ShouldPropagateRepaintsToRoot() const {
   if (!IsPrimaryFrame()) {
     // special case for table frames because style images are associated to the
@@ -1810,6 +1816,7 @@ nsRect nsIFrame::GetContentRect() const {
 }
 
 bool nsIFrame::ComputeBorderRadii(const BorderRadius& aBorderRadius,
+                                  const CornerShapeRect& aCornerShape,
                                   const nsSize& aFrameSize,
                                   const nsSize& aBorderArea, Sides aSkipSides,
                                   nsRectCornerRadii& aRadii) {
@@ -1820,16 +1827,34 @@ bool nsIFrame::ComputeBorderRadii(const BorderRadius& aBorderRadius,
     aRadii[i] = std::max(0, c.Resolve(axis));
   }
 
-  if (aSkipSides.Intersects(SideBits::eTop | SideBits::eLeft)) {
+  aRadii.mShapeK[mozilla::eCornerTopLeft] = aCornerShape.top_left.k;
+  aRadii.mShapeK[mozilla::eCornerTopRight] = aCornerShape.top_right.k;
+  aRadii.mShapeK[mozilla::eCornerBottomLeft] = aCornerShape.bottom_left.k;
+  aRadii.mShapeK[mozilla::eCornerBottomRight] = aCornerShape.bottom_right.k;
+
+  bool isTopLeftSquare =
+      std::isinf(aCornerShape.top_left.k) && (aCornerShape.top_left.k > 0.0f);
+  bool isTopRightSquare =
+      std::isinf(aCornerShape.top_right.k) && (aCornerShape.top_right.k > 0.0f);
+  bool isBottomLeftSquare = std::isinf(aCornerShape.bottom_left.k) &&
+                            (aCornerShape.bottom_left.k > 0.0f);
+  bool isBottomRightSquare = std::isinf(aCornerShape.bottom_right.k) &&
+                             (aCornerShape.bottom_right.k > 0.0f);
+
+  if (aSkipSides.Intersects(SideBits::eTop | SideBits::eLeft) ||
+      isTopLeftSquare) {
     aRadii.TopLeft() = {};
   }
-  if (aSkipSides.Intersects(SideBits::eTop | SideBits::eRight)) {
+  if (aSkipSides.Intersects(SideBits::eTop | SideBits::eRight) ||
+      isTopRightSquare) {
     aRadii.TopRight() = {};
   }
-  if (aSkipSides.Intersects(SideBits::eBottom | SideBits::eLeft)) {
+  if (aSkipSides.Intersects(SideBits::eBottom | SideBits::eLeft) ||
+      isBottomLeftSquare) {
     aRadii.BottomLeft() = {};
   }
-  if (aSkipSides.Intersects(SideBits::eBottom | SideBits::eRight)) {
+  if (aSkipSides.Intersects(SideBits::eBottom | SideBits::eRight) ||
+      isBottomRightSquare) {
     aRadii.BottomRight() = {};
   }
 
@@ -1889,8 +1914,9 @@ bool nsIFrame::GetBorderRadii(const nsSize& aFrameSize,
   }
 
   const auto& radii = StyleBorder()->mBorderRadius;
-  const bool hasRadii =
-      ComputeBorderRadii(radii, aFrameSize, aBorderArea, aSkipSides, aRadii);
+  const auto& cornerShape = StyleBorder()->mCornerShape;
+  const bool hasRadii = ComputeBorderRadii(radii, cornerShape, aFrameSize,
+                                           aBorderArea, aSkipSides, aRadii);
   if (!hasRadii) {
     // TODO(emilio): Maybe we can just remove this bit and do the
     // IsDefinitelyZero check unconditionally. That should still avoid most of
@@ -2056,13 +2082,13 @@ nsIFrame::CaretBlockAxisMetrics nsIFrame::GetCaretBlockAxisMetrics(
   return CaretBlockAxisMetrics{.mOffset = baseline - ascent, .mExtent = height};
 }
 
-nscoord nsIFrame::GetFontMetricsDerivedCaretBaseline(nscoord aBSize) const {
+nscoord nsIFrame::GetFontMetricsDerivedCaretBaseline() const {
   float inflation = nsLayoutUtils::FontSizeInflationFor(this);
   RefPtr<nsFontMetrics> fm =
       nsLayoutUtils::GetFontMetricsForFrame(this, inflation);
   const WritingMode wm = GetWritingMode();
-  nscoord lineHeight = ReflowInput::CalcLineHeight(
-      *Style(), PresContext(), GetContent(), aBSize, inflation);
+  const nscoord lineHeight = ReflowInput::CalcLineHeight(
+      *Style(), PresContext(), GetContent(), inflation);
   return nsLayoutUtils::GetCenteredFontBaseline(fm, lineHeight,
                                                 wm.IsLineInverted()) +
          GetLogicalUsedBorderAndPadding(wm).BStart(wm);
@@ -2278,11 +2304,11 @@ static nsIFrame* GetActiveSelectionFrame(nsPresContext* aPresContext,
   return aFrame;
 }
 
-bool nsIFrame::ShouldHandleSelectionMovementEvents() {
+bool nsIFrame::ShouldHandleSelectionMovementEvents(ForSelectionStart aType) {
   if (GetDisplaySelection() == nsISelectionController::SELECTION_OFF) {
     return false;
   }
-  if (!IsSelectable()) {
+  if (UsedUserSelect(this, aType) == StyleUserSelect::None) {
     // Check whether style allows selection.
     return false;
   }
@@ -3031,7 +3057,7 @@ static Maybe<nsRect> ComputeClipForMaskItem(
                 .ToUnknownRect());
       } else {
         const auto& layer = svgReset->mMask.mLayers[i];
-        if (layer.mClip == StyleGeometryBox::NoClip) {
+        if (layer.mClip == StyleBackgroundClip::NoClip) {
           return Nothing();
         }
 
@@ -4265,7 +4291,7 @@ void nsIFrame::BuildDisplayListForChild(nsDisplayListBuilder* aBuilder,
                           : nullptr;
   nsIFrame* childOrOutOfFlow =
       placeholder ? placeholder->GetOutOfFlowFrame() : child;
-  if (ShouldSkipFrame(aBuilder, childOrOutOfFlow)) {
+  if (!childOrOutOfFlow || ShouldSkipFrame(aBuilder, childOrOutOfFlow)) {
     return;
   }
 
@@ -4890,9 +4916,15 @@ static bool IsEditingHost(const nsIFrame* aFrame) {
   return content && content->IsEditingHost();
 }
 
-static StyleUserSelect UsedUserSelect(const nsIFrame* aFrame) {
+mozilla::StyleUserSelect nsIFrame::UsedUserSelect(
+    const nsIFrame* aFrame, nsIFrame::ForSelectionStart aType) {
+  return UsedUserSelectRecurse(aFrame, aType).valueOr(StyleUserSelect::Text);
+}
+
+Maybe<mozilla::StyleUserSelect> nsIFrame::UsedUserSelectRecurse(
+    const nsIFrame* aFrame, nsIFrame::ForSelectionStart aType) {
   if (aFrame->IsGeneratedContentFrame()) {
-    return StyleUserSelect::None;
+    return Some(StyleUserSelect::None);
   }
 
   // Per https://drafts.csswg.org/css-ui-4/#content-selection:
@@ -4919,20 +4951,37 @@ static StyleUserSelect UsedUserSelect(const nsIFrame* aFrame) {
     // We don't implement 'contain' itself, but we make 'text' behave as
     // 'contain' for contenteditable and <input> / <textarea> elements anyway so
     // this is ok.
-    return StyleUserSelect::Text;
+    return Some(StyleUserSelect::Text);
   }
 
   auto style = aFrame->Style()->UserSelect();
   if (style != StyleUserSelect::Auto) {
-    return style;
+    return Some(style);
   }
 
+  const auto IsButton = [](const nsIFrame* aFrame) {
+    const auto* content = aFrame->GetContent();
+    if (!content) {
+      return false;
+    }
+    return content->IsAnyOfHTMLElements(nsGkAtoms::button);
+  };
+
   auto* parent = nsLayoutUtils::GetParentOrPlaceholderFor(aFrame);
-  return parent ? UsedUserSelect(parent) : StyleUserSelect::Text;
+  const auto parentResult =
+      parent ? UsedUserSelectRecurse(parent, aType) : Nothing{};
+  if (parentResult.valueOr(StyleUserSelect::Auto) != StyleUserSelect::None &&
+      aType == nsIFrame::ForSelectionStart::Yes && IsButton(aFrame)) {
+    // If the parent did not force our hands, we want non-`contenteditable`
+    // buttons to be clickable without accidentally selecting the text within
+    // it, but still allow selection that originates outside of it.
+    return Some(StyleUserSelect::None);
+  }
+  return parentResult;
 }
 
 bool nsIFrame::IsSelectable(StyleUserSelect* aSelectStyle) const {
-  auto style = UsedUserSelect(this);
+  auto style = UsedUserSelect(this, ForSelectionStart::No);
   if (aSelectStyle) {
     *aSelectStyle = style;
   }
@@ -5056,7 +5105,7 @@ nsresult nsIFrame::MoveCaretToEventPoint(nsPresContext* aPresContext,
 
   // Check whether this frame should handle selection events. If not, don't
   // tell selection the mouse event even occurred.
-  if (!ShouldHandleSelectionMovementEvents()) {
+  if (!ShouldHandleSelectionMovementEvents(ForSelectionStart::Yes)) {
     return NS_OK;
   }
 
@@ -6306,18 +6355,15 @@ void nsIFrame::DisassociateImage(const StyleImage& aImage) {
       .DisassociateRequestFromFrame(req, this);
 }
 
-StyleImageRendering nsIFrame::UsedImageRendering() const {
-  ComputedStyle* style;
+const ComputedStyle* nsIFrame::UsedStyleForImages() const {
   if (IsCanvasFrame()) {
     // XXXdholbert Maybe we should use FindCanvasBackground here (instead of
     // FindBackground), since we're inside an IsCanvasFrame check? Though then
     // we'd also have to copypaste or abstract-away the multi-part root-frame
     // lookup that the canvas-flavored API requires.
-    style = nsCSSRendering::FindBackground(this);
-  } else {
-    style = Style();
+    return nsCSSRendering::FindBackground(this);
   }
-  return style->StyleVisibility()->mImageRendering;
+  return Style();
 }
 
 // The touch-action CSS property applies to: all elements except: non-replaced
@@ -8821,6 +8867,11 @@ bool nsIFrame::IsBlockFrameOrSubclass() const {
   return !!thisAsBlock;
 }
 
+bool nsIFrame::IsInlineFrameOrSubclass() const {
+  const nsInlineFrame* asInline = do_QueryFrame(this);
+  return !!asInline;
+}
+
 bool nsIFrame::IsImageFrameOrSubclass() const {
   const nsImageFrame* asImage = do_QueryFrame(this);
   return !!asImage;
@@ -9699,6 +9750,26 @@ static nsContentAndOffset FindLineBreakingFrame(nsIFrame* aFrame,
   return result;
 }
 
+enum class OffsetIsAtLineEdge : bool { No, Yes };
+
+static void SetPeekResultFromFrame(PeekOffsetStruct& aPos, nsIFrame* aFrame,
+                                   int32_t aOffset,
+                                   OffsetIsAtLineEdge aAtLineEdge) {
+  FrameContentRange range = GetRangeForFrame(aFrame);
+  aPos.mResultFrame = aFrame;
+  aPos.mResultContent = range.content;
+  // Output offset is relative to content, not frame
+  aPos.mContentOffset =
+      aOffset < 0 ? range.end + aOffset + 1 : range.start + aOffset;
+  // Ensure we don't go past the range. This is important if aFrame is empty.
+  aPos.mContentOffset = std::clamp(aPos.mContentOffset, range.start, range.end);
+  if (aAtLineEdge == OffsetIsAtLineEdge::Yes) {
+    aPos.mAttach = aPos.mContentOffset == range.start
+                       ? CaretAssociationHint::After
+                       : CaretAssociationHint::Before;
+  }
+}
+
 nsresult nsIFrame::PeekOffsetForParagraph(PeekOffsetStruct* aPos) {
   nsIFrame* frame = this;
   nsContentAndOffset blockFrameOrBR;
@@ -9744,20 +9815,35 @@ nsresult nsIFrame::PeekOffsetForParagraph(PeekOffsetStruct* aPos) {
   }
 
   if (reachedLimit) {  // no "stop frame" found
-    aPos->mResultContent = frame->GetContent();
-    if (aPos->mResultContent) {
-      if (ShadowRoot* shadowRoot =
-              aPos->mResultContent->GetShadowRootForSelection()) {
-        // Even if there's no children for this node,
-        // the elements inside the shadow root is still
-        // selectable
-        aPos->mResultContent = shadowRoot;
+    if (aPos->mOptions.contains(PeekOffsetOption::ForCaretMove)) {
+      // For a caret move, drill down to a leaf so scroll-into-view geometry,
+      // which only uses text-frame offsets when the focus node is a Text node,
+      // gets a usable position. Frame children include flattened-tree
+      // descendants, so this also covers shadow-DOM content that the element
+      // branch below reaches via GetShadowRootForSelection.
+      const bool atEnd = aPos->mDirection == eDirNext;
+      FrameTarget targetFrame = DrillDownToSelectionFrame(
+          frame, atEnd, nsIFrame::IGNORE_NATIVE_ANONYMOUS_SUBTREE);
+      SetPeekResultFromFrame(*aPos, targetFrame.frame, atEnd ? -1 : 0,
+                             OffsetIsAtLineEdge::Yes);
+    } else {
+      // For selection (e.g. triple-click paragraph selection), the block
+      // container itself is the expected boundary.
+      aPos->mResultContent = frame->GetContent();
+      if (aPos->mResultContent) {
+        if (ShadowRoot* shadowRoot =
+                aPos->mResultContent->GetShadowRootForSelection()) {
+          // Even if there's no children for this node,
+          // the elements inside the shadow root is still
+          // selectable
+          aPos->mResultContent = shadowRoot;
+        }
       }
-    }
-    if (aPos->mDirection == eDirPrevious) {
-      aPos->mContentOffset = 0;
-    } else if (aPos->mResultContent) {
-      aPos->mContentOffset = aPos->mResultContent->GetChildCount();
+      if (aPos->mDirection == eDirPrevious) {
+        aPos->mContentOffset = 0;
+      } else if (aPos->mResultContent) {
+        aPos->mContentOffset = aPos->mResultContent->GetChildCount();
+      }
     }
   }
   return NS_OK;
@@ -9790,26 +9876,6 @@ static bool ShouldWordSelectionEatSpace(const PeekOffsetStruct& aPos) {
   // operating system.
   return aPos.mDirection == eDirNext &&
          StaticPrefs::layout_word_select_eat_space_to_next_word();
-}
-
-enum class OffsetIsAtLineEdge : bool { No, Yes };
-
-static void SetPeekResultFromFrame(PeekOffsetStruct& aPos, nsIFrame* aFrame,
-                                   int32_t aOffset,
-                                   OffsetIsAtLineEdge aAtLineEdge) {
-  FrameContentRange range = GetRangeForFrame(aFrame);
-  aPos.mResultFrame = aFrame;
-  aPos.mResultContent = range.content;
-  // Output offset is relative to content, not frame
-  aPos.mContentOffset =
-      aOffset < 0 ? range.end + aOffset + 1 : range.start + aOffset;
-  // Ensure we don't go past the range. This is important if aFrame is empty.
-  aPos.mContentOffset = std::clamp(aPos.mContentOffset, range.start, range.end);
-  if (aAtLineEdge == OffsetIsAtLineEdge::Yes) {
-    aPos.mAttach = aPos.mContentOffset == range.start
-                       ? CaretAssociationHint::After
-                       : CaretAssociationHint::Before;
-  }
 }
 
 void nsIFrame::SelectablePeekReport::TransferTo(PeekOffsetStruct& aPos) const {
@@ -12049,7 +12115,8 @@ gfx::Matrix nsIFrame::ComputeWidgetTransform() const {
 
   int32_t appUnitsPerDevPixel = PresContext()->AppUnitsPerDevPixel();
   gfx::Matrix4x4 matrix = nsStyleTransformMatrix::ReadTransforms(
-      uiReset->mMozWindowTransform, refBox, float(appUnitsPerDevPixel));
+      uiReset->mMozWindowTransform, refBox, float(appUnitsPerDevPixel),
+      mComputedStyle->EffectiveZoom());
 
   gfx::Matrix result2d;
   if (!matrix.CanDraw2D(&result2d)) {

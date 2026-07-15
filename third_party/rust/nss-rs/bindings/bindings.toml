@@ -177,6 +177,7 @@ functions = [
     "PK11_GetBlockSize",
     "PK11_GetInternalKeySlot",
     "PK11_GetInternalSlot",
+    "PK11_IsFIPS",
     "PK11_GetKeyData",
     "PK11_GetMechanism",
     "PK11_GetTokenName",
@@ -305,3 +306,8 @@ enums = ["PRDescType", "PRStatus", "PRSeekWhence"]
 [nspr_time]
 types = ["PRTime"]
 functions = ["PR_Now"]
+
+[nspr_lib]
+types = ["PRLibrary", "PRFuncPtr"]
+opaque = ["PRLibrary"]
+functions = ["PR_LoadLibrary", "PR_UnloadLibrary", "PR_FindFunctionSymbol"]

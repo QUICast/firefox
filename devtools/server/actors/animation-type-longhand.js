@@ -202,6 +202,7 @@ exports.ANIMATION_TYPE_FOR_LONGHANDS = [
       "-moz-window-dragging",
       "word-break",
       "writing-mode",
+      "-moz-image-decoding",
     ]),
   ],
   [
@@ -358,6 +359,7 @@ exports.ANIMATION_TYPE_FOR_LONGHANDS = [
       "translate",
       "-moz-window-transform",
       "-webkit-line-clamp",
+      "line-clamp",
     ]),
   ],
   [

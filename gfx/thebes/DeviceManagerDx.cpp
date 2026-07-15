@@ -3,23 +3,24 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "DeviceManagerDx.h"
+
 #include "D3D11Checks.h"
-#include "gfxConfig.h"
 #include "GfxDriverInfo.h"
+#include "gfxConfig.h"
 #include "gfxWindowsPlatform.h"
 #include "mozilla/D3DMessageUtils.h"
+#include "mozilla/Preferences.h"
 #include "mozilla/StaticPrefs_gfx.h"
 #include "mozilla/StaticPrefs_layers.h"
-#include "mozilla/glean/GfxMetrics.h"
 #include "mozilla/gfx/GPUParent.h"
 #include "mozilla/gfx/GPUProcessManager.h"
 #include "mozilla/gfx/GraphicsMessages.h"
 #include "mozilla/gfx/Logging.h"
 #include "mozilla/gfx/gfxVars.h"
+#include "mozilla/glean/GfxMetrics.h"
 #include "mozilla/layers/CompositorBridgeChild.h"
 #include "mozilla/layers/CompositorThread.h"
 #include "mozilla/layers/DeviceAttachmentsD3D11.h"
-#include "mozilla/Preferences.h"
 #include "nsPrintfCString.h"
 #include "nsString.h"
 
@@ -297,57 +298,8 @@ DXGI_HDR_METADATA_HDR10 DeviceManagerDx::OutputDESC1ToDXGI(
   return metadata;
 }
 
-bool DeviceManagerDx::VideoProcessorHDREnabled() {
-  MutexAutoLock lock(mDeviceLock);
-  D3D11Checks::VideoProcessorOptionSet options;
-  if (mDeviceStatus) {
-    options = mDeviceStatus->processorOptions();
-  } else {
-    // We can't call LoadD3D11 if it is disabled because it will just hit an
-    // assert immediately.
-    FeatureState& d3d11 = gfxConfig::GetFeature(Feature::D3D11_COMPOSITING);
-    if (!d3d11.IsEnabled()) {
-      return false;
-    }
-
-    UINT flags =
-        D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_VIDEO_SUPPORT;
-    HRESULT hr;
-    if (!LoadD3D11()) {
-      gfxCriticalNoteOnce
-          << "DeviceManagerDx::VideoProcessorHDREnabled: Failed to load D3D11 "
-             "library for checking video processor HDR support";
-      return false;
-    }
-    RefPtr<IDXGIAdapter1> adapter = GetDXGIAdapterLocked();
-    if (!adapter) {
-      gfxCriticalNoteOnce
-          << "DeviceManagerDx::VideoProcessorHDREnabled: Failed to get DXGI "
-             "adapter for checking video processor HDR support";
-      return false;
-    }
-    RefPtr<ID3D11Device> device;
-    if (!CreateDevice(adapter, D3D_DRIVER_TYPE_UNKNOWN, flags, hr, device) ||
-        !device) {
-      gfxCriticalNoteOnce
-          << "DeviceManagerDx::VideoProcessorHDREnabled: Failed to create "
-             "D3D11 device for checking video processor HDR support: "
-          << gfx::hexa(hr);
-      return false;
-    }
-    options = D3D11Checks::ProcessorOptions(device);
-  }
-  return options.contains(
-             D3D11Checks::VideoProcessorOption::P010_STUDIO_2100_PQ) &&
-         options.contains(
-             D3D11Checks::VideoProcessorOption::P010_STUDIO_2100_HLG) &&
-         options.contains(
-             D3D11Checks::VideoProcessorOption::P010_FULL_2100_HLG);
-}
-
 void DeviceManagerDx::UpdateMonitorInfo() {
   bool systemHdrEnabled = false;
-  bool videoHdrEnabled;
   std::set<HMONITOR> hdrMonitors;
   std::unordered_map<HMONITOR, DXGI_HDR_METADATA_HDR10> hdrMetadatas;
 
@@ -359,11 +311,9 @@ void DeviceManagerDx::UpdateMonitorInfo() {
     }
   }
 
-  videoHdrEnabled = VideoProcessorHDREnabled();
   {
     MutexAutoLock lock(mDeviceLock);
     mSystemHdrEnabled = Some(systemHdrEnabled);
-    mVideoHdrEnabled = Some(videoHdrEnabled);
     mHdrMonitors.swap(hdrMonitors);
     mHdrMetadatas.swap(hdrMetadatas);
     mUpdateMonitorInfoRunnable = nullptr;
@@ -1011,12 +961,10 @@ void DeviceManagerDx::CreateCompositorDevice(FeatureState& d3d11) {
   auto formatOptions = D3D11Checks::FormatOptions(device);
   mCompositorDevice = device;
 
-  auto videoProcessorOptions = D3D11Checks::ProcessorOptions(device);
-
   int32_t sequenceNumber = GetNextDeviceCounter();
   mDeviceStatus = Some(D3D11DeviceStatus(
       false, textureSharingWorks, featureLevel, DxgiAdapterDesc::From(desc),
-      sequenceNumber, formatOptions, videoProcessorOptions));
+      sequenceNumber, formatOptions));
   mCompositorDevice->SetExceptionMode(0);
 }
 
@@ -1116,12 +1064,10 @@ void DeviceManagerDx::CreateWARPCompositorDevice() {
   auto formatOptions = D3D11Checks::FormatOptions(device);
   mCompositorDevice = device;
 
-  auto videoProcessorOptions = D3D11Checks::ProcessorOptions(device);
-
   int32_t sequenceNumber = GetNextDeviceCounter();
   mDeviceStatus = Some(D3D11DeviceStatus(
       true, textureSharingWorks, featureLevel, DxgiAdapterDesc::From(desc),
-      sequenceNumber, formatOptions, videoProcessorOptions));
+      sequenceNumber, formatOptions));
   mCompositorDevice->SetExceptionMode(0);
 
   reporterWARP.SetSuccessful();

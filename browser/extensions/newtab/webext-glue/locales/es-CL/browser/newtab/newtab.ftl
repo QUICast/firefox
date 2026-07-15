@@ -31,6 +31,178 @@ newtab-card-dismiss-button =
     .title = Ocultar
     .aria-label = Ocultar
 
+## Strings for "Homepage" and "Firefox Home" sections of about:settings#home.
+## Homepage panel
+
+home-homepage-title =
+    .label = Página de inicio
+home-homepage-new-windows =
+    .label = Nuevas ventanas
+home-homepage-new-tabs =
+    .label = Nuevas pestañas
+# This option leads to the "Custom Homepage" subpage
+home-homepage-custom-homepage-button =
+    .label = Elige un sitio específico
+
+## Custom URLs subpage
+
+# Subheader on the Custom Homepage subpage. Followed by a form to enter URLs and a list of URLs already saved, if any.
+home-custom-homepage-card-header =
+    .label = Dirección(es) del sitio web
+home-custom-homepage-address =
+    .placeholder = Ingresar dirección
+home-custom-homepage-address-button =
+    .label = Añadir dirección
+# Shown when no custom websites/URLs to use as a homepage have been added yet
+home-custom-homepage-no-results =
+    .label = Todavía no se han añadido sitios web
+home-custom-homepage-delete-address-button =
+    .aria-label = Eliminar dirección
+    .title = Eliminar dirección
+# Further options to use when setting the home page. Two action buttons are placed in line with this prompt
+# to replace the current home page with a currently open page or bookmark.
+home-custom-homepage-replace-with-prompt =
+    .label = Reemplazar con
+# Button that appears in-line after text "Replace with" (home-custom-homepage-replace-with-prompt)
+home-custom-homepage-current-pages-button =
+    .label = Páginas actualmente abiertas
+# Button that appears in-line after text "Replace with" (home-custom-homepage-replace-with-prompt)
+home-custom-homepage-bookmarks-button =
+    .label = Marcadores…
+
+## Firefox Home content
+
+home-prefs-content-header =
+    .label = { -firefox-home-brand-name }
+home-prefs-search-header2 =
+    .label = Buscar
+home-prefs-stories-header2 =
+    .label = Historias
+    .description = Contenido excepcional seleccionado por la familia { -brand-product-name }
+home-prefs-widgets-header =
+    .label = Widgets
+# Lists is a widget on New Tab, similar to a to-do widget
+home-prefs-lists-header =
+    .label = Listas
+# Timer is a widget on New Tab, similar to the Pomodoro timer.
+home-prefs-timer-header =
+    .label = Temporizador
+# Sports is a widget on New Tab showing sports scores and schedules.
+home-prefs-sports-widget-header =
+    .label = Deportes
+# Clock is a widget on New Tab that displays time zones around the world.
+home-prefs-clocks-header =
+    .label = Reloj
+# Privacy is a widget on New Tab that shows tracking protection activity.
+home-prefs-privacy-header =
+    .label = Privacidad
+# Stocks is a widget on New Tab that shows stock ticker prices.
+home-prefs-stocks-header =
+    .label = Acciones
+# Picture of the day is a widget on New Tab that shows a daily Wikimedia Commons image.
+home-prefs-picture-header =
+    .label = Imagen del día
+home-prefs-mission-message2 =
+    .message = Nuestros patrocinadores apoyan nuestra misión de construir una mejor web.
+home-prefs-manage-topics-link2 =
+    .label = Administrar temas
+home-prefs-choose-wallpaper-link2 =
+    .label = Elige un fondo de pantalla
+home-prefs-firefox-logo-header =
+    .label = Logo de { -brand-short-name }
+# Informational message bar that appears in the Firefox Home section when the options are disabled.
+# The user must select Firefox Home as their homepage for either new tabs or new windows to enable
+# the features in settings.
+home-prefs-firefox-home-disabled-notice =
+    .message = Para usar estas funcionalidades, configura las nuevas pestañas o ventanas nuevas con { -firefox-home-brand-name }.
+# Variables:
+#   $num (number) - Number of rows displayed
+home-prefs-sections-rows-option-srd =
+    .label =
+        { $num ->
+            [one] { $num } fila
+           *[other] { $num } filas
+        }
+# Dropdown option shown when an extension replaces the contents of new windows or tabs.
+# Variables:
+#   $extension (string) - Name of the extension
+home-prefs-homepage-extension-option =
+    .label = Extensión ({ $extension })
+home-restore-defaults-srd =
+    .label = Restaurar predeterminados
+    .accesskey = R
+home-mode-choice-default-fx-srd =
+    .label = { -firefox-home-brand-name } (predeterminado)
+home-mode-choice-custom-srd =
+    .label = URLs personalizadas…
+home-mode-choice-blank-srd =
+    .label = Página en blanco
+home-prefs-shortcuts-header-srd =
+    .label = Atajos
+home-prefs-shortcuts-select =
+    .aria-label = Atajos
+home-prefs-shortcuts-by-option-sponsored-srd =
+    .label = Atajos patrocinados
+home-prefs-recommended-by-option-sponsored-stories-srd =
+    .label = Historias patrocinadas
+home-prefs-highlights-option-visited-pages-srd =
+    .label = Páginas visitadas
+home-prefs-highlights-options-bookmarks-srd =
+    .label = Marcadores
+home-prefs-highlights-option-most-recent-download-srd =
+    .label = Descarga más reciente
+home-prefs-recent-activity-header-srd =
+    .label = Actividad reciente
+home-prefs-recent-activity-select =
+    .aria-label = Actividad reciente
+home-prefs-weather-header-srd =
+    .label = Clima
+home-prefs-support-firefox-header-srd =
+    .label = Apoyar a { -brand-product-name }
+home-prefs-mission-message-learn-more-link-srd = Descubre cómo
+
+## Strings for the Privacy widget
+
+# Context menu item linking to more information about the Privacy widget.
+newtab-privacy-menu-learn-more = Aprender más
+
+## Strings for the Stocks widget
+
+# Context menu item for searching stock ticker symbols.
+newtab-stocks-menu-search = Buscar símbolos bursátiles
+# Context menu item linking to more information about the Stocks widget.
+newtab-stocks-menu-learn-more = Aprender más
+
+## Strings for the Picture of the Day widget
+
+# Title shown at the top of the widget, with the source name appended.
+# "Wikimedia Commons" is a brand name and should not be translated.
+newtab-picture-header = Imagen del día · Wikimedia Commons
+# Button that sets the current picture as the New Tab background wallpaper. The
+# button collapses to an icon when not hovered/focused, so .title is its tooltip.
+newtab-picture-set-wallpaper =
+    .label = Establecer fondo de pantalla
+    .title = Establecer fondo de pantalla
+    .aria-label = Establecer imagen del día como fondo de pantalla
+# Context menu item that opens the New Tab customization panel.
+newtab-picture-menu-manage-wallpaper = Gestionar el fondo de pantalla
+# Context menu item that hides today’s picture, replacing it with an existing
+# wallpaper.
+newtab-picture-menu-hide-photo = Ocultar la foto de hoy
+# Context menu item that restores today’s picture after it has been hidden.
+newtab-picture-menu-show-photo = Mostrar la foto de hoy
+# Context menu item linking to more information about the widget.
+newtab-picture-menu-learn-more = Más información
+# Icon button shown on the widget once the picture is hidden; restores it.
+newtab-picture-show-button =
+    .title = Mostrar la foto de hoy
+    .aria-label = Mostrar la foto de hoy
+# Shown when there is no new picture to display yet.
+newtab-picture-check-back = Vuelva mañana para ver una nueva foto
+# Screen-reader text alternative for the picture; fallback used when the source
+# provides no localized description.
+newtab-picture-image-alt = Imagen del día de Wikimedia Commons
+
 ## Search box component.
 
 # "Search" is a verb/action
@@ -66,6 +238,7 @@ newtab-topsites-add-shortcut-label = Añadir acceso directo
 newtab-topsites-add-shortcut-title =
     .title = Añadir acceso directo
     .aria-label = Añadir acceso directo
+newtab-shortcuts-pinned-area = Área fijada
 newtab-topsites-title-label = Título
 newtab-topsites-title-input =
     .placeholder = Ingresar un título
@@ -151,6 +324,8 @@ newtab-menu-section-block = Bloquear
 # "Follow", "unfollow", and "following" are social media terms that refer to subscribing to or unsubscribing from a section of stories.
 # e.g. Following the travel section of stories.
 newtab-menu-section-unfollow-topic = Dejar de seguir
+# Context menu option to open a support page explaining the New Tab personalization features and privacy controls.
+newtab-menu-section-learn-more = Aprender más
 # "Follow", "unfollow", and "following" are social media terms that refer to subscribing to or unsubscribing from a section of stories.
 # e.g. Following the travel section of stories.
 newtab-menu-section-unfollow = Dejar de seguir el tema
@@ -349,6 +524,8 @@ newtab-recommended-stories-toggle =
     .label = Historias recomendadas
 newtab-custom-stories-personalized-toggle =
     .label = Historias
+newtab-custom-stories-personalized-checkbox =
+    .label = Historias personalizadas basadas en tu actividad
 newtab-custom-stories-personalized-checkbox-label = Historias personalizadas basadas en tu actividad
 newtab-custom-pocket-sponsored = Historias patrocinadas
 newtab-custom-pocket-show-recent-saves = Mostrar guardados recientes
@@ -369,6 +546,12 @@ newtab-custom-widget-clock-toggle =
     .label = Reloj
 newtab-custom-widget-sports-toggle2 =
     .label = Deportes
+newtab-custom-widget-privacy-toggle =
+    .label = Privacidad
+newtab-custom-widget-stocks-toggle =
+    .label = Acciones
+newtab-custom-widget-picture-toggle =
+    .label = Imagen del día
 newtab-custom-widget-section-title = Widgets
 newtab-custom-widget-section-toggle =
     .label = Widgets
@@ -754,8 +937,6 @@ newtab-widget-lists-button-add-item = Añadir un elemento
 newtab-widget-lists-input-add-an-item2 =
     .placeholder = Añadir un elemento
     .aria-label = Añadir un elemento
-newtab-widget-lists-input-add-an-item =
-    .placeholder = Añadir un elemento
 newtab-widget-lists-input-error = Por favor, incluye texto para añadir un elemento.
 newtab-widget-lists-input-menu-open-link = Abrir enlace
 newtab-widget-lists-input-menu-move-up = Subir
@@ -773,21 +954,16 @@ newtab-widget-lists-dropdown-create =
 newtab-widget-lists-name-label-default =
     .label = Lista de tareas
 newtab-widget-lists-name-label-checklist =
-    .label = Lista de verificación
+    .label = Lista de tareas
 newtab-widget-lists-name-placeholder-default =
     .placeholder = Lista de tareas
 newtab-widget-lists-name-placeholder-checklist2 =
-    .placeholder = Lista de verificación
+    .placeholder = Lista de tareas
     .aria-label = Editar el nombre de la lista
 # The placeholder value of the name field for a newly created list
 newtab-widget-lists-name-placeholder-new2 =
     .placeholder = Nueva lista
     .aria-label = Editar el nombre de la lista
-newtab-widget-lists-name-placeholder-checklist =
-    .placeholder = Lista de verificación
-# The placeholder value of the name field for a newly created list
-newtab-widget-lists-name-placeholder-new =
-    .placeholder = Nueva lista
 newtab-widget-section-title = Widgets
 newtab-widget-menu-hide = Ocultar widget
 newtab-widget-menu-change-size = Cambiar tamaño
@@ -831,7 +1007,7 @@ newtab-widget-section-show-more =
 # allowing users to collapse it back to one row.
 newtab-widget-section-show-less =
     .label = Mostrar menos widgets
-newtab-widget-lists-name-default = Lista de verificación
+newtab-widget-lists-name-default = Lista de tareas
 
 ## Strings introduced by the Nova redesign of the Timer widget
 
@@ -852,6 +1028,8 @@ newtab-widget-timer-reset =
 newtab-widget-timer-menu-notifications = Desactivar notificaciones
 newtab-widget-timer-menu-notifications-on = Activar notificaciones
 newtab-widget-timer-menu-learn-more = Más información
+newtab-widget-timer-menu-button =
+    .aria-label = Opciones de temporizador
 # The title displays above a set of top news headlines.
 newtab-daily-briefing-card-title = Titulares principales
 newtab-daily-briefing-card-menu-dismiss = Ocultar
@@ -966,6 +1144,8 @@ newtab-sports-widget-show-less =
 # Toggle that filters the list of teams the user follows
 newtab-sports-widget-followed-only-toggle =
     .label = Solo equipos seguidos
+# Status shown when more matches are being fetched.
+newtab-sports-widget-loading-more = Cargando más partidos…
 # Watch is a verb (as in watch matches online).
 newtab-sports-widget-watch =
     .label = Ver
@@ -1045,6 +1225,9 @@ newtab-sports-widget-third-place = Tercer lugar
 newtab-sports-widget-runner-up = Subcampeón
 newtab-sports-widget-champions = Campeones
 newtab-sports-widget-world-cup-champions = Campeones de la Copa Mundial 2026
+# Compact champions label for the medium-size widget result card; the larger
+# card uses newtab-sports-widget-world-cup-champions.
+newtab-sports-widget-world-cup-champions-short = Campeones del 2026
 # Variables:
 #   $date (Date) - The match start time
 newtab-sports-widget-match-time = { DATETIME($date, hour: "2-digit", minute: "2-digit") }
@@ -1052,6 +1235,28 @@ newtab-sports-widget-match-full-time = Partido completo
 newtab-sports-widget-match-halftime = Medio tiempo
 newtab-sports-widget-match-extra-time = Tiempo extra
 newtab-sports-widget-match-penalties = Penales
+# Separator shown between two teams in a placeholder match row when no upcoming
+# match details are available yet.
+newtab-sports-widget-match-vs = vs
+# Note shown in the Upcoming tab when no match details are available yet.
+newtab-sports-widget-no-upcoming-matches = Mantente atento para conocer los detalles del próximo partido.
+
+## Sports widget live-games pagination. Shown when 2+ matches are live at the same time
+
+# arrow button that goes to the previous page of live matches.
+newtab-sports-widget-pagination-previous =
+    .aria-label = Anterior
+    .title = Anterior
+# arrow button that goes to the next page of live matches.
+newtab-sports-widget-pagination-next =
+    .aria-label = Siguiente
+    .title = Siguiente
+# Dot indicator that jumps directly to a given live match.
+# $index (number) - 1-based position of this dot in the list.
+# $total (number) - Total number of live matches.
+newtab-sports-widget-pagination-dot =
+    .aria-label = Partido en vivo { $index } de { $total }
+    .title = Partido en vivo { $index } de { $total }
 
 ## Accessible labels for match rows in the sports widget. These are read by
 ## screen readers to announce the match details and status.
@@ -1112,6 +1317,8 @@ newtab-sports-widget-team-name-label-eng =
     .label = Inglaterra
 newtab-sports-widget-team-name-label-sco =
     .label = Escocia
+# Placeholder used in a match row's aria-label for an undecided team (shown visually as "--").
+newtab-sports-widget-team-tbd = Por determinar
 
 ## Sports widget OMC messages
 ## Shown as on-screen messages promoting the Sports widget and World Cup wallpapers.
@@ -1119,12 +1326,23 @@ newtab-sports-widget-team-name-label-sco =
 newtab-sports-widget-message-wallpapers-title = Da el puntapié inicial a la Copa del Mundo con nuevos fondos de pantalla
 newtab-sports-widget-message-wallpapers-body = Recibe la energía de los partidos en tu navegador.
 newtab-sports-widget-message-wallpapers-cta = Elegir fondo de pantalla
+newtab-sports-widget-message-wallpapers-semifinals-title = Consigue un nuevo fondo de pantalla para las semifinales
+newtab-sports-widget-message-wallpapers-semifinals-body = Prepara el escenario para los partidos más importantes del Mundial.
 newtab-sports-widget-message-add-widgets-cta =
     .label = Añadir widgets
 newtab-sports-widget-message-day-in-play-title = Llena tu día con los partidos usando los widgets de { -brand-product-name }
 newtab-sports-widget-message-day-in-play-body = Sigue el Mundial, mantente al día con tus tareas, controla el tiempo en todo el mundo y mucho más.
 newtab-sports-widget-message-explore-widgets-cta =
     .label = Explorar widgets
+
+## Survey prompts shown after the World Cup to gather feedback on the widgets experience.
+
+newtab-sports-widget-message-survey-title = Ayúdanos a mejorar los widgets
+newtab-sports-widget-message-survey-body = ¡Se acabó el Mundial! Comparte tu opinión sobre la experiencia.
+newtab-sports-widget-message-survey-widget-title = ¿Qué tal estuvo el widget del Mundial?
+newtab-sports-widget-message-survey-widget-body = Comparte tus comentarios para ayudarnos a mejorar los widgets futuros. Luego, prueba el nuevo en tu colección.
+newtab-sports-widget-message-survey-cta =
+    .label = Responder encuesta
 
 ## Strings for activation window message variants. In certain experiment configurations,
 ## the strings from these variants may be displayed in a message below the search input

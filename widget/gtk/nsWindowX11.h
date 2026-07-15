@@ -5,6 +5,8 @@
 #ifndef _nsWindowX11_h_
 #define _nsWindowX11_h_
 
+#include "nsWindow.h"
+
 namespace mozilla::widget {
 
 class nsWindowX11 final : public nsWindow {
@@ -16,6 +18,7 @@ class nsWindowX11 final : public nsWindow {
 
   void CreateNative() override;
   void DestroyNative() override;
+  void ConfigureToplevelWindowNative() override;
 
   bool ConfigureX11GLVisual();
 
@@ -23,7 +26,6 @@ class nsWindowX11 final : public nsWindow {
 
   void LockNativePointer(NativePointerLockMode aNativePointerLockMode) override;
   void UnlockNativePointer() override;
-
   void UpdateNativePointerBarriers();
 
  protected:

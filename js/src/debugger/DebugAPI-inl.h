@@ -181,13 +181,6 @@ void DebugAPI::onNewPromise(JSContext* cx, Handle<PromiseObject*> promise) {
 }
 
 /* static */
-void DebugAPI::onPromiseSettled(JSContext* cx, Handle<PromiseObject*> promise) {
-  if (MOZ_UNLIKELY(promise->realm()->isDebuggee())) {
-    slowPathOnPromiseSettled(cx, promise);
-  }
-}
-
-/* static */
 void DebugAPI::traceGeneratorFrame(JSTracer* tracer,
                                    AbstractGeneratorObject* generator) {
   if (MOZ_UNLIKELY(generator->realm()->isDebuggee())) {

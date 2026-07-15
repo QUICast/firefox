@@ -1743,6 +1743,14 @@ sealed class MediaSessionAction : BrowserAction() {
         val fullScreen: Boolean,
         val elementMetadata: MediaSession.ElementMetadata?,
     ) : MediaSessionAction()
+
+    /**
+     * Updates the [MediaSession.AudioSessionType] claimed by the tab with id [tabId].
+     */
+    data class UpdateMediaAudioSessionTypeAction(
+        val tabId: String,
+        val audioSessionType: MediaSession.AudioSessionType,
+    ) : MediaSessionAction()
 }
 
 /**
@@ -2053,4 +2061,19 @@ sealed class DefaultDesktopModeAction : BrowserAction() {
      * Updates the global default for desktop browsing mode.
      */
     data class DesktopModeUpdated(val newValue: Boolean) : DefaultDesktopModeAction()
+}
+
+/**
+ * [BrowserAction] implementations related to requesting system-level permissions.
+ */
+sealed class SystemPermissionRequestAction : BrowserAction() {
+    /**
+     * Indicates that a system permission request is currently in progress.
+     */
+    object SystemPermissionStateRequestInProgress : SystemPermissionRequestAction()
+
+    /**
+     * Indicates that there is no system permission request currently in progress.
+     */
+    object SystemPermissionStateRequestNotInProgress : SystemPermissionRequestAction()
 }

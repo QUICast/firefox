@@ -567,7 +567,7 @@ bool BaseCompiler::beginFunction() {
   OutOfLineCode* oolStackOverflowTrap =
       addOutOfLineCode(new (alloc_) OutOfLineTrap(
           Trap::StackOverflow,
-          TrapSiteDesc(BytecodeOffset(func_.lineOrBytecode)), nullptr));
+          TrapSiteDesc(BytecodeOffset(func_.bytecodeOffset)), nullptr));
   if (!oolStackOverflowTrap) {
     return false;
   }
@@ -937,7 +937,8 @@ void BaseCompiler::insertPerFunctionDebugStub() {
 
     // Check the filter bit.  There is one bit per function in the module.
     // Table elements are 32-bit because the masm makes that convenient.
-    masm.branchTest32(Assembler::NonZero, Address(scratch, func_.index / 32),
+    masm.branchTest32(Assembler::NonZero,
+                      Address(scratch, (func_.index / 32) * sizeof(uint32_t)),
                       Imm32(1 << (func_.index % 32)), &L);
 
     // Fast path: return to the execution.
@@ -950,7 +951,8 @@ void BaseCompiler::insertPerFunctionDebugStub() {
     // Logic as above, except abiret to jump to the LR directly
     masm.loadPtr(Address(InstanceReg, Instance::offsetOfDebugFilter()),
                  scratch);
-    masm.branchTest32(Assembler::NonZero, Address(scratch, func_.index / 32),
+    masm.branchTest32(Assembler::NonZero,
+                      Address(scratch, (func_.index / 32) * sizeof(uint32_t)),
                       Imm32(1 << (func_.index % 32)), &L);
     masm.abiret();
   }
@@ -968,7 +970,7 @@ void BaseCompiler::insertPerFunctionDebugStub() {
     masm.ma_ldr(
         DTRAddr(InstanceReg, DtrOffImm(Instance::offsetOfDebugFilter())), tmp1);
     masm.ma_mov(Imm32(func_.index / 32), tmp2);
-    masm.ma_ldr(DTRAddr(tmp1, DtrRegImmShift(tmp2, LSL, 0)), tmp2);
+    masm.ma_ldr(DTRAddr(tmp1, DtrRegImmShift(tmp2, LSL, 2)), tmp2);
     masm.ma_tst(tmp2, Imm32(1 << func_.index % 32), tmp1, Assembler::Always);
     masm.ma_bx(lr, Assembler::Zero);
   }
@@ -980,7 +982,8 @@ void BaseCompiler::insertPerFunctionDebugStub() {
     // Logic same as ARM64.
     masm.loadPtr(Address(InstanceReg, Instance::offsetOfDebugFilter()),
                  scratch);
-    masm.branchTest32(Assembler::NonZero, Address(scratch, func_.index / 32),
+    masm.branchTest32(Assembler::NonZero,
+                      Address(scratch, (func_.index / 32) * sizeof(uint32_t)),
                       Imm32(1 << (func_.index % 32)), &L);
     masm.abiret();
   }
@@ -2049,7 +2052,6 @@ bool BaseCompiler::callIndirect(uint32_t funcTypeIndex, uint32_t tableIndex,
                                 CodeOffset* slowCallOffset) {
   CallIndirectId callIndirectId =
       CallIndirectId::forFuncType(codeMeta_, funcTypeIndex);
-  MOZ_ASSERT(callIndirectId.kind() != CallIndirectIdKind::AsmJS);
 
   const TableDesc& table = codeMeta_.tables[tableIndex];
   CallSiteDesc desc(bytecodeOffset(), CallSiteKind::Indirect);
@@ -2252,17 +2254,18 @@ CodeOffset BaseCompiler::builtinCall(SymbolicAddress builtin,
   return callSymbolic(builtin, call);
 }
 
-CodeOffset BaseCompiler::builtinInstanceMethodCall(
+void BaseCompiler::builtinInstanceMethodCall(
     const SymbolicAddressSignature& builtin, const ABIArg& instanceArg,
-    const FunctionCall& call) {
+    const FunctionCall& call, CodeOffset* callStackMapKey,
+    CodeOffset* trapStackMapKey) {
 #ifndef RABALDR_PIN_INSTANCE
   // Builtin method calls assume the instance register has been set.
   fr.loadInstancePtr(InstanceReg);
 #endif
   CallSiteDesc desc(bytecodeOffset(), CallSiteKind::Symbolic);
-  return masm.wasmCallBuiltinInstanceMethod(desc, instanceArg, builtin.identity,
-                                            builtin.failureMode,
-                                            builtin.failureTrap);
+  masm.wasmCallBuiltinInstanceMethod(desc, instanceArg, builtin.identity,
+                                     builtin.failureMode, builtin.failureTrap,
+                                     callStackMapKey, trapStackMapKey);
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -6551,12 +6554,18 @@ bool BaseCompiler::emitInstanceCall(const SymbolicAddressSignature& builtin) {
     }
     passArg(t, peek(numNonInstanceArgs - i), &baselineCall);
   }
-  CodeOffset raOffset =
-      builtinInstanceMethodCall(builtin, instanceArg, baselineCall);
-  if (!createStackMap("emitInstanceCall", raOffset)) {
+
+  CodeOffset callStackMapKey;
+  CodeOffset trapStackMapKey;
+  builtinInstanceMethodCall(builtin, instanceArg, baselineCall,
+                            &callStackMapKey, &trapStackMapKey);
+  if (!createStackMap("emitInstanceCall-call", callStackMapKey)) {
     return false;
   }
-
+  if (trapStackMapKey.bound() &&
+      !createStackMap("emitInstanceCall-trap", trapStackMapKey)) {
+    return false;
+  }
   endCall(baselineCall, stackSpace);
 
   popValueStackBy(numNonInstanceArgs);
@@ -8972,6 +8981,8 @@ bool BaseCompiler::emitArrayFill() {
   if (elementType.isRefRepr()) {
     freePtr(RegPtr(PreBarrierReg));
   }
+
+  sync();
 
   // Perform the fill loop using `numElements` as the loop variable, counting
   // down to zero.
@@ -12313,7 +12324,7 @@ bool BaseCompiler::emitBody() {
         break;
       }
 
-      // asm.js and other private operations
+      // Other private operations
       case uint16_t(Op::MozPrefix): {
         if (op.b1 != uint32_t(MozOp::CallBuiltinModuleFunc) ||
             !codeMeta_.isBuiltinModule()) {
@@ -12572,10 +12583,6 @@ bool BaseCompiler::init() {
     MOZ_ASSERT_IF(isMem64(memoryIndex),
                   !codeMeta_.hugeMemoryEnabled(memoryIndex));
   }
-  // asm.js is not supported in baseline
-  MOZ_ASSERT(!codeMeta_.isAsmJS());
-  // Only asm.js modules have call site line numbers
-  MOZ_ASSERT(func_.callSiteLineNums.empty());
 
   ra.init(this);
 
@@ -12633,7 +12640,6 @@ bool js::wasm::BaselineCompileFunctions(const CodeMetadata& codeMeta,
                                         CompiledCode* code,
                                         UniqueChars* error) {
   MOZ_ASSERT(compilerEnv.tier() == Tier::Baseline);
-  MOZ_ASSERT(codeMeta.kind == ModuleKind::Wasm);
 
   // The MacroAssembler will sometimes access the jitContext.
 
@@ -12662,7 +12668,7 @@ bool js::wasm::BaselineCompileFunctions(const CodeMetadata& codeMeta,
   }
 
   for (const FuncCompileInput& func : inputs) {
-    Decoder d(func.begin, func.end, func.lineOrBytecode, error);
+    Decoder d(func.begin, func.end, func.bytecodeOffset, error);
 
     // Build the local types vector.
 

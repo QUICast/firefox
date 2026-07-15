@@ -27,6 +27,7 @@
 #include "nsIXPConnect.h"
 #include "nsJSUtils.h"
 #include "nsPIDOMWindow.h"
+#include "nsPIDOMWindowInlines.h"
 #include "nsPresContext.h"
 #include "nsReadableUtils.h"
 #include "nsServiceManagerUtils.h"
@@ -801,7 +802,7 @@ nsresult nsJSContext::AddSupportsPrimitiveTojsvals(JSContext* aCx,
 
       p->GetData(&data);
 
-      *aArgv = ::JS_NumberValue(data);
+      aArgv->setNumber(data);
 
       break;
     }
@@ -813,7 +814,7 @@ nsresult nsJSContext::AddSupportsPrimitiveTojsvals(JSContext* aCx,
 
       p->GetData(&data);
 
-      *aArgv = ::JS_NumberValue(data);
+      aArgv->setNumber(data);
 
       break;
     }
@@ -2070,7 +2071,7 @@ class nsJSArgArray final : public nsIJSArgArray {
                nsresult* prv);
 
   // nsISupports
-  NS_DECL_CYCLE_COLLECTING_ISUPPORTS
+  NS_DECL_CYCLE_COLLECTING_ISUPPORTS_FINAL
   NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS_AMBIGUOUS(nsJSArgArray,
                                                          nsIJSArgArray)
 

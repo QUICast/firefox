@@ -69,15 +69,13 @@
    optionally be replaced with inline definitions when Proton is removed. */
 .urlbar,
 #searchbar {
-  --urlbar-background-background-color: var(--toolbar-field-background-color);
-  --urlbar-background-background-color-focused: var(--toolbar-field-background-color-focus);
-  --urlbar-background-border: none;
-  --urlbar-background-border-breakout: none;
+  --urlbar-background-border: var(--urlbar-input-container-border-width) solid transparent;
+  --urlbar-background-border-breakout: var(--urlbar-input-container-border-width) solid transparent;
   --urlbar-background-border-radius: var(--urlbarview-border-radius);
   --urlbar-background-border-top-radius-breakout-compact: min(var(--urlbar-background-border-radius), calc(var(--urlbar-min-height) / 2));
   --urlbar-background-box-shadow-breakout: 0 0 14px 0 var(--chrome-box-shadow);
   --urlbar-background-box-shadow-breakout-compact: none;
-  --urlbar-background-inset-breakout: calc(var(--urlbar-min-height) / 2 - var(--border-radius-xxlarge));
+  --urlbar-background-inset-breakout: calc(var(--urlbar-min-height) / 2 - var(--urlbarview-border-radius));
   --urlbar-background-inset-breakout-compact: 0;
   --urlbar-background-outline-focused: none;
   --urlbar-input-container-border: var(--urlbar-input-container-border-width) solid var(--toolbar-field-border-color);
@@ -213,13 +211,13 @@ toolbar[inactive="true"] .urlbar,
   display: block;
   position: absolute;
   inset: 0;
-  background-color: var(--urlbar-background-background-color);
+  background-color: var(--urlbar-background-color);
   background-clip: border-box;
   border-radius: var(--urlbar-background-border-radius);
   border: var(--urlbar-background-border);
 
   .urlbar:is([focused], [open]) > & {
-    background-color: var(--urlbar-background-background-color-focused);
+    background-color: var(--urlbar-background-color-focus);
   }
 
   .urlbar[focused]:not([suppress-focus-border]) > & {
@@ -272,6 +270,10 @@ toolbar[inactive="true"] .urlbar,
     width: 100%;
     height: 100%;
   }
+
+  > .urlbar-input-box {
+    margin-inline: var(--urlbar-input-gap);
+  }
 }
 
 .urlbar:not([open]) > .urlbarView,
@@ -280,14 +282,36 @@ toolbar[inactive="true"] .urlbar,
 }
 
 #searchbar {
-  background-color: var(--urlbar-background-background-color);
+  background-color: var(--urlbar-background-color);
   background-clip: border-box;
-  border: var(--urlbar-input-container-border);
   border-radius: var(--urlbar-border-radius);
+  outline: var(--urlbar-input-container-border);
+  outline-offset: calc(-1 * var(--urlbar-input-container-border-width));
   overflow: clip;
+  padding-inline-end: var(--urlbar-input-container-padding);
 
   &:focus-within {
-    background-color: var(--urlbar-background-background-color-focused);
+    background-color: var(--urlbar-background-color-focus);
+    outline-color: var(--focus-outline-color);
+    outline-width: var(--urlbar-input-container-border-width-breakout);
+    outline-offset: calc(-1 * var(--urlbar-input-container-border-width-breakout));
+  }
+
+  @media not -moz-pref("browser.nova.enabled") {
+    outline: none;
+    padding-inline-end: 0;
+    border: var(--urlbar-input-container-border);
+
+    &:focus-within {
+      outline: var(--focus-outline);
+
+      /* We used --focus-outline above to inherit its width and style properties,
+         but we still want to use the theme's border-color.
+         --toolbar-field-border-color-focus is set equal to --focus-outline-color
+         on :root, but LWT themes can override this value. */
+      outline-color: var(--toolbar-field-border-color-focus);
+      border-color: transparent;
+    }
   }
 }
 
@@ -302,6 +326,12 @@ toolbar[inactive="true"] .urlbar,
   margin: 0;
   padding: 0;
   outline: none;
+}
+
+.searchbar-textbox::selection,
+.urlbar-input::selection {
+  /* urlbar and searchbar */
+  border-radius: var(--urlbar-selection-border-radius);
 }
 
 #urlbar-input {
@@ -344,10 +374,6 @@ toolbar[inactive="true"] .urlbar,
   .urlbar:not([focused])[textoverflow="left"][domaindir="rtl"] > .urlbar-input-container > .urlbar-input-box > & {
     mask-image: linear-gradient(to right, transparent var(--urlbar-scheme-size), black calc(var(--urlbar-scheme-size) + 3ch));
   }
-
-  &::selection {
-    border-radius: var(--urlbar-selection-border-radius);
-  }
 }
 
 #urlbar-scheme {
@@ -364,40 +390,33 @@ toolbar[inactive="true"] .urlbar,
   }
 }
 
-#searchbar:focus-within {
-  outline: var(--focus-outline);
-
-  /* We used --focus-outline above to inherit its width and style properties,
-     but we still want to use the theme's border-color.
-     --toolbar-field-border-color-focus is set equal to --focus-outline-color
-     on :root, but LWT themes can override this value. */
-  outline-color: var(--toolbar-field-border-color-focus);
-  border-color: transparent;
-}
-
 .urlbar:is([focused], [open]),
 #searchbar:focus-within {
   color: var(--toolbar-field-text-color-focus);
 }
 
 @media -moz-pref("browser.nova.enabled") {
-  .urlbar:not(moz-smartbar)[breakout] {
+  .urlbar:not(moz-smartbar) {
     > .urlbar-input-container {
-      height: var(--urlbar-height);
       outline: var(--urlbar-input-container-border);
       outline-offset: calc(-1 * var(--urlbar-input-container-border-width));
     }
 
-    &[breakout-extend] {
+    &[breakout] > .urlbar-input-container {
+      height: var(--urlbar-height);
+    }
+
+    &[breakout][breakout-extend] {
       height: auto;
     }
 
-    &[breakout-extend] > .urlbar-input-container {
+    &[focused] > .urlbar-input-container,
+    &[breakout][breakout-extend] > .urlbar-input-container {
       outline-width: var(--urlbar-input-container-border-width-breakout);
       outline-offset: calc(-1 * var(--urlbar-input-container-border-width-breakout));
     }
 
-    &[breakout-extend][focused] > .urlbar-input-container {
+    &[focused] > .urlbar-input-container {
       outline-color: var(--focus-outline-color);
     }
   }
@@ -610,9 +629,9 @@ toolbar[inactive="true"] .urlbar,
 /* Urlbar search mode indicator */
 #urlbar-search-mode-indicator {
   display: none;
+  height: var(--urlbar-basic-component-size);
   background-color: var(--urlbar-box-background-color);
   color: var(--urlbar-box-text-color);
-  margin-inline-end: 8px;
   align-items: center;
   border-radius: var(--urlbar-inner-border-radius);
   padding-inline: 8px 6px;
@@ -740,7 +759,9 @@ toolbar[inactive="true"] .urlbar,
 #urlbar-revert-button-container,
 .urlbar-page-action,
 .urlbar-go-button,
-.search-go-button {
+.search-go-button,
+.searchbar-textbox::-moz-search-clear-button,
+.urlbar-input::-moz-search-clear-button {
   width: var(--urlbar-basic-component-size);
   height: var(--urlbar-basic-component-size);
   border-radius: var(--urlbar-inner-border-radius);
@@ -762,6 +783,26 @@ toolbar[inactive="true"] .urlbar,
     color: var(--urlbar-box-text-color-hover);
     outline-color: var(--toolbarbutton-outline-color-active);
   }
+}
+
+.searchbar-textbox::-moz-search-clear-button,
+.urlbar-input::-moz-search-clear-button {
+  /* Overrides forms.css */
+  padding: 0;
+}
+
+.searchbar-textbox::-moz-search-clear-button:hover,
+.urlbar-input::-moz-search-clear-button:hover {
+  background-color: var(--urlbar-box-background-color-hover);
+  color: var(--urlbar-box-text-color-hover);
+  outline-color: var(--toolbarbutton-outline-color-hover);
+}
+
+.searchbar-textbox::-moz-search-clear-button:hover:active,
+.urlbar-input::-moz-search-clear-button:hover:active {
+  background-color: var(--urlbar-box-background-color-active);
+  color: var(--urlbar-box-text-color-hover);
+  outline-color: var(--toolbarbutton-outline-color-active);
 }
 
 .urlbar-page-action {
@@ -1052,6 +1093,7 @@ toolbar[inactive="true"] .urlbar,
   #translations-button[translationsactive] > & {
     fill: var(--toolbarbutton-icon-fill-attention);
     fill-opacity: 1;
+    margin-inline: var(--space-small);
   }
 }
 
@@ -1061,7 +1103,7 @@ toolbar[inactive="true"] .urlbar,
   list-style-image: url("chrome://global/skin/icons/loading.svg");
   fill: var(--toolbarbutton-icon-fill-attention);
   fill-opacity: 1;
-  margin-inline: 1px;
+  margin-inline-end: var(--space-small);
 }
 
 #translations-button-locale {
@@ -1075,7 +1117,7 @@ toolbar[inactive="true"] .urlbar,
   padding-top: 3px;
   padding-inline: 1px;
   box-sizing: border-box;
-  margin-inline: 2px -2px;
+  margin-inline-end: var(--space-small);
   margin-block: -2px;
 }
 
@@ -1278,7 +1320,6 @@ toolbar[inactive="true"] .urlbar,
 }
 
 .searchmode-switcher {
-  margin-inline-end: var(--urlbar-searchmodeswitcher-margin-inline-end);
   height: var(--urlbar-basic-component-size);
   --button-border: none;
   --button-padding: 0 var(--space-small);
@@ -1292,6 +1333,11 @@ toolbar[inactive="true"] .urlbar,
   Unfortunately, it gets overridden by --button-background-color-active
   during clicks.*/
   --button-background-color-selected: var(--button-background-color);
+
+  --button-text-color: var(--urlbar-box-text-color);
+  --button-text-color-hover: var(--urlbar-box-text-color-hover);
+  --button-text-color-active: var(--urlbar-box-text-color-hover);
+  --button-text-color-selected: var(--urlbar-box-text-color);
 
   --button-background-color: var(--urlbar-box-background-color);
   @media -moz-pref("browser.urlbar.unifiedSearchButton.always") {
@@ -1310,9 +1356,10 @@ toolbar[inactive="true"] .urlbar,
     --button-background-color: var(--urlbar-box-background-color-focus);
   }
 
-  /* No need space if page information icons such as lock and shield is shown */
-  .urlbar[pageproxystate="valid"] & {
-    margin-inline-end: 0;
+  &[offscreen] {
+    /* Display as off-screen to get focus */
+    position: fixed;
+    top: -999px;
   }
 
   .urlbar[searchmode] & {
@@ -1444,11 +1491,6 @@ toolbar[inactive="true"] .urlbar,
   position: absolute;
 }
 
-/* Hide footer separator if there are no menuitems between both separators */
-.searchmode-switcher-panel-installed-engine-separator + .searchmode-switcher-panel-footer-separator {
-  display: none;
-}
-
 @media -moz-pref("browser.urlbar.searchModeSwitcher.featureGate") or -moz-pref("browser.urlbar.scotchBonnet.enableOverride") {
   #urlbar[searchmode] > .urlbar-input-container > #urlbar-search-mode-indicator {
     display: none;
@@ -1462,13 +1504,5 @@ toolbar[inactive="true"] .urlbar,
     #urlbar[pageproxystate="invalid"]:not([persistsearchterms]) #identity-box {
       display: none;
     }
-  }
-}
-
-@media not -moz-pref("browser.urlbar.unifiedSearchButton.always") {
-  .urlbar:not([unifiedsearchbutton-available]) > .urlbar-input-container > .searchmode-switcher {
-    /* Display as off-screen to get focus */
-    position: fixed;
-    top: -999px;
   }
 }

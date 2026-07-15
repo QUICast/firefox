@@ -217,6 +217,10 @@ DrawTargetWebgl::~DrawTargetWebgl() {
 SharedContextWebgl::SharedContextWebgl() = default;
 
 SharedContextWebgl::~SharedContextWebgl() {
+  // Detach weak references first so that no cleanup below can promote a
+  // WeakPtr to this object while it is being destroyed, which would AddRef
+  // an object with a zero refcount and recursively delete it on Release.
+  DetachWeakPtr();
   // Detect context loss before deletion.
   if (mWebgl) {
     ExitTlsScope();
@@ -460,17 +464,22 @@ bool DrawTargetWebgl::Init(const IntSize& size, const SurfaceFormat format,
     return false;
   }
 
-  auto handle = mozilla::ipc::shared_memory::Create(shmemSize);
+  // The handle must be frozen to prevent resizing or writing to the buffer
+  // backing our local Skia DrawTarget.
+  auto handle = mozilla::ipc::shared_memory::CreateFreezable(shmemSize);
   if (NS_WARN_IF(!handle)) {
     return false;
   }
-  auto mapping = handle.Map();
+  auto mapping = std::move(handle).Map();
   if (NS_WARN_IF(!mapping)) {
     return false;
   }
 
-  mShmemHandle = std::move(handle).ToReadOnly();
-  mShmem = std::move(mapping);
+  std::tie(mShmemHandle, mShmem) =
+      std::move(mapping).FreezeWithMutableMapping();
+  if (NS_WARN_IF(!mShmemHandle) || NS_WARN_IF(!mShmem)) {
+    return false;
+  }
 
   mSkia = new DrawTargetSkia;
   auto stride = layers::ImageDataSerializer::ComputeRGBStride(
@@ -1249,7 +1258,7 @@ bool SharedContextWebgl::ReadInto(uint8_t* aDstData, int32_t aDstStride,
   if (aBuffer) {
     mWebgl->BindBuffer(LOCAL_GL_PIXEL_PACK_BUFFER, aBuffer);
     mWebgl->ReadPixelsPbo(desc, 0);
-    mWebgl->BindBuffer(LOCAL_GL_PIXEL_PACK_BUFFER, 0);
+    mWebgl->BindBuffer(LOCAL_GL_PIXEL_PACK_BUFFER, nullptr);
   } else {
     Range<uint8_t> range = {aDstData, size_t(aDstStride) * aBounds.height};
     mWebgl->ReadPixelsInto(desc, range);
@@ -1339,7 +1348,7 @@ already_AddRefed<WebGLBuffer> SharedContextWebgl::ReadSnapshotIntoPBO(
   mWebgl->BindBuffer(LOCAL_GL_PIXEL_PACK_BUFFER, pbo);
   mWebgl->UninitializedBufferData_SizeOnly(LOCAL_GL_PIXEL_PACK_BUFFER, bufSize,
                                            LOCAL_GL_STREAM_READ);
-  mWebgl->BindBuffer(LOCAL_GL_PIXEL_PACK_BUFFER, 0);
+  mWebgl->BindBuffer(LOCAL_GL_PIXEL_PACK_BUFFER, nullptr);
   if (!ReadInto(nullptr, pboStride.value(), format, bounds, aHandle, pbo)) {
     return nullptr;
   }
@@ -1387,7 +1396,7 @@ already_AddRefed<DataSourceSurface> SharedContextWebgl::ReadSnapshotFromPBO(
       LOCAL_GL_PIXEL_PACK_BUFFER, 0, range, aSize.height,
       BytesPerPixel(aFormat) * aSize.width, pboStride.value(),
       dstMap.GetStride());
-  mWebgl->BindBuffer(LOCAL_GL_PIXEL_PACK_BUFFER, 0);
+  mWebgl->BindBuffer(LOCAL_GL_PIXEL_PACK_BUFFER, nullptr);
   if (success) {
     return surface.forget();
   }
@@ -1586,7 +1595,12 @@ void SharedContextWebgl::ResetPathVertexBuffer() {
   mPathVertexOffset = sizeof(kRectVertexData);
 
   size_t newCapacity = mPathVertexBuffer->ByteLength();
-  AddUntrackedTextureMemory(newCapacity);
+  if (newCapacity > 0) {
+    AddUntrackedTextureMemory(newCapacity);
+  } else {
+    mPathVertexCapacity = 0;
+    mPathVertexOffset = 0;
+  }
 
   if (mWGROutputBuffer &&
       (!mPathVertexCapacity || newCapacity != oldCapacity)) {
@@ -2666,7 +2680,7 @@ bool SharedContextWebgl::UploadSurface(DataSourceSurface* aData,
     mWebgl->BindTexture(LOCAL_GL_TEXTURE_2D, mLastTexture);
   }
   if (!aData && aZero) {
-    mWebgl->BindBuffer(LOCAL_GL_PIXEL_UNPACK_BUFFER, 0);
+    mWebgl->BindBuffer(LOCAL_GL_PIXEL_UNPACK_BUFFER, nullptr);
   }
   return true;
 }
@@ -6357,13 +6371,19 @@ bool DrawTargetWebgl::ReadIntoSkia() {
     } else {
       // If there's no existing snapshot and we can successfully map the Skia
       // target for reading, then try to read into that.
+      bool readInto = false;
       if (!mSnapshot && mSkia->LockBits(&data, &size, &stride, &format)) {
-        (void)ReadInto(data, stride);
+        if (size == GetSize()) {
+          readInto = ReadInto(data, stride);
+        }
         mSkia->ReleaseBits(data);
-      } else if (RefPtr<SourceSurface> snapshot = Snapshot()) {
-        // Otherwise, fall back to getting a snapshot from WebGL if available
-        // and then copying that to Skia.
-        mSkia->CopySurface(snapshot, GetRect(), IntPoint(0, 0));
+      }
+      if (!readInto) {
+        if (RefPtr<SourceSurface> snapshot = Snapshot()) {
+          // Otherwise, fall back to getting a snapshot from WebGL if available
+          // and then copying that to Skia.
+          mSkia->CopySurface(snapshot, GetRect(), IntPoint(0, 0));
+        }
       }
       didReadback = true;
     }
@@ -6501,7 +6521,10 @@ bool DrawTargetWebgl::UsageProfile::RequiresRefresh() const {
 }
 
 void SharedContextWebgl::CachePrefs() {
-  uint32_t capacity = StaticPrefs::gfx_canvas_accelerated_gpu_path_size() << 20;
+  uint32_t capacity =
+      std::min(StaticPrefs::gfx_canvas_accelerated_gpu_path_size(),
+               uint32_t(INT32_MAX) >> 20)
+      << 20;
   if (capacity != mPathVertexCapacity) {
     mPathVertexCapacity = capacity;
     if (mPathCache) {

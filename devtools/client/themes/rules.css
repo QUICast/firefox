@@ -686,6 +686,8 @@
   margin-block: -1px;
   border: none;
   outline-offset: 1px;
+  min-width: 1ch;
+
   &:focus-visible {
     /* Unset the outline box shadow to prevent overlapping previous/next properties.
        This is safe since those input won't be this part of the UI won't get */
@@ -986,4 +988,17 @@
 [data-function-expression] .css-explainers-function-name {
   text-decoration: 1px solid underline;
   text-underline-offset: 2px;
+}
+
+[data-function-expression].tooltip-anchor {
+  text-decoration: underline;
+  text-decoration-color: var(--theme-highlight-blue);
+  text-decoration-style: dotted;
+  text-decoration-skip-ink: none;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 2px;
+
+  .css-explainers-function-name {
+    text-decoration: none;
+  }
 }

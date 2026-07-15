@@ -8,7 +8,7 @@ use crate::applicable_declarations::{
     ApplicableDeclarationBlock, ApplicableDeclarationList, CascadePriority, ScopeProximity,
 };
 use crate::computed_value_flags::ComputedValueFlags;
-use crate::context::{CascadeInputs, QuirksMode};
+use crate::context::{CascadeInputs, QuirksMode, TreeCountingCaches};
 use crate::custom_properties::ComputedCustomProperties;
 use crate::custom_properties::{parse_name, SpecifiedValue};
 use crate::derives::*;
@@ -50,7 +50,7 @@ use crate::shared_lock::{Locked, SharedRwLockReadGuard, StylesheetGuards};
 use crate::sharing::{RevalidationResult, ScopeRevalidationResult};
 use crate::stylesheet_set::{DataValidity, DocumentStylesheetSet, SheetRebuildKind};
 use crate::stylesheet_set::{DocumentStylesheetFlusher, SheetCollectionFlusher};
-use crate::stylesheets::container_rule::ContainerCondition;
+use crate::stylesheets::container_rule::{ContainerAttributeDependencyKind, ContainerCondition};
 use crate::stylesheets::import_rule::ImportLayer;
 use crate::stylesheets::keyframes_rule::KeyframesAnimation;
 use crate::stylesheets::layer_rule::{LayerName, LayerOrder};
@@ -929,9 +929,11 @@ impl Stylist {
         {
             let mut seen_names = PrecomputedHashSet::default();
             let mut rule_cache_conditions = RuleCacheConditions::default();
+            let mut tree_counting_caches = TreeCountingCaches::default();
             let context = computed::Context::new_for_initial_at_property_value(
                 self,
                 &mut rule_cache_conditions,
+                &mut tree_counting_caches,
             );
 
             for (k, v) in self.custom_property_script_registry().properties().iter() {
@@ -1374,6 +1376,7 @@ impl Stylist {
             &PositionTryFallbacksTryTactic::default(),
             /* rule_cache = */ None,
             &mut RuleCacheConditions::default(),
+            &mut TreeCountingCaches::default(),
         )
     }
 
@@ -1456,6 +1459,7 @@ impl Stylist {
                     &name_and_try_tactic.try_tactic,
                     /* rule_cache = */ None,
                     &mut RuleCacheConditions::default(),
+                    &mut TreeCountingCaches::default(),
                 ))
             },
         )
@@ -1485,6 +1489,7 @@ impl Stylist {
         try_tactic: &PositionTryFallbacksTryTactic,
         rule_cache: Option<&RuleCache>,
         rule_cache_conditions: &mut RuleCacheConditions,
+        tree_counting_caches: &mut TreeCountingCaches,
     ) -> Arc<ComputedValues>
     where
         E: TElement,
@@ -1529,6 +1534,7 @@ impl Stylist {
             rule_cache,
             rule_cache_conditions,
             element,
+            tree_counting_caches,
         )
     }
 
@@ -2024,6 +2030,7 @@ impl Stylist {
             /* rule_cache = */ None,
             &mut Default::default(),
             /* element = */ None,
+            &mut TreeCountingCaches::default(),
         )
     }
 
@@ -3359,6 +3366,11 @@ pub struct CascadeData {
     /// The list of container conditions, indexed by their id.
     container_conditions: SmallVec<[ContainerConditionReference; 1]>,
 
+    /// A map of attributes that are referenced by `attr()` functions in container queries.
+    /// The attribute exists as a key if it is referenced inside a style container query.
+    /// The enum value tells us whether or not the container query condition is named.
+    attr_function_dependencies: PrecomputedHashMap<LocalName, ContainerAttributeDependencyKind>,
+
     /// The list of scope conditions, indexed by their id.
     scope_conditions: SmallVec<[ScopeConditionReference; 1]>,
 
@@ -3435,6 +3447,7 @@ impl CascadeData {
             layer_id: Default::default(),
             layers: smallvec::smallvec![CascadeLayer::root()],
             container_conditions: smallvec::smallvec![ContainerConditionReference::none()],
+            attr_function_dependencies: PrecomputedHashMap::default(),
             scope_conditions: smallvec::smallvec![ScopeConditionReference::none()],
             scope_subject_map: Default::default(),
             extra_data: ExtraStyleData::default(),
@@ -3551,6 +3564,22 @@ impl CascadeData {
     #[inline]
     pub fn might_have_attribute_dependency(&self, local_name: &LocalName) -> bool {
         self.attribute_dependencies.contains(local_name)
+    }
+
+    /// Returns whether the given attribute might appear in an attribute
+    /// function inside a container rule. Unnamed container means that the
+    /// value is used in an unamed style container rule. NamedContainer means
+    /// that the value is used in a named container rule. None means the value
+    /// is not used in a style container prelude at all.
+    #[inline]
+    pub fn might_have_attribute_dependency_in_container(
+        &self,
+        local_name: &LocalName,
+    ) -> ContainerAttributeDependencyKind {
+        self.attr_function_dependencies
+            .get(local_name)
+            .copied()
+            .unwrap_or(ContainerAttributeDependencyKind::None)
     }
 
     /// Returns whether the given ID might appear in an ID selector in the
@@ -3871,7 +3900,7 @@ impl CascadeData {
             }
 
             debug_assert!(!pseudo_elements
-                    .iter()
+                .iter()
                 .any(|p| p.is_precomputed() || p.is_unknown_webkit_pseudo_element()));
 
             let selector = match ancestor_selectors {
@@ -4321,6 +4350,15 @@ impl CascadeData {
                     };
                     self.container_conditions.push(condition);
                     containing_rule_state.container_condition_id = id;
+
+                    if rebuild_kind.should_rebuild_invalidation() {
+                        for condition in rule.conditions.0.iter() {
+                            condition.insert_attribute_references_in_dependency_map(
+                                &mut self.attr_function_dependencies,
+                                &mut self.attribute_dependencies,
+                            );
+                        }
+                    }
                 },
                 CssRule::StartingStyle(..) => {
                     containing_rule_state
@@ -4712,6 +4750,7 @@ impl CascadeData {
         self.relative_selector_invalidation_map.clear();
         self.additional_relative_selector_invalidation_map.clear();
         self.attribute_dependencies.clear();
+        self.attr_function_dependencies.clear();
         self.nth_of_attribute_dependencies.clear();
         self.nth_of_custom_state_dependencies.clear();
         self.nth_of_class_dependencies.clear();

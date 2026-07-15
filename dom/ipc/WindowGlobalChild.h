@@ -37,7 +37,7 @@ class WindowGlobalChild final : public WindowGlobalActor,
   friend class PWindowGlobalChild;
 
  public:
-  NS_DECL_CYCLE_COLLECTING_ISUPPORTS
+  NS_DECL_CYCLE_COLLECTING_ISUPPORTS_FINAL
   NS_DECL_CYCLE_COLLECTION_WRAPPERCACHE_CLASS(WindowGlobalChild)
 
   static already_AddRefed<WindowGlobalChild> GetByInnerWindowId(
@@ -64,10 +64,6 @@ class WindowGlobalChild final : public WindowGlobalActor,
 
   nsIURI* GetDocumentURI() override { return mDocumentURI; }
   void SetDocumentURI(nsIURI* aDocumentURI);
-  // See the corresponding comment for `UpdateDocumentPrincipal` in
-  // PWindowGlobal on why and when this is allowed
-  void SetDocumentPrincipal(nsIPrincipal* aNewDocumentPrincipal,
-                            nsIPrincipal* aNewDocumentStoragePrincipal);
 
   nsIPrincipal* DocumentPrincipal() { return mDocumentPrincipal; }
 

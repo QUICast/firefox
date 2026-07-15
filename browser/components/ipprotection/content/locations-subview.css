@@ -43,13 +43,19 @@
     }
   }
 
+  /* Keep idle items transparent so only hovered/current items stand out. */
+  @media (forced-colors) {
+    background-color: transparent;
+  }
+
   &:focus-visible {
     outline: var(--focus-outline);
     outline-offset: var(--focus-outline-inset);
   }
 
   &[aria-checked="true"] {
-    background-color: var(--button-background-color-selected);
+    background-color: var(--button-background-color-menu-selected);
+    color: var(--button-text-color-menu-selected);
     .location-check {
       visibility: visible;
     }
@@ -58,27 +64,23 @@
     }
   }
 
-  &[disabled] {
+  &[aria-disabled] {
     .location-label,
     .location-description,
     .location-unavailable-label {
       color: var(--text-color-deemphasized);
     }
   }
+}
 
-  @media (prefers-contrast) {
-    border: var(--button-border);
-  }
-
-  @media (forced-colors) {
-    border: var(--button-border);
-  }
+#location-label-recommended {
+  font-weight: var(--font-weight-bold);
 }
 
 .location-check {
   visibility: hidden;
   -moz-context-properties: fill;
-  fill: var(--icon-color);
+  fill: currentColor;
   height: var(--icon-size);
   width: var(--icon-size);
 }

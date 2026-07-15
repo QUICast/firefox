@@ -56,6 +56,8 @@ class MockMLEngine {
 
   async run(request) {
     const texts = request.args;
+    // add small delay for test
+    await new Promise(resolve => do_timeout(10, resolve));
     return texts.map(text => {
       if (typeof text !== "string" || text.trim() === "") {
         throw new Error("Invalid input: text must be a non-empty string");
@@ -506,6 +508,12 @@ add_task(async function test_chunksTelemetry() {
 
   Assert.equal(Glean.places.semanticHistoryMaxChunksCount.testGetValue(), 1);
 
+  Assert.notEqual(
+    Glean.places.databaseSemanticHistoryNumEntries.testGetValue(),
+    null,
+    "Number of embeddings should be reported to telemetry"
+  );
+
   await semanticManager.shutdown();
 });
 
@@ -675,4 +683,274 @@ add_task(async function test_rowid_conflict() {
   Assert.deepEqual(entry.vector, vector, "Vector should be the new one");
 
   await semanticManager.shutdown();
+});
+
+add_task(async function test_infer_respects_distance_threshold() {
+  await PlacesUtils.history.clear();
+  Services.prefs.setBoolPref("places.semanticHistory.featureGate", true);
+
+  // Build a query vector and two entries: one pointing in nearly the same
+  // direction (cosine distance ~0) and one orthogonal to it (cosine distance
+  // ~1).
+  const makeVector = (size, components) => {
+    let v = Array(size).fill(0);
+    for (let [i, val] of Object.entries(components)) {
+      v[i] = val;
+    }
+    return v;
+  };
+
+  const searchString = "search query string";
+  const embeddingSize =
+    createPlacesSemanticHistoryManager().embedder.embeddingSize;
+  const queryVector = makeVector(embeddingSize, { 0: 1 });
+  const entries = [
+    {
+      url: "https://near.moz.com/",
+      title: "near entry page",
+      vector: makeVector(embeddingSize, { 0: 1, 1: 0.05 }),
+    },
+    {
+      url: "https://far.moz.com/",
+      title: "far entry page",
+      vector: makeVector(embeddingSize, { 1: 1 }),
+    },
+  ];
+
+  await PlacesTestUtils.addVisits(entries);
+
+  // Run infer() with the given threshold and return the resulting URLs. On the
+  // first call the entries are indexed into a fresh semantic database; later
+  // calls reuse it. The "search query string" entry is only used to embed the
+  // query and is not added to history.
+  async function inferUrls(distanceThreshold, { index = false } = {}) {
+    let manager = createPlacesSemanticHistoryManager({
+      changeThresholdCount: 1,
+      deferredTaskInterval: 100, // lower time to avoid timeouts.
+      distanceThreshold,
+    });
+    if (index) {
+      await manager.semanticDB.removeDatabaseFiles();
+    }
+    await manager.getConnection();
+    manager.embedder.setEngine(
+      new MockMLEngine(embeddingSize, [
+        ...entries,
+        { title: searchString, vector: queryVector },
+      ])
+    );
+    if (index) {
+      await TestUtils.topicObserved(
+        "places-semantichistorymanager-update-complete"
+      );
+    }
+    let { results } = await manager.infer({ searchString });
+    await manager.shutdown();
+    return results;
+  }
+
+  let results = await inferUrls(0.5, { index: true });
+  let urls = results.map(r => r.url);
+  Assert.ok(
+    urls.includes("https://near.moz.com/"),
+    "Entry within the distance threshold should be returned"
+  );
+  Assert.ok(
+    !urls.includes("https://far.moz.com/"),
+    "Entry beyond the distance threshold should be filtered out"
+  );
+  for (let r of results) {
+    Assert.lessOrEqual(
+      r.distance,
+      0.5,
+      "Every returned distance should be within the threshold"
+    );
+  }
+
+  // With a permissive threshold the far entry should come back, proving the
+  // threshold value is actually honored rather than ignored.
+  let permissiveUrls = (await inferUrls(1.5)).map(r => r.url);
+  Assert.ok(
+    permissiveUrls.includes("https://far.moz.com/"),
+    "Far entry should be returned when the threshold is permissive"
+  );
+});
+
+// Adds enough history to require several indexing chunks. The throttle only
+// evaluates once it has a full window (CHUNK_LATENCY_MONITORING_WINDOW, 9) of
+// recent chunk samples, so with the default chunk size of 25 we need clearly
+// more than 9 * 25 = 225 entries for the throttle check to run while work still
+// remains.
+async function addManyVisits(prefix, count = 275) {
+  let entries = Array.from({ length: count }, (_, i) => ({
+    url: `https://${prefix}${i}.moz.com/`,
+    title: `${prefix} entry ${i}`,
+  }));
+  await PlacesTestUtils.addVisits(entries);
+  return entries;
+}
+
+async function countMappings(conn) {
+  let [row] = await conn.execute(
+    `SELECT COUNT(*) AS c FROM vec_history_mapping`
+  );
+  return row.getResultByName("c");
+}
+
+add_task(async function test_failsafe_blocks_indexing() {
+  await PlacesUtils.history.clear();
+  let manager = createPlacesSemanticHistoryManager({
+    rowLimit: 1000,
+    changeThresholdCount: 1,
+    deferredTaskInterval: 100,
+  });
+  await manager.semanticDB.removeDatabaseFiles();
+
+  Services.prefs.setBoolPref("places.semanticHistory.featureGate", true);
+  // Any non-zero chunk duration trips the failsafe.
+  Services.prefs.setIntPref("places.semanticHistory.maxChunkTimeMsFailsafe", 0);
+  Services.fog.testResetFOG();
+
+  let entries = await addManyVisits("failsafe");
+
+  let semanticManager = createPlacesSemanticHistoryManager({
+    rowLimit: 1000,
+    changeThresholdCount: 1,
+    deferredTaskInterval: 100,
+  });
+  let conn = await semanticManager.getConnection();
+  semanticManager.embedder.setEngine(
+    new MockMLEngine(semanticManager.embedder.embeddingSize)
+  );
+
+  await TestUtils.waitForCondition(
+    () => Glean.places.semanticHistoryIndexingStopped.failsafe.testGetValue(),
+    "Indexing should stop because of the failsafe threshold"
+  );
+
+  Assert.equal(
+    Glean.places.semanticHistoryIndexingStopped.failsafe.testGetValue(),
+    1,
+    "Failsafe stop should be recorded once"
+  );
+
+  let indexed = await countMappings(conn);
+  Assert.greater(indexed, 0, "Some entries should have been indexed");
+  Assert.less(
+    indexed,
+    entries.length,
+    "Indexing should have stopped before completing"
+  );
+
+  // The failsafe is a hard block for the session: even relaxing the thresholds
+  // and triggering the usual Places observer events must not resume indexing.
+  Services.prefs.setIntPref(
+    "places.semanticHistory.maxChunkTimeMsFailsafe",
+    600000
+  );
+  let runsBefore = semanticManager.getUpdateTaskLatency().length;
+  await PlacesTestUtils.addVisits([
+    { url: "https://failsafe-blocked.moz.com/", title: "failsafe blocked" },
+  ]);
+  await semanticManager.onPagesRankChanged();
+  // Give the deferred task several intervals to (not) run.
+  await new Promise(resolve => do_timeout(600, resolve));
+
+  Assert.equal(
+    semanticManager.getUpdateTaskLatency().length,
+    runsBefore,
+    "Update task should not run again after the failsafe block"
+  );
+  Assert.equal(
+    await countMappings(conn),
+    indexed,
+    "No further entries should be indexed while blocked"
+  );
+
+  Services.prefs.clearUserPref("places.semanticHistory.maxChunkTimeMsFailsafe");
+  await semanticManager.shutdown();
+});
+
+add_task(async function test_soft_threshold_gated_by_min_entries() {
+  // Median chunk time always exceeds the soft threshold; the failsafe stays out
+  // of the way so only the soft logic can stop indexing.
+  Services.prefs.setBoolPref("places.semanticHistory.featureGate", true);
+  Services.prefs.setIntPref("places.semanticHistory.maxChunkTimeMs", 0);
+  Services.prefs.setIntPref(
+    "places.semanticHistory.maxChunkTimeMsFailsafe",
+    600000
+  );
+
+  // Below the minimum: indexing keeps going until it completes.
+  await PlacesUtils.history.clear();
+  Services.prefs.setIntPref(
+    "places.semanticHistory.minEntriesBeforeThrottle",
+    100000
+  );
+  Services.fog.testResetFOG();
+  let entries = await addManyVisits("softlow");
+
+  let manager = createPlacesSemanticHistoryManager({
+    rowLimit: 1000,
+    changeThresholdCount: 1,
+    deferredTaskInterval: 100,
+  });
+  manager.embedder.setEngine(new MockMLEngine(manager.embedder.embeddingSize));
+  await manager.semanticDB.removeDatabaseFiles();
+  let conn = await manager.getConnection();
+
+  await TestUtils.topicObserved(
+    "places-semantichistorymanager-update-complete"
+  );
+  Assert.strictEqual(
+    Glean.places.semanticHistoryIndexingStopped.soft.testGetValue(),
+    null,
+    "Soft threshold should not stop indexing below the minimum"
+  );
+  Assert.greaterOrEqual(
+    await countMappings(conn),
+    entries.length,
+    "All entries should be indexed when below the minimum"
+  );
+  await manager.shutdown();
+
+  // Above the minimum: indexing stops once enough embeddings exist.
+  await PlacesUtils.history.clear();
+  Services.prefs.setIntPref(
+    "places.semanticHistory.minEntriesBeforeThrottle",
+    10
+  );
+  Services.fog.testResetFOG();
+  entries = await addManyVisits("softhigh");
+
+  manager = createPlacesSemanticHistoryManager({
+    rowLimit: 1000,
+    changeThresholdCount: 1,
+    deferredTaskInterval: 100,
+  });
+  manager.embedder.setEngine(new MockMLEngine(manager.embedder.embeddingSize));
+  await manager.semanticDB.removeDatabaseFiles();
+  conn = await manager.getConnection();
+
+  await TestUtils.waitForCondition(
+    () => Glean.places.semanticHistoryIndexingStopped.soft.testGetValue(),
+    "Indexing should stop because of the soft threshold"
+  );
+  Assert.equal(
+    Glean.places.semanticHistoryIndexingStopped.soft.testGetValue(),
+    1,
+    "Soft stop should be recorded once"
+  );
+  Assert.less(
+    await countMappings(conn),
+    entries.length,
+    "Indexing should have stopped before completing"
+  );
+  await manager.shutdown();
+
+  Services.prefs.clearUserPref("places.semanticHistory.maxChunkTimeMs");
+  Services.prefs.clearUserPref("places.semanticHistory.maxChunkTimeMsFailsafe");
+  Services.prefs.clearUserPref(
+    "places.semanticHistory.minEntriesBeforeThrottle"
+  );
 });

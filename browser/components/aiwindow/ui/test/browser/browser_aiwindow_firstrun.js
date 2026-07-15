@@ -3,8 +3,6 @@
 
 "use strict";
 
-const FIRSTRUN_URL = "chrome://browser/content/aiwindow/firstrun.html";
-
 async function openFirstrunPage() {
   const tab = await BrowserTestUtils.openNewForegroundTab(
     gBrowser,
@@ -12,6 +10,121 @@ async function openFirstrunPage() {
   );
   return tab;
 }
+
+function withHomeRegion(region) {
+  const originalRegion = Region.home;
+  Region._setHomeRegion(region, false);
+  registerCleanupFunction(() => {
+    if (originalRegion) {
+      Region._setHomeRegion(originalRegion, false);
+    } else {
+      Services.prefs.clearUserPref("browser.search.region");
+    }
+  });
+}
+
+add_task(async function test_firstrun_europe_promotes_mistral() {
+  withHomeRegion("DE");
+
+  await SpecialPowers.pushPrefEnv({
+    set: [
+      ["browser.smartwindow.firstrun.autoAdvanceMS", 0],
+      ["browser.smartwindow.mistralRelease", true],
+      ["browser.smartwindow.firstrun.modelChoice", ""],
+    ],
+  });
+
+  const tab = await openFirstrunPage();
+
+  await SpecialPowers.spawn(tab.linkedBrowser, [], async () => {
+    const root = content.document.documentElement;
+
+    await ContentTaskUtils.waitForMutationCondition(
+      root,
+      { childList: true, subtree: true, attributes: true },
+      () => content.document.querySelector(".screen.AI_WINDOW_CHOOSE_MODEL")
+    );
+
+    const firstItem = content.document.querySelectorAll(".select-item")[0];
+    Assert.ok(firstItem, "First model card exists");
+
+    await ContentTaskUtils.waitForCondition(
+      () => firstItem.querySelector(".flair"),
+      "Recommended badge appears on the first (Mistral) card"
+    );
+    Assert.ok(
+      firstItem.querySelector(".flair"),
+      "First card has the Recommended flair badge"
+    );
+
+    const radio = firstItem.querySelector(".input");
+    await ContentTaskUtils.waitForCondition(
+      () => radio.checked,
+      "First (Mistral) card is preselected by default"
+    );
+    Assert.ok(radio.checked, "First card is the default selection");
+  });
+
+  Assert.equal(
+    Services.prefs.getStringPref(
+      "browser.smartwindow.firstrun.modelChoice",
+      ""
+    ),
+    "3",
+    "Promoted Mistral model is committed as the default choice"
+  );
+
+  BrowserTestUtils.removeTab(tab);
+  await SpecialPowers.popPrefEnv();
+});
+
+add_task(async function test_firstrun_non_europe_no_promotion() {
+  // "US" is outside the EEA, so there should be no promoted treatment.
+  withHomeRegion("US");
+
+  await SpecialPowers.pushPrefEnv({
+    set: [
+      ["browser.smartwindow.firstrun.autoAdvanceMS", 0],
+      ["browser.smartwindow.mistralRelease", true],
+      ["browser.smartwindow.firstrun.modelChoice", ""],
+    ],
+  });
+
+  const tab = await openFirstrunPage();
+
+  await SpecialPowers.spawn(tab.linkedBrowser, [], async () => {
+    const root = content.document.documentElement;
+
+    await ContentTaskUtils.waitForMutationCondition(
+      root,
+      { childList: true, subtree: true, attributes: true },
+      () => content.document.querySelector(".screen.AI_WINDOW_CHOOSE_MODEL")
+    );
+
+    const items = [...content.document.querySelectorAll(".select-item")];
+    Assert.ok(items.length, "Model cards exist");
+    Assert.ok(
+      !items.some(item => item.querySelector(".flair")),
+      "No Recommended badge is shown outside Europe"
+    );
+    Assert.ok(
+      !items.some(item => item.querySelector(".input").checked),
+      "No model is preselected outside Europe"
+    );
+  });
+
+  Assert.equal(
+    Services.prefs.getStringPref(
+      "browser.smartwindow.firstrun.modelChoice",
+      ""
+    ),
+    "",
+    "No default model is committed outside Europe"
+  );
+
+  BrowserTestUtils.removeTab(tab);
+  await SpecialPowers.popPrefEnv();
+});
 
 add_task(async function test_firstrun_welcome_screen_renders() {
   await SpecialPowers.pushPrefEnv({
@@ -68,7 +181,7 @@ add_task(async function test_launchWindow_shows_firstrun_when_not_completed() {
 
   await AIWindow.launchWindow(gBrowser.selectedBrowser);
 
-  await BrowserTestUtils.waitForCondition(
+  await TestUtils.waitForCondition(
     () => gBrowser.selectedBrowser.currentURI.spec === FIRSTRUN_URL,
     "Should navigate to firstrun.html"
   );
@@ -120,7 +233,7 @@ add_task(async function test_switcher_shows_firstrun_when_not_completed() {
     "Window should have ai-window attribute after switching"
   );
 
-  await BrowserTestUtils.waitForCondition(
+  await TestUtils.waitForCondition(
     () => gBrowser.selectedBrowser.currentURI.spec === FIRSTRUN_URL,
     "Should navigate to firstrun.html"
   );
@@ -227,7 +340,7 @@ add_task(async function test_firstrun_explainer_page_opens() {
 
   await AIWindow.launchWindow(gBrowser.selectedBrowser);
 
-  await BrowserTestUtils.waitForCondition(
+  await TestUtils.waitForCondition(
     () => gBrowser.selectedBrowser.currentURI.spec === FIRSTRUN_URL,
     "Should navigate to firstrun.html"
   );
@@ -284,7 +397,7 @@ add_task(async function test_firstrun_explainer_page_opens() {
     EventUtils.synthesizeMouseAtCenter(letsGoButton, {}, content);
   });
 
-  await BrowserTestUtils.waitForCondition(
+  await TestUtils.waitForCondition(
     () => calls.length,
     "openLinkIn function was called"
   );
@@ -381,7 +494,7 @@ add_task(async function test_firstrun_telemetry() {
     EventUtils.synthesizeMouseAtCenter(letsGoButton, {}, content);
   });
 
-  await BrowserTestUtils.waitForCondition(
+  await TestUtils.waitForCondition(
     () => calls.length,
     "openLinkIn was called after onboarding completion"
   );
@@ -436,6 +549,19 @@ add_task(async function test_firstrun_telemetry() {
     "Model navigate event records 2 for model 2"
   );
 
+  const memoriesNavigateEvents =
+    Glean.smartWindow.onboardingMemoriesNavigate.testGetValue();
+  Assert.equal(
+    memoriesNavigateEvents?.length,
+    1,
+    "One memories navigate event was recorded"
+  );
+  Assert.equal(
+    memoriesNavigateEvents[0].extra.source,
+    "memories-chats,memories-browsing",
+    "Memories navigate event records both default-checked checkbox ids"
+  );
+
   const memoriesSettingsEvents =
     Glean.smartWindow.onboardingMemoriesSettings.testGetValue();
   Assert.equal(
@@ -456,6 +582,11 @@ add_task(async function test_firstrun_telemetry() {
     1,
     "One set default navigate event was recorded"
   );
+  Assert.equal(
+    setdefaultNavigateEvents[0].extra.source,
+    "set-default-window",
+    "Set default navigate event records the default-checked checkbox id"
+  );
 
   const setdefaultSettingsEvents =
     Glean.smartWindow.onboardingSetdefaultSettings.testGetValue();
@@ -475,6 +606,207 @@ add_task(async function test_firstrun_telemetry() {
     completeEvents?.length,
     1,
     "One onboarding complete event was recorded"
+  );
+  Assert.equal(
+    completeEvents[0].extra.model,
+    "2",
+    "Onboarding complete event records the final selected model"
+  );
+  Assert.equal(
+    completeEvents[0].extra.memory_source,
+    "memories-chats,memories-browsing",
+    "Onboarding complete event records the final memories selection"
+  );
+  Assert.equal(
+    completeEvents[0].extra.setdefault_source,
+    "set-default-window",
+    "Onboarding complete event records the final set default selection"
+  );
+
+  BrowserTestUtils.removeTab(tab);
+  win.openLinkIn = originalOpenLinkIn;
+  await SpecialPowers.popPrefEnv();
+});
+
+add_task(async function test_firstrun_telemetry_unchecked() {
+  Services.fog.testResetFOG();
+
+  await SpecialPowers.pushPrefEnv({
+    set: [
+      ["browser.smartwindow.firstrun.autoAdvanceMS", 0],
+      ["browser.smartwindow.firstrun.modelChoice", ""],
+      ["browser.smartwindow.memories.generateFromHistory", true],
+      ["browser.smartwindow.memories.generateFromConversation", true],
+    ],
+  });
+
+  // The firstrun flow runs TelemetryManager, which writes a user value to this
+  // pref. popPrefEnv won't revert a pref it never set, so clear it explicitly to
+  // avoid a "changed preference" leak.
+  registerCleanupFunction(() =>
+    Services.prefs.clearUserPref("browser.smartwindow.lastLLMTelemetryRunTime")
+  );
+
+  const win = Services.wm.getMostRecentWindow("navigator:browser");
+  let calls = [];
+  const originalOpenLinkIn = win.openLinkIn;
+  win.openLinkIn = function (url, where, params) {
+    calls.push({ url, where, params });
+    return null;
+  };
+
+  const tab = await openFirstrunPage();
+  const browser = tab.linkedBrowser;
+
+  await SpecialPowers.spawn(browser, [], async () => {
+    const root = content.document.documentElement;
+
+    await ContentTaskUtils.waitForMutationCondition(
+      root,
+      { childList: true, subtree: true },
+      () => content.document.querySelector(".screen.AI_WINDOW_INTRO")
+    );
+
+    await ContentTaskUtils.waitForMutationCondition(
+      root,
+      { childList: true, subtree: true, attributes: true },
+      () => content.document.querySelector(".screen.AI_WINDOW_CHOOSE_MODEL")
+    );
+
+    const model2Box = content.document.querySelectorAll(".select-item")[1];
+    const nextButton = content.document.querySelector(
+      ".action-buttons > button"
+    );
+
+    Assert.ok(model2Box, "Model 2 box exists");
+    Assert.ok(nextButton, "Next button exists");
+
+    EventUtils.synthesizeMouseAtCenter(model2Box, {}, content);
+    EventUtils.synthesizeMouseAtCenter(nextButton, {}, content);
+
+    await ContentTaskUtils.waitForMutationCondition(
+      root,
+      { childList: true, subtree: true, attributes: true },
+      () => content.document.querySelector(".screen.AI_WINDOW_MEMORIES")
+    );
+
+    // Uncheck both default-checked memories checkboxes.
+    const memoriesChats = content.document.getElementById("memories-chats");
+    const memoriesBrowsing =
+      content.document.getElementById("memories-browsing");
+    Assert.ok(memoriesChats, "Memories chats checkbox exists");
+    Assert.ok(memoriesBrowsing, "Memories browsing checkbox exists");
+
+    // The MultiSelect component applies its default-checked state in a mount
+    // effect, so wait for both checkboxes to be checked before clicking to
+    // uncheck them, otherwise the click can be undone by the initial state.
+    await ContentTaskUtils.waitForCondition(
+      () => memoriesChats.checked && memoriesBrowsing.checked,
+      "Memories checkboxes are checked by default"
+    );
+
+    memoriesChats.click();
+    await ContentTaskUtils.waitForCondition(
+      () => !memoriesChats.checked,
+      "Memories chats checkbox is unchecked"
+    );
+    memoriesBrowsing.click();
+    await ContentTaskUtils.waitForCondition(
+      () => !memoriesBrowsing.checked,
+      "Memories browsing checkbox is unchecked"
+    );
+
+    const memoriesNextButton =
+      content.document.getElementById("additional_button");
+    Assert.ok(memoriesNextButton, "Next button exists on memories screen");
+    EventUtils.synthesizeMouseAtCenter(memoriesNextButton, {}, content);
+
+    await ContentTaskUtils.waitForMutationCondition(
+      root,
+      { childList: true, subtree: true, attributes: true },
+      () => content.document.querySelector(".screen.AI_WINDOW_SET_DEFAULT")
+    );
+
+    // Uncheck the default-checked set default checkbox.
+    const setDefault = content.document.getElementById("set-default-window");
+    Assert.ok(setDefault, "Set default checkbox exists");
+    await ContentTaskUtils.waitForCondition(
+      () => setDefault.checked,
+      "Set default checkbox is checked by default"
+    );
+    setDefault.click();
+    await ContentTaskUtils.waitForCondition(
+      () => !setDefault.checked,
+      "Set default checkbox is unchecked"
+    );
+
+    const letsGoButton = content.document.getElementById("additional_button");
+    Assert.ok(letsGoButton, "Let's go button exists on set default screen");
+    EventUtils.synthesizeMouseAtCenter(letsGoButton, {}, content);
+  });
+
+  await TestUtils.waitForCondition(
+    () => calls.length,
+    "openLinkIn was called after onboarding completion"
+  );
+
+  const memoriesNavigateEvents =
+    Glean.smartWindow.onboardingMemoriesNavigate.testGetValue();
+  Assert.equal(
+    memoriesNavigateEvents?.length,
+    1,
+    "One memories navigate event was recorded"
+  );
+  Assert.equal(
+    memoriesNavigateEvents[0].extra.source,
+    "",
+    "Memories navigate event records an empty source when all are deselected"
+  );
+
+  const memoriesSettingsEvents =
+    Glean.smartWindow.onboardingMemoriesSettings.testGetValue();
+  Assert.equal(
+    memoriesSettingsEvents[0].extra.source,
+    "",
+    "Memories settings event records an empty source when all are deselected"
+  );
+
+  const setdefaultNavigateEvents =
+    Glean.smartWindow.onboardingSetdefaultNavigate.testGetValue();
+  Assert.equal(
+    setdefaultNavigateEvents?.length,
+    1,
+    "One set default navigate event was recorded"
+  );
+  Assert.equal(
+    setdefaultNavigateEvents[0].extra.source,
+    "",
+    "Set default navigate event records an empty source when deselected"
+  );
+
+  const setdefaultSettingsEvents =
+    Glean.smartWindow.onboardingSetdefaultSettings.testGetValue();
+  Assert.equal(
+    setdefaultSettingsEvents[0].extra.source,
+    "",
+    "Set default settings event records an empty source when deselected"
+  );
+
+  const completeEvents = Glean.smartWindow.onboardingComplete.testGetValue();
+  Assert.equal(
+    completeEvents?.length,
+    1,
+    "One onboarding complete event was recorded"
+  );
+  Assert.equal(
+    completeEvents[0].extra.memory_source,
+    "",
+    "Onboarding complete event records an empty memories selection"
+  );
+  Assert.equal(
+    completeEvents[0].extra.setdefault_source,
+    "",
+    "Onboarding complete event records an empty set default selection"
   );
 
   BrowserTestUtils.removeTab(tab);

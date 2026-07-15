@@ -2,32 +2,32 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+#include "nsPrintDialogGTK.h"
+
 #include <gtk/gtk.h>
 #include <gtk/gtkunixprint.h>
 #include <stdlib.h>
 
-#include "mozilla/Services.h"
-#include "mozilla/dom/Promise.h"
-
 #include "GRefPtr.h"
 #include "MozContainer.h"
-#include "nsIGlobalObject.h"
-#include "nsIPrintSettings.h"
-#include "nsIWidget.h"
-#include "nsPrintDialogGTK.h"
-#include "nsPrintSettingsGTK.h"
-#include "nsString.h"
-#include "nsReadableUtils.h"
-#include "nsIStringBundle.h"
-#include "nsIPrintSettingsService.h"
-#include "nsPIDOMWindow.h"
-#include "nsPrintfCString.h"
-#include "nsIGIOService.h"
-#include "nsServiceManagerUtils.h"
-#include "nsThreadUtils.h"
 #include "WidgetUtils.h"
 #include "WidgetUtilsGtk.h"
+#include "mozilla/Services.h"
+#include "mozilla/dom/Promise.h"
+#include "nsIGIOService.h"
+#include "nsIGlobalObject.h"
 #include "nsIObserverService.h"
+#include "nsIPrintSettings.h"
+#include "nsIPrintSettingsService.h"
+#include "nsIStringBundle.h"
+#include "nsIWidget.h"
+#include "nsPIDOMWindow.h"
+#include "nsPrintSettingsGTK.h"
+#include "nsPrintfCString.h"
+#include "nsReadableUtils.h"
+#include "nsServiceManagerUtils.h"
+#include "nsString.h"
+#include "nsThreadUtils.h"
 #include "xpcpublic.h"
 
 // for gdk_x11_window_get_xid
@@ -35,13 +35,14 @@
 #ifdef MOZ_X11
 #  include <gdk/gdkx.h>
 #endif
-#include <sys/types.h>
-#include <sys/stat.h>
 #include <fcntl.h>
 #include <gio/gunixfdlist.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 
 // for dlsym
 #include <dlfcn.h>
+
 #include "MainThreadUtils.h"
 
 using namespace mozilla;

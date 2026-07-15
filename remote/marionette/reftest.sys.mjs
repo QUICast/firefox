@@ -122,6 +122,7 @@ reftest.Runner = class {
         },
       },
       allFrames: true,
+      safeForUntrustedWebProcess: true,
     });
   }
 
@@ -153,7 +154,7 @@ reftest.Runner = class {
       reftestWin = this.parentWindow;
       await lazy.navigate.waitForNavigationCompleted(this.driver, () => {
         const browsingContext = this.driver.getBrowsingContext();
-        lazy.navigate.navigateTo(browsingContext, "about:blank");
+        lazy.navigate.navigateTo(browsingContext, URL.parse("about:blank"));
       });
     } else {
       lazy.logger.debug("Using separate window");
@@ -668,7 +669,7 @@ reftest.Runner = class {
       //
       // See bug 1636169.
       this.updateBrowserRemotenessByURL(win.gBrowser, url);
-      lazy.navigate.navigateTo(browsingContext, url);
+      lazy.navigate.navigateTo(browsingContext, URL.parse(url));
 
       this.lastURL = url;
     }

@@ -7,17 +7,16 @@
 #define mozilla_image_encoders_icon_win_nsIconChannel_h
 
 #include "mozilla/MozPromise.h"
-
 #include "nsCOMPtr.h"
-#include "nsString.h"
 #include "nsIChannel.h"
-#include "nsILoadGroup.h"
-#include "nsILoadInfo.h"
+#include "nsIInputStreamPump.h"
 #include "nsIInterfaceRequestor.h"
 #include "nsIInterfaceRequestorUtils.h"
-#include "nsIURI.h"
-#include "nsIInputStreamPump.h"
+#include "nsILoadGroup.h"
+#include "nsILoadInfo.h"
 #include "nsIStreamListener.h"
+#include "nsIURI.h"
+#include "nsString.h"
 
 namespace mozilla::ipc {
 class ByteBuf;
@@ -53,6 +52,7 @@ class nsIconChannel final : public nsIChannel, public nsIStreamListener {
   nsCOMPtr<nsIInterfaceRequestor> mCallbacks;
   nsCOMPtr<nsISupports> mOwner;
   nsCOMPtr<nsILoadInfo> mLoadInfo;
+  RefPtr<mozilla::dom::ParentProcessChannelHandle> mParentProcessChannelHandle;
 
   nsCOMPtr<nsIInputStreamPump> mPump;
   nsCOMPtr<nsIStreamListener> mListener;

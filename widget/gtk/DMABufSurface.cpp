@@ -3,6 +3,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "DMABufSurface.h"
+
 #include "DMABufDevice.h"
 #include "DMABufFormats.h"
 
@@ -10,8 +11,9 @@
 #  include "nsWaylandDisplay.h"
 #endif
 
-#include <gbm.h>
+#include <dlfcn.h>
 #include <fcntl.h>
+#include <gbm.h>
 #include <getopt.h>
 #include <signal.h>
 #include <stdbool.h>
@@ -19,10 +21,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
-#include <sys/time.h>
-#include <dlfcn.h>
 #include <sys/mman.h>
+#include <sys/time.h>
+#include <unistd.h>
 #ifdef HAVE_EVENTFD
 #  include <sys/eventfd.h>
 #endif
@@ -31,6 +32,9 @@
 #  include <sys/ioccom.h>
 #endif
 #include <sys/ioctl.h>
+#ifdef MOZ_LOGGING
+#  include "gfxUtils.h"
+#endif
 
 // DMABufDevice defines its own version of this which collides with the
 // official version in drm_fourcc.h
@@ -42,20 +46,20 @@
 #  define DRM_FORMAT_MOD_INVALID ((1ULL << 56) - 1)
 #endif
 
-#include "mozilla/widget/va_drmcommon.h"
-#include "mozilla/gfx/2D.h"
-#include "mozilla/gfx/FileHandleWrapper.h"
-#include "GLContextTypes.h"  // for GLContext, etc
+#include "GLBlitHelper.h"
 #include "GLContextEGL.h"
 #include "GLContextProvider.h"
-#include "ScopedGLHelpers.h"
-#include "GLBlitHelper.h"
+#include "GLContextTypes.h"  // for GLContext, etc
 #include "GLReadTexImageHelper.h"
-#include "nsGtkUtils.h"
 #include "ImageContainer.h"
-#include "mozilla/layers/LayersSurfaces.h"
+#include "ScopedGLHelpers.h"
 #include "mozilla/ScopeExit.h"
+#include "mozilla/gfx/2D.h"
+#include "mozilla/gfx/FileHandleWrapper.h"
 #include "mozilla/gfx/gfxVars.h"
+#include "mozilla/layers/LayersSurfaces.h"
+#include "mozilla/widget/va_drmcommon.h"
+#include "nsGtkUtils.h"
 #include "nsIMemoryReporter.h"
 
 /* C++ / C typecast macros for special EGL handle values */
@@ -74,9 +78,9 @@ using namespace mozilla::gfx;
 #undef LOGDMABUF
 #undef LOGDMABUFREF
 #ifdef MOZ_LOGGING
+#  include "Units.h"
 #  include "mozilla/Logging.h"
 #  include "nsTArray.h"
-#  include "Units.h"
 
 extern mozilla::LazyLogModule gDmabufLog;
 #  define LOGDMABUF(str, ...)                     \
@@ -1470,6 +1474,14 @@ nsresult DMABufSurface::BuildSurfaceDescriptorBuffer(
 }
 
 #ifdef MOZ_LOGGING
+// Universal OpenGL version but needs GL/textures.
+void DMABufSurfaceRGBA::DumpToFile(const char* aFile) {
+  RefPtr<gfx::DataSourceSurface> surf = GetAsSourceSurface();
+  gfxUtils::WriteAsPNG(surf, aFile);
+}
+
+#  if 0
+// A direct mapping version without GL.
 void DMABufSurfaceRGBA::DumpToFile(const char* pFile) {
   uint32_t stride;
 
@@ -1492,6 +1504,7 @@ void DMABufSurfaceRGBA::DumpToFile(const char* pFile) {
     cairo_surface_write_to_png(surface, pFile);
   }
 }
+#  endif
 #endif
 
 #if 0
@@ -2188,13 +2201,16 @@ bool DMABufSurfaceYUV::CreateTexture(GLContext* aGLContext, int aPlane) {
                  GetFOURCCFormat() == VA_FOURCC_P016) {
         swappedFormat = wasGR ? DRM_FORMAT_RG1616 : DRM_FORMAT_GR1616;
       }
-      mDrmFormats[aPlane] = static_cast<int>(swappedFormat);
-
-      egl->mLib->fQueryDmaBufModifiersEXT(egl->mDisplay, mDrmFormats[aPlane], 0,
-                                          nullptr, nullptr, &modifierCount);
-      int bits = GetFOURCCFormat() == VA_FOURCC_NV12 ? 8 : 16;
-      LOGDMABUF("  EGL DMA-BUF import: swapped plane 1 to %s%d%d",
-                wasGR ? "RG" : "GR", bits, bits);
+      EGLint swappedModifierCount = 0;
+      egl->mLib->fQueryDmaBufModifiersEXT(
+          egl->mDisplay, static_cast<EGLint>(swappedFormat), 0, nullptr,
+          nullptr, &swappedModifierCount);
+      if (swappedModifierCount > 0) {
+        mDrmFormats[aPlane] = static_cast<int>(swappedFormat);
+        int bits = GetFOURCCFormat() == VA_FOURCC_NV12 ? 8 : 16;
+        LOGDMABUF("  EGL DMA-BUF import: swapped plane 1 to %s%d%d",
+                  wasGR ? "RG" : "GR", bits, bits);
+      }
     }
   }
 
@@ -2592,9 +2608,9 @@ void DMABufSurfaceYUV::ClearPlane(int aPlane) {
          mMappedRegionStride[aPlane] * mHeight[aPlane]);
   Unmap(aPlane);
 }
+#endif
 
-#  include "gfxUtils.h"
-
+#ifdef MOZ_LOGGING
 void DMABufSurfaceYUV::DumpToFile(const char* aFile) {
   RefPtr<gfx::DataSourceSurface> surf = GetAsSourceSurface();
   gfxUtils::WriteAsPNG(surf, aFile);

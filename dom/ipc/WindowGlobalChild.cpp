@@ -87,20 +87,6 @@ WindowGlobalChild::WindowGlobalChild(dom::WindowContext* aWindowContext,
       embedderInnerWindowID, BrowsingContext()->UsePrivateBrowsing());
 }
 
-void VerifyStoragePrincipalMatchesDocumentPrincipal(WindowGlobalInit aInit) {
-  // WindowGlobalParent::CreateDisconnected performs similar checks in
-  // SetDocumentStoragePrincipal. If they fail, the parent process crashes.
-  // Let's ensure we crash in content instead, and assert each condition
-  // separately to find out what fails. See bug 2003449.
-  nsCString noSuffix, storageNoSuffix;
-  aInit.principal()->GetOriginNoSuffix(noSuffix);
-  aInit.storagePrincipal()->GetOriginNoSuffix(storageNoSuffix);
-  MOZ_RELEASE_ASSERT(noSuffix == storageNoSuffix);
-  MOZ_RELEASE_ASSERT(
-      aInit.principal()->OriginAttributesRef().EqualsIgnoringPartitionKey(
-          aInit.storagePrincipal()->OriginAttributesRef()));
-}
-
 already_AddRefed<WindowGlobalChild> WindowGlobalChild::Create(
     nsGlobalWindowInner* aWindow) {
 #ifdef MOZ_DIAGNOSTIC_ASSERT_ENABLED
@@ -147,7 +133,8 @@ already_AddRefed<WindowGlobalChild> WindowGlobalChild::Create(
     MOZ_DIAGNOSTIC_ASSERT(bc->AncestorsAreCurrent());
     MOZ_DIAGNOSTIC_ASSERT(bc->IsInProcess());
 
-    VerifyStoragePrincipalMatchesDocumentPrincipal(init);
+    MOZ_RELEASE_ASSERT(VerifyPartitionedPrincipalMatchesDocumentPrincipal(
+        init.principal(), init.partitionedPrincipal()));
 
     ManagedEndpoint<PWindowGlobalParent> endpoint =
         browserChild->OpenPWindowGlobalEndpoint(wgc);
@@ -170,7 +157,7 @@ already_AddRefed<WindowGlobalChild> WindowGlobalChild::CreateDisconnected(
 
   // Create our new WindowContext
   if (XRE_IsParentProcess()) {
-    windowContext = WindowGlobalParent::CreateDisconnected(aInit);
+    windowContext = WindowGlobalParent::CreateDisconnected(aInit, nullptr);
   } else {
     dom::WindowContext::FieldValues fields = aInit.context().mFields;
     windowContext = new dom::WindowContext(
@@ -198,6 +185,15 @@ void WindowGlobalChild::OnNewDocument(Document* aDocument) {
   MOZ_RELEASE_ASSERT(mWindowGlobal);
   MOZ_RELEASE_ASSERT(aDocument);
 
+  MOZ_RELEASE_ASSERT(mDocumentPrincipal->Equals(aDocument->NodePrincipal()),
+                     "Cannot change document principal origin");
+  MOZ_RELEASE_ASSERT(
+      VerifyPartitionedPrincipalMatchesDocumentPrincipal(
+          aDocument->NodePrincipal(), aDocument->PartitionedPrincipal()),
+      "Invalid partitioned principal");
+
+  mDocumentPrincipal = aDocument->NodePrincipal();
+
   // Send a series of messages to update document-specific state on
   // WindowGlobalParent, when we change documents on an existing WindowGlobal.
   // This data is also all sent when we construct a WindowGlobal, so anything
@@ -206,14 +202,21 @@ void WindowGlobalChild::OnNewDocument(Document* aDocument) {
   // FIXME: Perhaps these should be combined into a smaller number of messages?
   SendSetIsInitialDocument(aDocument->IsInitialDocument());
   SetDocumentURI(aDocument->GetDocumentURI());
-  SetDocumentPrincipal(aDocument->NodePrincipal(),
-                       aDocument->EffectiveStoragePrincipal());
+  SendUpdateDocumentPrincipal(WrapNotNull(aDocument->NodePrincipal()),
+                              WrapNotNull(aDocument->PartitionedPrincipal()));
+  SendUpdatePrincipalPartitioning(!aDocument->UseRegularPrincipal());
 
-  nsCOMPtr<nsITransportSecurityInfo> securityInfo;
-  if (nsCOMPtr<nsIChannel> channel = aDocument->GetChannel()) {
-    channel->GetSecurityInfo(getter_AddRefs(securityInfo));
+  RefPtr<ParentProcessChannelHandle> documentChannelHandle;
+  if (nsIChannel* chan = aDocument->GetChannel()) {
+    (void)chan->GetParentProcessChannelHandle(
+        getter_AddRefs(documentChannelHandle));
   }
-  SendUpdateDocumentSecurityInfo(securityInfo);
+  RefPtr<ParentProcessChannelHandle> failedChannelHandle;
+  if (nsIChannel* chan = aDocument->GetFailedChannel()) {
+    (void)chan->GetParentProcessChannelHandle(
+        getter_AddRefs(failedChannelHandle));
+  }
+  SendUpdateChannels(documentChannelHandle, failedChannelHandle);
 
   SendUpdateDocumentCspSettings(aDocument->GetBlockAllMixedContent(false),
                                 aDocument->GetUpgradeInsecureRequests(false));
@@ -780,15 +783,6 @@ void WindowGlobalChild::SetDocumentURI(nsIURI* aDocumentURI) {
 
   mDocumentURI = aDocumentURI;
   SendUpdateDocumentURI(WrapNotNull(aDocumentURI));
-}
-
-void WindowGlobalChild::SetDocumentPrincipal(
-    nsIPrincipal* aNewDocumentPrincipal,
-    nsIPrincipal* aNewDocumentStoragePrincipal) {
-  MOZ_ASSERT(mDocumentPrincipal->Equals(aNewDocumentPrincipal));
-  mDocumentPrincipal = aNewDocumentPrincipal;
-  SendUpdateDocumentPrincipal(aNewDocumentPrincipal,
-                              aNewDocumentStoragePrincipal);
 }
 
 const nsACString& WindowGlobalChild::GetRemoteType() const {

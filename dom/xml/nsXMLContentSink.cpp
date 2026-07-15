@@ -183,7 +183,7 @@ nsresult nsXMLContentSink::MaybePrettyPrint() {
   NS_ENSURE_SUCCESS(rv, rv);
 
   bool isPrettyPrinting;
-  rv = printer->PrettyPrint(mDocument, &isPrettyPrinting);
+  rv = printer->PrettyPrint(mDocument, mXSLTIsDisabled, &isPrettyPrinting);
   NS_ENSURE_SUCCESS(rv, rv);
 
   mPrettyPrinting = isPrettyPrinting;
@@ -684,7 +684,7 @@ nsresult nsXMLContentSink::AddContentAsLeaf(nsIContent* aContent) {
 nsresult nsXMLContentSink::LoadXSLStyleSheet(nsIURI* aUrl) {
   nsCOMPtr<nsIDocumentTransformer> processor = new txMozillaXSLTProcessor();
   mDocument->SetUseCounter(eUseCounter_custom_XSLStylesheet);
-  mDocument->WarnOnceAbout(DeprecatedOperations::eXSLTDeprecated);
+  mDocument->WarnOnceAndReportAbout(DeprecatedOperations::eXSLTDeprecated);
 
   processor->SetTransformObserver(this);
 
@@ -730,18 +730,14 @@ nsresult nsXMLContentSink::MaybeProcessXSLTLink(
     ProcessingInstruction* aProcessingInstruction, const nsAString& aHref,
     bool aAlternate, const nsAString& aTitle, const nsAString& aType,
     const nsAString& aMedia, const nsAString& aReferrerPolicy, bool* aWasXSLT) {
-  bool wasXSLT = StaticPrefs::dom_xslt_enabled() &&
-                 (aType.LowerCaseEqualsLiteral(TEXT_XSL) ||
-                  aType.LowerCaseEqualsLiteral(APPLICATION_XSLT_XML) ||
-                  aType.LowerCaseEqualsLiteral(TEXT_XML) ||
-                  aType.LowerCaseEqualsLiteral(APPLICATION_XML));
+  bool wasXSLTType = aType.LowerCaseEqualsLiteral(TEXT_XSL) ||
+                     aType.LowerCaseEqualsLiteral(APPLICATION_XSLT_XML) ||
+                     aType.LowerCaseEqualsLiteral(TEXT_XML) ||
+                     aType.LowerCaseEqualsLiteral(APPLICATION_XML);
+  bool wasXSLT = StaticPrefs::dom_xslt_enabled() && wasXSLTType;
 
   if (aWasXSLT) {
     *aWasXSLT = wasXSLT;
-  }
-
-  if (!wasXSLT) {
-    return NS_OK;
   }
 
   if (aAlternate) {
@@ -750,6 +746,13 @@ nsresult nsXMLContentSink::MaybeProcessXSLTLink(
   }
   // LoadXSLStyleSheet needs a mDocShell.
   if (!mDocShell) {
+    return NS_OK;
+  }
+
+  if (!wasXSLT) {
+    mPrettyPrintXML =
+        mPrettyPrintXML || (wasXSLTType && !StaticPrefs::dom_xslt_enabled());
+    mXSLTIsDisabled = wasXSLTType;
     return NS_OK;
   }
 
@@ -1378,7 +1381,7 @@ nsXMLContentSink::ReportError(const char16_t* aErrorText,
   parsererror.Append((char16_t)0xFFFF);
   parsererror.AppendLiteral("parsererror");
 
-  const char16_t* dirAttr[] = {u"dir", u"ltr", 0, 0};
+  const char16_t* dirAttr[] = {u"dir", u"ltr", nullptr, nullptr};
   if (intl::LocaleService::GetInstance()->IsAppLocaleRTL() &&
       !mDocument->ShouldResistFingerprinting(RFPTarget::JSLocale)) {
     dirAttr[1] = u"rtl";
@@ -1393,7 +1396,7 @@ nsXMLContentSink::ReportError(const char16_t* aErrorText,
   sourcetext.Append((char16_t)0xFFFF);
   sourcetext.AppendLiteral("sourcetext");
 
-  const char16_t* noAtts[] = {0, 0};
+  const char16_t* noAtts[] = {nullptr, nullptr};
   rv = HandleStartElement(sourcetext.get(), noAtts, 0, (uint32_t)-1, 0);
   NS_ENSURE_SUCCESS(rv, rv);
 

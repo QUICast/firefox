@@ -158,9 +158,6 @@ restart:
     case ParseNodeKind::BreakStmt:
     case ParseNodeKind::ContinueStmt:
     case ParseNodeKind::ImportDecl:
-#ifdef ENABLE_SOURCE_PHASE_IMPORTS
-    case ParseNodeKind::ImportSourceDecl:
-#endif
     case ParseNodeKind::ImportSpecList:
     case ParseNodeKind::ImportSpec:
     case ParseNodeKind::ImportNamespaceSpec:
@@ -172,9 +169,6 @@ restart:
     case ParseNodeKind::ExportStmt:
     case ParseNodeKind::ExportBatchSpecStmt:
     case ParseNodeKind::CallImportExpr:
-#ifdef ENABLE_SOURCE_PHASE_IMPORTS
-    case ParseNodeKind::CallImportSourceExpr:
-#endif
     case ParseNodeKind::CallImportSpec:
     case ParseNodeKind::ImportAttributeList:
     case ParseNodeKind::ImportAttribute:
@@ -1530,18 +1524,6 @@ class FoldVisitor : public RewritingParseNodeVisitor<FoldVisitor> {
     BinaryNode& node = pn->as<BinaryNode>();
     return Base::visitDoWhileStmt(pn) &&
            SimplifyCondition(info(), node.unsafeRightReference());
-  }
-
-  bool visitFunction(ParseNode*& pn) {
-    FunctionNode& node = pn->as<FunctionNode>();
-
-    // Don't constant-fold inside "use asm" code, as this could create a parse
-    // tree that doesn't type-check as asm.js.
-    if (node.funbox()->useAsmOrInsideUseAsm()) {
-      return true;
-    }
-
-    return Base::visitFunction(pn);
   }
 
   bool visitArrayExpr(ParseNode*& pn) {

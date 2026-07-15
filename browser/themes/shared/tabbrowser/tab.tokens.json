@@ -1,17 +1,35 @@
 {
-  "block": {
-    "margin": {
+  "margin": {
+    "block": {
       "value": "{dimension.4}"
     }
   },
   "border": {
     "radius": {
       "value": "var(--toolbarbutton-border-radius)"
+    },
+    "color": {
+      "accent": {
+        "override": true,
+        "value": "unset"
+      },
+      "selected": {
+        "leading": {
+          "override": true,
+          "value": "unset"
+        },
+        "trailing": {
+          "override": true,
+          "value": "unset"
+        }
+      }
     }
   },
   "box": {
     "shadow": {
-      "value": "{box-shadow.level-1}"
+      "selected": {
+        "value": "{box-shadow.level-1}"
+      }
     }
   },
   "attention": {
@@ -432,7 +450,7 @@
       "@base": {
         "value": {
           "light": "{color.gray.55}",
-          "dark": "{color.gray.05}"
+          "dark": "{color.gray.0}"
         }
       },
       "text": {
@@ -457,7 +475,7 @@
       },
       "invert": {
         "value": {
-          "light": "{color.gray.05}",
+          "light": "{color.gray.0}",
           "dark": "{color.gray.55}"
         }
       }

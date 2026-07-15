@@ -10,6 +10,7 @@ import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
+import androidx.annotation.VisibleForTesting
 import androidx.compose.runtime.getValue
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat.Type.systemBars
@@ -20,6 +21,7 @@ import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.google.android.material.bottomsheet.BottomSheetDialogFragment
 import mozilla.components.lib.state.ext.observeAsComposableState
 import mozilla.components.support.base.feature.ViewBoundFeatureWrapper
+import org.mozilla.fenix.GleanMetrics.TrackingProtection
 import org.mozilla.fenix.R
 import org.mozilla.fenix.ext.requireComponents
 import org.mozilla.fenix.ext.runIfFragmentIsAttached
@@ -31,6 +33,14 @@ import com.google.android.material.R as materialR
 class ProtectionsDashboardFragment : BottomSheetDialogFragment() {
     private val args by navArgs<ProtectionsDashboardFragmentArgs>()
     private val trackersBlockedFeature = ViewBoundFeatureWrapper<TrackersBlockedFeature>()
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+
+        if (savedInstanceState == null) {
+            recordPrivacyReportTapped()
+        }
+    }
 
     override fun onCreateDialog(savedInstanceState: Bundle?): Dialog =
         (super.onCreateDialog(savedInstanceState) as BottomSheetDialog).apply {
@@ -58,11 +68,15 @@ class ProtectionsDashboardFragment : BottomSheetDialogFragment() {
         savedInstanceState: Bundle?,
     ) = content {
         val appStore = requireComponents.appStore
-        val trackerBlockedThisWeek by appStore.observeAsComposableState { state ->
-            state.trackersBlockedThisWeek
+        val blockedTrackersState by appStore.observeAsComposableState { state ->
+            state.blockedTrackersState
         }
 
-        ProtectionsDashboardContent(trackerBlockedThisWeek) { dismiss() }
+        ProtectionsDashboardContent(
+            totalTrackersBlocked = blockedTrackersState.trackersBlockedCount,
+            trackersBlockedThisWeek = blockedTrackersState.trackersBlockedThisWeek,
+            earliestTrackingDate = blockedTrackersState.earliestTrackingDate,
+        ) { dismiss() }
     }
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
@@ -78,5 +92,21 @@ class ProtectionsDashboardFragment : BottomSheetDialogFragment() {
             owner = viewLifecycleOwner,
             view = view,
         )
+    }
+
+    @VisibleForTesting
+    internal fun recordPrivacyReportTapped() {
+        val source = arguments?.getString(ARG_SOURCE) ?: SOURCE_HOME
+        TrackingProtection.privacyReportTapped.record(
+            TrackingProtection.PrivacyReportTappedExtra(source = source),
+        )
+    }
+
+    companion object {
+        const val ARG_SOURCE = "source"
+        const val SOURCE_HOME = "home"
+        const val SOURCE_TABS_TRAY = "tabs_tray"
+        const val SOURCE_TRUST_PANEL = "trust_panel"
+        const val SOURCE_DEEPLINK = "deeplink"
     }
 }

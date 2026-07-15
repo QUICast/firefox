@@ -346,14 +346,6 @@
       "value": "#1e111b"
     }
   },
-  "purple-desaturated": {
-    "30": {
-      "value": "#c0a7d4"
-    },
-    "50": {
-      "value": "#816297"
-    }
-  },
   "violet-desaturated": {
     "0": {
       "value": "#f2f0f8"
@@ -390,6 +382,7 @@
     "primary": {
       "@base": {
         "value": {
+          "nativeTheme": "AccentColor",
           "light": "{color.violet.50}",
           "dark": "{color.violet.30}",
           "forcedColors": "AccentColor"
@@ -397,6 +390,7 @@
       },
       "hover": {
         "value": {
+          "nativeTheme": "color-mix(in srgb, black 10%, {color.accent.primary.@base})",
           "light": "{color.violet.60}",
           "dark": "{color.violet.20}",
           "forcedColors": "SelectedItem"
@@ -404,6 +398,7 @@
       },
       "active": {
         "value": {
+          "nativeTheme": "color-mix(in srgb, black 20%, {color.accent.primary.@base})",
           "light": "{color.violet.70}",
           "dark": "{color.violet.10}",
           "forcedColors": "{color.accent.primary.hover}"
@@ -411,6 +406,7 @@
       },
       "selected": {
         "value": {
+          "nativeTheme": "SelectedItem",
           "default": "{button.background.color.primary.active}",
           "forcedColors": "SelectedItem"
         }
@@ -418,6 +414,7 @@
     },
     "attention": {
       "value": {
+        "nativeTheme": "AccentColor",
         "light": "{color.green.40}",
         "dark": "{color.green.30}",
         "forcedColors": "AccentColor"

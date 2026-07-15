@@ -5,18 +5,18 @@
 #include "EventDispatcher.h"
 
 #include "JavaBuiltins.h"
-#include "nsAppShell.h"
-#include "nsJSUtils.h"
 #include "js/Array.h"  // JS::GetArrayLength, JS::IsArrayObject, JS::NewArrayObject
 #include "js/PropertyAndElement.h"  // JS_Enumerate, JS_GetElement, JS_GetProperty, JS_GetPropertyById, JS_SetElement, JS_SetUCProperty
 #include "js/String.h"              // JS::StringHasLatin1Chars
 #include "js/Warnings.h"            // JS::WarnUTF8
-#include "xpcpublic.h"
-
+#include "jsapi.h"
 #include "mozilla/ScopeExit.h"
 #include "mozilla/dom/ScriptSettings.h"
 #include "mozilla/java/EventCallbackWrappers.h"
 #include "mozilla/jni/GeckoBundleUtils.h"
+#include "nsAppShell.h"
+#include "nsJSUtils.h"
+#include "xpcpublic.h"
 
 namespace mozilla::widget {
 
@@ -248,8 +248,8 @@ nsresult UnboxValue(JSContext* aCx, const jni::Object::LocalRef& aData,
   } else if (aData.IsInstanceOf<jni::DoubleArray>()) {
     return UnboxArrayPrimitive<
         double, jdouble, jdoubleArray, &JNIEnv::GetDoubleArrayElements,
-        &JNIEnv::ReleaseDoubleArrayElements, &JS::DoubleValue>(aCx, aData,
-                                                               aOut);
+        &JNIEnv::ReleaseDoubleArrayElements, &JS::NumberValue<double>>(
+        aCx, aData, aOut);
 
   } else if (aData.IsInstanceOf<StringArray>()) {
     return UnboxArrayObject<&UnboxString>(aCx, aData, aOut);

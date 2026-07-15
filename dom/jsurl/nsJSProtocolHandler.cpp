@@ -16,6 +16,7 @@
 #include "mozilla/SourceLocation.h"
 #include "mozilla/TextUtils.h"
 #include "mozilla/dom/AutoEntryScript.h"
+#include "mozilla/dom/ContentChild.h"
 #include "mozilla/dom/DOMSecurityMonitor.h"
 #include "mozilla/dom/Document.h"
 #include "mozilla/dom/JSExecutionUtils.h"  // mozilla::dom::Compile, mozilla::dom::EvaluationExceptionToNSResult
@@ -537,6 +538,9 @@ nsresult nsJSChannel::Init(nsIURI* aURI, nsILoadInfo* aLoadInfo) {
   nsresult rv = aURI->QueryInterface(kJSURICID, getter_AddRefs(jsURI));
   NS_ENSURE_SUCCESS(rv, rv);
 
+  // Defensively mark the current process as untrusted.
+  mozilla::dom::ContentChild::MaybeBecomeUntrusted();
+
   // Create the nsIStreamIO layer used by the nsIStreamIOChannel.
   mJSURIStream = new JSURLInputStream();
 
@@ -1049,6 +1053,18 @@ NS_IMETHODIMP
 nsJSChannel::SetLoadInfo(nsILoadInfo* aLoadInfo) {
   MOZ_RELEASE_ASSERT(aLoadInfo, "loadinfo can't be null");
   return mStreamChannel->SetLoadInfo(aLoadInfo);
+}
+
+NS_IMETHODIMP
+nsJSChannel::GetParentProcessChannelHandle(
+    mozilla::dom::ParentProcessChannelHandle** aValue) {
+  return mStreamChannel->GetParentProcessChannelHandle(aValue);
+}
+
+NS_IMETHODIMP
+nsJSChannel::SetParentProcessChannelHandle(
+    mozilla::dom::ParentProcessChannelHandle* aValue) {
+  return mStreamChannel->SetParentProcessChannelHandle(aValue);
 }
 
 NS_IMETHODIMP

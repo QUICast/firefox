@@ -12,6 +12,12 @@ PromiseTestUtils.allowMatchingRejectionsGlobally(
   /Missing message.*smartwindow-messages-document-title/
 );
 
+// Toggling AI window flips BROWSER_NEW_TAB_URL, which can leave a preloaded
+// about:newtab browser dangling until shutdown if preload kicks in afterward.
+registerCleanupFunction(() => {
+  NewTabPagePreloading.removePreloadedBrowser(window);
+});
+
 // Ensure Window Switcher button is visible when AI Window is enabled in prefs
 add_task(async function test_window_switcher_button_visibility() {
   await SpecialPowers.pushPrefEnv({
@@ -133,7 +139,7 @@ add_task(async function test_switch_to_classic_window() {
 
   let iconListImage = window.getComputedStyle(button)["list-style-image"];
   Assert.ok(
-    iconListImage.includes("icon32.png"),
+    iconListImage.includes("about-logo.svg"),
     "Button icon should change to Classic Window icon"
   );
 

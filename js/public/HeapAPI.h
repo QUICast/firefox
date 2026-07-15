@@ -407,6 +407,8 @@ const size_t MaxArenaCellIndex = ArenaSize / CellAlignBytes;
 
 const size_t ChunkStoreBufferOffset = offsetof(ChunkBase, storeBuffer);
 const size_t ChunkMarkBitmapOffset = offsetof(ArenaChunkBase, markBits);
+const size_t ChunkZoneOffset =
+    offsetof(ArenaChunkBase, info) + offsetof(ArenaChunkInfo, zone);
 
 // Hardcoded offsets into Arena class.
 const size_t ArenaHeaderSize = 2 * sizeof(uint32_t) + 1 * sizeof(uintptr_t) +
@@ -589,7 +591,17 @@ class JS_PUBLIC_API GCCellPtr {
     return JS::shadow::Symbol::isWellKnownSymbol(asCell());
   }
 
+  GCCellPtr atomicGet() const {
+    return GCCellPtr(__atomic_load_n(&ptr, __ATOMIC_RELAXED));
+  }
+
+  void atomicSet(const GCCellPtr& value) {
+    __atomic_store_n(&ptr, value.ptr, __ATOMIC_RELAXED);
+  }
+
  private:
+  explicit GCCellPtr(uintptr_t ptr) : ptr(ptr) {}
+
   static uintptr_t checkedCast(void* p, JS::TraceKind traceKind) {
     auto* cell = static_cast<js::gc::Cell*>(p);
     MOZ_ASSERT((uintptr_t(p) & OutOfLineTraceKindMask) == 0);

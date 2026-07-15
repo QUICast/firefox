@@ -114,17 +114,16 @@ class MacroAssemblerRiscv64 : public Assembler {
   static bool SupportsFloatingPoint() { return true; }
   static bool SupportsUnalignedAccesses() { return true; }
   static bool SupportsFastUnalignedFPAccesses() { return true; }
-  static bool SupportsFloat64To16() { return false; }
-  static bool SupportsFloat32To16() { return false; }
+  static bool SupportsFloat64To16() { return HasZfhminExtension(); }
+  static bool SupportsFloat32To16() { return HasZfhminExtension(); }
 
   void haltingAlign(int alignment) {
     // TODO(loong64): Implement a proper halting align.
     nopAlign(alignment);
   }
 
-  int32_t GetOffset(Label* L, OffsetSize bits) {
-    return Assembler::branchOffsetHelper(L, bits);
-  }
+  std::pair<Register, int16_t> computeAddress(Address address,
+                                              UseScratchRegisterScope& temps);
 
   // load
   FaultingCodeOffset ma_load(Register dest, Address address,
@@ -137,6 +136,8 @@ class MacroAssemblerRiscv64 : public Assembler {
   FaultingCodeOffset ma_loadDouble(FloatRegister dest, const BaseIndex& src);
   FaultingCodeOffset ma_loadFloat(FloatRegister dest, Address address);
   FaultingCodeOffset ma_loadFloat(FloatRegister dest, const BaseIndex& src);
+  FaultingCodeOffset ma_loadFloat16(FloatRegister dest, Address address);
+  FaultingCodeOffset ma_loadFloat16(FloatRegister dest, const BaseIndex& src);
 
   // store
   FaultingCodeOffset ma_store(Register data, Address address,
@@ -155,6 +156,8 @@ class MacroAssemblerRiscv64 : public Assembler {
   FaultingCodeOffset ma_storeDouble(FloatRegister src, const BaseIndex& dest);
   FaultingCodeOffset ma_storeFloat(FloatRegister src, Address address);
   FaultingCodeOffset ma_storeFloat(FloatRegister src, const BaseIndex& dest);
+  FaultingCodeOffset ma_storeFloat16(FloatRegister src, Address address);
+  FaultingCodeOffset ma_storeFloat16(FloatRegister src, const BaseIndex& dest);
 
   // immediates
   BufferOffset ma_liPatchable(Register dest, Imm32 imm);
@@ -237,17 +240,16 @@ class MacroAssemblerRiscv64 : public Assembler {
 
   // branches when done from within la-specific code
   void ma_b(Register lhs, Register rhs, Label* l, Condition c,
-            JumpKind jumpKind = LongJump);
-  void ma_b(Register lhs, Imm32 imm, Label* l, Condition c,
-            JumpKind jumpKind = LongJump);
+            JumpKind jumpKind);
+  void ma_b(Register lhs, Imm32 imm, Label* l, Condition c, JumpKind jumpKind);
   void ma_b(Register lhs, ImmWord imm, Label* l, Condition c,
-            JumpKind jumpKind = LongJump);
+            JumpKind jumpKind);
   void ma_b(Register lhs, ImmPtr imm, Label* l, Condition c,
-            JumpKind jumpKind = LongJump) {
+            JumpKind jumpKind) {
     ma_b(lhs, ImmWord(uintptr_t(imm.value)), l, c, jumpKind);
   }
   void ma_b(Register lhs, ImmGCPtr imm, Label* l, Condition c,
-            JumpKind jumpKind = LongJump) {
+            JumpKind jumpKind) {
     UseScratchRegisterScope temps(this);
     Register scratch = temps.Acquire();
     ma_li(scratch, imm);
@@ -302,12 +304,6 @@ class MacroAssemblerRiscv64 : public Assembler {
   void ma_mul32TestOverflow(Register rd, Register rj, Imm32 imm,
                             Label* overflow);
 
-  // fast mod, uses scratch registers, and thus needs to be in the assembler
-  // implicitly assumes that we can overwrite dest at the beginning of the
-  // sequence
-  void ma_mod_mask(Register src, Register dest, Register hold, Register remain,
-                   int32_t shift, Label* negZero = nullptr);
-
   // FP branches
   void ma_compareF32(Register rd, DoubleCondition cc, FloatRegister cmp1,
                      FloatRegister cmp2);
@@ -329,8 +325,23 @@ class MacroAssemblerRiscv64 : public Assembler {
   void ma_cmp_set(Register dst, Register lhs, Register rhs, Condition c);
   void ma_cmp_set(Register dst, Register lhs, Imm32 imm, Condition c);
 
+  // Conditional moves.
+  void ma_cmp_mv(Register dst, Register lhs, Register rhs, Register src,
+                 Condition c);
+  void ma_cmp_mv(Register dst, Register lhs, Imm32 rhs, Register src,
+                 Condition c);
+
+  // Conditional select.
+  void ma_cselz(Register rd, Register rs1, Register rs2, Register rc,
+                Register rtmp);
+  void ma_cselnz(Register rd, Register rs1, Register rs2, Register rc,
+                 Register rtmp);
+
   void computeScaledAddress(const BaseIndex& address, Register dest);
   void computeScaledAddress32(const BaseIndex& address, Register dest);
+
+  Address computeScaledAddress(const BaseIndex& address,
+                               UseScratchRegisterScope& temps);
 
  private:
   bool UseShortBranch(Label* L, JumpKind jumpKind, OffsetSize bits,
@@ -364,8 +375,7 @@ class MacroAssemblerRiscv64 : public Assembler {
   void ExtractBits(Register rd, Register rs, uint16_t pos, uint16_t size);
 
   template <typename F_TYPE>
-  void RoundHelper(FPURegister dst, FPURegister src, FPURegister fpu_scratch,
-                   FPURoundingMode mode);
+  void RoundHelper(FPURegister dst, FPURegister src, FPURoundingMode mode);
 
   template <typename CvtFunc>
   void RoundFloatingPointToInteger(Register rd, FPURegister fs, Register result,
@@ -408,16 +418,16 @@ class MacroAssemblerRiscv64 : public Assembler {
                  bool Inexact = false);
 
   // Round double functions
-  void Trunc_d_d(FPURegister fd, FPURegister fs, FPURegister fpu_scratch);
-  void Round_d_d(FPURegister fd, FPURegister fs, FPURegister fpu_scratch);
-  void Floor_d_d(FPURegister fd, FPURegister fs, FPURegister fpu_scratch);
-  void Ceil_d_d(FPURegister fd, FPURegister fs, FPURegister fpu_scratch);
+  void Trunc_d_d(FPURegister fd, FPURegister fs);
+  void Round_d_d(FPURegister fd, FPURegister fs);
+  void Floor_d_d(FPURegister fd, FPURegister fs);
+  void Ceil_d_d(FPURegister fd, FPURegister fs);
 
   // Round float functions
-  void Trunc_s_s(FPURegister fd, FPURegister fs, FPURegister fpu_scratch);
-  void Round_s_s(FPURegister fd, FPURegister fs, FPURegister fpu_scratch);
-  void Floor_s_s(FPURegister fd, FPURegister fs, FPURegister fpu_scratch);
-  void Ceil_s_s(FPURegister fd, FPURegister fs, FPURegister fpu_scratch);
+  void Trunc_s_s(FPURegister fd, FPURegister fs);
+  void Round_s_s(FPURegister fd, FPURegister fs);
+  void Floor_s_s(FPURegister fd, FPURegister fs);
+  void Ceil_s_s(FPURegister fd, FPURegister fs);
 
   // Round single to signed word.
   void Round_w_s(Register rd, FPURegister fs, Register result = InvalidReg,
@@ -502,11 +512,49 @@ class MacroAssemblerRiscv64 : public Assembler {
 
   inline void NegateBool(Register rd, Register rs) { xori(rd, rs, 1); }
 
+  // The complete address is in `address`, and `access` is used for its type
+  // attributes only; its `offset` is ignored.
+  void wasmLoadAbsolute(const wasm::MemoryAccessDesc& access,
+                        Register memoryBase, uint64_t address,
+                        AnyRegister output) {
+    wasmLoadAbsoluteImpl(access, memoryBase, address, output);
+  }
+  void wasmLoadAbsoluteI64(const wasm::MemoryAccessDesc& access,
+                           Register memoryBase, uint64_t address,
+                           Register64 output) {
+    wasmLoadAbsoluteImpl(access, memoryBase, address, AnyRegister(output.reg));
+  }
+  void wasmStoreAbsolute(const wasm::MemoryAccessDesc& access,
+                         AnyRegister value, Register memoryBase,
+                         uint64_t address) {
+    wasmStoreAbsoluteImpl(access, value, memoryBase, address);
+  }
+  void wasmStoreAbsoluteI64(const wasm::MemoryAccessDesc& access,
+                            Register64 value, Register memoryBase,
+                            uint64_t address) {
+    wasmStoreAbsoluteImpl(access, AnyRegister(value.reg), memoryBase, address);
+  }
+
  protected:
+  BaseIndex toBaseIndex(Register base, uint64_t address,
+                        UseScratchRegisterScope& temps);
+
+  void wasmLoadAbsoluteImpl(const wasm::MemoryAccessDesc& access,
+                            Register memoryBase, uint64_t offset,
+                            AnyRegister output);
+  void wasmStoreAbsoluteImpl(const wasm::MemoryAccessDesc& access,
+                             AnyRegister value, Register memoryBase,
+                             uint64_t offset);
+
   void wasmLoadImpl(const wasm::MemoryAccessDesc& access, Register memoryBase,
                     Register ptr, AnyRegister output);
   void wasmStoreImpl(const wasm::MemoryAccessDesc& access, AnyRegister value,
                      Register memoryBase, Register ptr);
+
+  void wasmLoadImpl(const wasm::MemoryAccessDesc& access,
+                    const BaseIndex& address, AnyRegister output);
+  void wasmStoreImpl(const wasm::MemoryAccessDesc& access, AnyRegister value,
+                     const BaseIndex& address);
 };
 
 class MacroAssemblerRiscv64Compat : public MacroAssemblerRiscv64 {
@@ -529,11 +577,8 @@ class MacroAssemblerRiscv64Compat : public MacroAssemblerRiscv64 {
   };
   void convertInt32ToDouble(const BaseIndex& src, FloatRegister dest) {
     UseScratchRegisterScope temps(this);
-    Register scratch = temps.Acquire();
-    MOZ_ASSERT(scratch != src.base);
-    MOZ_ASSERT(scratch != src.index);
-    computeScaledAddress(src, scratch);
-    convertInt32ToDouble(Address(scratch, src.offset), dest);
+    Address address = computeScaledAddress(src, temps);
+    convertInt32ToDouble(address, dest);
   };
   void convertUInt32ToDouble(Register src, FloatRegister dest);
   void convertUInt32ToFloat32(Register src, FloatRegister dest);
@@ -550,19 +595,27 @@ class MacroAssemblerRiscv64Compat : public MacroAssemblerRiscv64 {
   void convertInt32ToFloat32(const Address& src, FloatRegister dest);
 
   void convertDoubleToFloat16(FloatRegister src, FloatRegister dest) {
-    MOZ_CRASH("Not supported for this target");
+    MOZ_ASSERT(HasZfhminExtension());
+    fcvt_h_d(dest, src);
   }
   void convertFloat16ToDouble(FloatRegister src, FloatRegister dest) {
-    MOZ_CRASH("Not supported for this target");
+    MOZ_ASSERT(HasZfhminExtension());
+    fcvt_d_h(dest, src);
   }
   void convertFloat32ToFloat16(FloatRegister src, FloatRegister dest) {
-    MOZ_CRASH("Not supported for this target");
+    MOZ_ASSERT(HasZfhminExtension());
+    fcvt_h_s(dest, src);
   }
   void convertFloat16ToFloat32(FloatRegister src, FloatRegister dest) {
-    MOZ_CRASH("Not supported for this target");
+    MOZ_ASSERT(HasZfhminExtension());
+    fcvt_s_h(dest, src);
   }
   void convertInt32ToFloat16(Register src, FloatRegister dest) {
-    MOZ_CRASH("Not supported for this target");
+    MOZ_ASSERT(HasZfhminExtension());
+    // `fcvt.h.w` requires full Zfh support, not just Zfhmin. Therefore we need
+    // to perform the sequence `fcvt.d.w` followed by `fcvt.h.d`.
+    fcvt_d_w(dest, src);
+    fcvt_h_d(dest, dest);
   }
 
   void truncateFloat32ModUint32(FloatRegister src, Register dest);
@@ -702,6 +755,7 @@ class MacroAssemblerRiscv64Compat : public MacroAssemblerRiscv64 {
 
     label->patchAt()->bind(currentOffset());
     label->setLinkMode(CodeLabel::RawPointer);
+    comment(".space 64bit [0xffff'ffff, 0xffff'ffff]");
     emit(uint32_t(-1));
     emit(uint32_t(-1));
   }
@@ -743,20 +797,6 @@ class MacroAssemblerRiscv64Compat : public MacroAssemblerRiscv64 {
 
   void splitTagForTest(const ValueOperand& value, ScratchTagScope& tag) {
     splitSignExtTag(value, tag);
-  }
-
-  void moveIfZero(Register dst, Register src, Register cond) {
-    Label done;
-    ma_b(cond, cond, &done, NonZero, ShortJump);
-    mv(dst, src);
-    bind(&done);
-  }
-
-  void moveIfNotZero(Register dst, Register src, Register cond) {
-    Label done;
-    ma_b(cond, cond, &done, Zero, ShortJump);
-    mv(dst, src);
-    bind(&done);
   }
 
   // unboxing code
@@ -907,7 +947,7 @@ class MacroAssemblerRiscv64Compat : public MacroAssemblerRiscv64 {
   }
 
   void loadInt32OrDouble(const Address& src, FloatRegister dest);
-  void loadInt32OrDouble(const BaseIndex& addr, FloatRegister dest);
+  void loadInt32OrDouble(const BaseIndex& src, FloatRegister dest);
   void loadConstantDouble(double dp, FloatRegister dest);
   void loadConstantFloat32(float f, FloatRegister dest);
 
@@ -1060,11 +1100,11 @@ class MacroAssemblerRiscv64Compat : public MacroAssemblerRiscv64 {
 
   FaultingCodeOffset loadFloat16(const Address& addr, FloatRegister dest,
                                  Register) {
-    MOZ_CRASH("Not supported for this target");
+    return ma_loadFloat16(dest, addr);
   }
   FaultingCodeOffset loadFloat16(const BaseIndex& src, FloatRegister dest,
                                  Register) {
-    MOZ_CRASH("Not supported for this target");
+    return ma_loadFloat16(dest, src);
   }
 
   template <typename S>

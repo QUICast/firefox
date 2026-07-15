@@ -3766,8 +3766,7 @@ class MacroAssembler : public MacroAssemblerSpecific {
   // branches out of line to the trap, the barrier will actually be executed
   // when the bounds check passes.
   //
-  // On 32-bit systems for both wasm and asm.js, and on 64-bit systems for
-  // asm.js, heap lengths are limited to 2GB.  On 64-bit systems for wasm,
+  // On 32-bit systems, heap lengths are limited to 2GB.  On 64-bit systems,
   // 32-bit heap lengths are limited to 4GB, and 64-bit heap lengths will be
   // limited to something much larger.
 
@@ -3984,28 +3983,29 @@ class MacroAssembler : public MacroAssemblerSpecific {
                          const wasm::CalleeDesc& callee,
                          const ReturnCallAdjustmentInfo& retCallInfo);
 
-  // WasmTableCallIndexReg must contain the index of the indirect call.
-  // This is for asm.js calls only.
-  CodeOffset asmCallIndirect(const wasm::CallSiteDesc& desc,
-                             const wasm::CalleeDesc& callee);
-
   // This function takes care of loading the pointer to the current instance
   // as the implicit first argument. It preserves instance and pinned registers.
   // (instance & pinned regs are non-volatile registers in the system ABI).
-  CodeOffset wasmCallBuiltinInstanceMethod(const wasm::CallSiteDesc& desc,
-                                           const ABIArg& instanceArg,
-                                           wasm::SymbolicAddress builtin,
-                                           wasm::FailureMode failureMode,
-                                           wasm::Trap failureTrap);
+  // Offsets for stackmaps for the call and (if required) for the following
+  // failure trap, are returned.
+  void wasmCallBuiltinInstanceMethod(const wasm::CallSiteDesc& desc,
+                                     const ABIArg& instanceArg,
+                                     wasm::SymbolicAddress builtin,
+                                     wasm::FailureMode failureMode,
+                                     wasm::Trap failureTrap,
+                                     CodeOffset* callStackMapKey,
+                                     CodeOffset* trapStackMapKey);
 
   // Performs the appropriate check based on the instance call's FailureMode,
   // and traps if the check fails. The resultRegister should likely be
   // ReturnReg, but this depends on whatever you do with registers immediately
-  // after the call.
-  void wasmTrapOnFailedInstanceCall(Register resultRegister,
-                                    wasm::FailureMode failureMode,
-                                    wasm::Trap failureTrap,
-                                    const wasm::TrapSiteDesc& trapSiteDesc);
+  // after the call. In the case where a trap is generated, the returned
+  // CodeOffset points at the first byte of the instruction following the trap,
+  // and that is where a stackmap, if needed, should be keyed.  If a trap is not
+  // generated, a CodeOffset satisfying !CodeOffset::bound() is returned.
+  CodeOffset wasmTrapOnFailedInstanceCall(
+      Register resultRegister, wasm::FailureMode failureMode,
+      wasm::Trap failureTrap, const wasm::TrapSiteDesc& trapSiteDesc);
 
   // Performs a bounds check for ranged wasm operations like memory.fill or
   // array.fill. This handles the bizarre edge case in the wasm spec where a
@@ -5789,31 +5789,22 @@ class MacroAssembler : public MacroAssemblerSpecific {
 
   void emitExtractValueFromMegamorphicCacheEntry(
       Register obj, Register entry, Register scratch1, Register scratch2,
-      ValueOperand output, Label* cacheHit, Label* cacheMiss,
+      ValueOperand output, Label* cacheHit, Label* cacheMissWithEntry,
       Label* cacheHitGetter);
 
-  template <typename IdOperandType>
-  void emitMegamorphicCacheLookupByValueCommon(
-      IdOperandType id, Register obj, Register scratch1, Register scratch2,
-      Register outEntryPtr, Label* cacheMiss, Label* cacheMissWithEntry);
+  void emitMegamorphicCacheLookupByValueCommon(Register obj, Register scratchId,
+                                               Register scratchIdHash,
+                                               Register outEntryPtr,
+                                               Label* cacheMissWithEntry);
 
-  void emitMegamorphicCacheLookup(PropertyKey id, Register obj,
-                                  Register scratch1, Register scratch2,
-                                  Register outEntryPtr, ValueOperand output,
-                                  Label* cacheHit,
-                                  Label* cacheHitGetter = nullptr);
-
-  // NOTE: |id| must either be a ValueOperand or a Register. If it is a
-  // Register, we assume that it is an atom.
-  template <typename IdOperandType>
-  void emitMegamorphicCacheLookupByValue(IdOperandType id, Register obj,
-                                         Register scratch1, Register scratch2,
+  void emitMegamorphicCacheLookupByValue(Register obj, Register scratchId,
+                                         Register scratchIdHash,
                                          Register outEntryPtr,
                                          ValueOperand output, Label* cacheHit,
                                          Label* cacheHitGetter = nullptr);
 
-  void emitMegamorphicCacheLookupExists(ValueOperand id, Register obj,
-                                        Register scratch1, Register scratch2,
+  void emitMegamorphicCacheLookupExists(Register obj, Register scratchId,
+                                        Register scratchIdHash,
                                         Register outEntryPtr, Register output,
                                         Label* cacheHit, bool hasOwn);
 

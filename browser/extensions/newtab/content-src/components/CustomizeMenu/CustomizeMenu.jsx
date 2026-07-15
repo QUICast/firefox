@@ -115,7 +115,7 @@ export class _CustomizeMenu extends React.PureComponent {
                 <label data-l10n-id="newtab-customize-panel-icon-button-label" />
                 <div>
                   <img
-                    role="presentation"
+                    alt=""
                     src="chrome://global/skin/icons/edit-outline.svg"
                   />
                 </div>
@@ -174,6 +174,12 @@ export class _CustomizeMenu extends React.PureComponent {
                 mayHaveListsWidget={this.props.mayHaveListsWidget}
                 mayHaveSportsWidget={this.props.mayHaveSportsWidget}
                 mayHaveClocksWidget={this.props.mayHaveClocksWidget}
+                mayHavePrivacyWidget={this.props.mayHavePrivacyWidget}
+                mayHaveCrosswordWidget={this.props.mayHaveCrosswordWidget}
+                mayHaveStocksWidget={this.props.mayHaveStocksWidget}
+                mayHavePictureOfTheDayWidget={
+                  this.props.mayHavePictureOfTheDayWidget
+                }
                 dispatch={this.props.dispatch}
                 onSubpanelToggle={this.onSubpanelToggle}
                 toggleSectionsMgmtPanel={this.props.toggleSectionsMgmtPanel}

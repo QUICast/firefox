@@ -2060,7 +2060,7 @@ nsStyleImageLayers::Layer::Layer()
       mSize(StyleBackgroundSize::ExplicitSize(LengthPercentageOrAuto::Auto(),
                                               LengthPercentageOrAuto::Auto())),
 
-      mClip(StyleGeometryBox::BorderBox),
+      mClip(StyleBackgroundClip::BorderBox),
       mAttachment(StyleImageLayerAttachment::Scroll),
       mBlendMode(StyleBlend::Normal),
       mComposite(StyleMaskComposite::Add),
@@ -2311,7 +2311,11 @@ nsStyleDisplay::nsStyleDisplay()
       mAlignmentBaseline(StyleAlignmentBaseline::Baseline),
       mBaselineShift(StyleBaselineShift::Length(LengthPercentage::Zero())),
       mBaselineSource(StyleBaselineSource::Auto),
-      mWebkitLineClamp(0),
+      mWebkitLineClamp{
+          {StyleOptional<StyleInteger>::None(), StyleMaxLinesKeyword::None},
+          StyleBlockEllipsis::Ellipsis(),
+          false,
+          false},
       mShapeMargin(LengthPercentage::Zero()),
       mShapeOutside(StyleShapeOutside::None()) {
   MOZ_COUNT_CTOR(nsStyleDisplay);
@@ -2812,12 +2816,13 @@ nsStyleVisibility::nsStyleVisibility(const Document& aDocument)
                      : StyleDirection::Ltr),
       mVisible(StyleVisibility::Visible),
       mImageRendering(StyleImageRendering::Auto),
+      mImageOrientation(StyleImageOrientation::FromImage),
+      mImageDecoding(StyleImageDecoding::Auto),
       mWritingMode(StyleWritingModeProperty::HorizontalTb),
       mTextOrientation(StyleTextOrientation::Mixed),
       mMozBoxCollapse(StyleBoxCollapse::Flex),
       mPrintColorAdjust(StylePrintColorAdjust::Economy),
-      mDominantBaseline(StyleDominantBaseline::Auto),
-      mImageOrientation(StyleImageOrientation::FromImage) {
+      mDominantBaseline(StyleDominantBaseline::Auto) {
   MOZ_COUNT_CTOR(nsStyleVisibility);
 }
 
@@ -2825,12 +2830,13 @@ nsStyleVisibility::nsStyleVisibility(const nsStyleVisibility& aSource)
     : mDirection(aSource.mDirection),
       mVisible(aSource.mVisible),
       mImageRendering(aSource.mImageRendering),
+      mImageOrientation(aSource.mImageOrientation),
+      mImageDecoding(aSource.mImageDecoding),
       mWritingMode(aSource.mWritingMode),
       mTextOrientation(aSource.mTextOrientation),
       mMozBoxCollapse(aSource.mMozBoxCollapse),
       mPrintColorAdjust(aSource.mPrintColorAdjust),
-      mDominantBaseline(aSource.mDominantBaseline),
-      mImageOrientation(aSource.mImageOrientation) {
+      mDominantBaseline(aSource.mDominantBaseline) {
   MOZ_COUNT_CTOR(nsStyleVisibility);
 }
 
@@ -2868,7 +2874,8 @@ nsChangeHint nsStyleVisibility::CalcDifference(
       mDominantBaseline != aNewData.mDominantBaseline) {
     hint |= NS_STYLE_HINT_REFLOW;
   }
-  if (mImageRendering != aNewData.mImageRendering) {
+  if (mImageRendering != aNewData.mImageRendering ||
+      mImageDecoding != aNewData.mImageDecoding) {
     hint |= nsChangeHint_RepaintFrame;
   }
   if (mPrintColorAdjust != aNewData.mPrintColorAdjust) {
@@ -2976,8 +2983,8 @@ nsStyleTextReset::nsStyleTextReset()
       mInitialLetter{0, 0},
       mTextDecorationColor(StyleColor::CurrentColor()),
       mTextDecorationThickness(StyleTextDecorationLength::Auto()),
-      mTextDecorationInset(StyleTextDecorationInset::Length(
-          StyleLength::Zero(), StyleLength::Zero())),
+      mTextDecorationInset(StyleTextDecorationInset::LengthPercentage(
+          StyleLengthPercentage::Zero(), StyleLengthPercentage::Zero())),
       mTextBoxTrim(StyleTextBoxTrim::NONE) {
   MOZ_COUNT_CTOR(nsStyleTextReset);
 }

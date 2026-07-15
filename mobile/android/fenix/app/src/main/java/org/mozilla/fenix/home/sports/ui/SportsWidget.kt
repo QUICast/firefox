@@ -27,6 +27,8 @@ import org.mozilla.fenix.home.sports.SportCardErrorState
 import org.mozilla.fenix.home.sports.SportsCardImpressionSource
 import org.mozilla.fenix.home.sports.SportsCardType
 import org.mozilla.fenix.home.sports.Team
+import org.mozilla.fenix.home.sports.isLive
+import org.mozilla.fenix.home.sports.isPast
 import org.mozilla.fenix.home.sports.regionGrouping
 import org.mozilla.fenix.home.sports.worldCupKickoffCountdownTarget
 import org.mozilla.fenix.home.ui.horizontalMargin
@@ -48,6 +50,7 @@ private val SportsWidgetTopSpacing = 44.dp
  * @param onFollowTeam Invoked when a team is followed.
  * @param onSkip Invoked when the user dismisses the "Follow team" card.
  * @param onGetCustomWallpaper Invoked when the user clicks on the "Get custom wallpaper" menu item.
+ * @param onShare Invoked when the user clicks on the "Share" menu item.
  * @param onRefresh Used to refresh the scores for live matches.
  * @param onMatchClicked Used to handle match click actions.
  * @param onCardShown Invoked once per widget mount for the first visible card (impression) and on
@@ -64,6 +67,7 @@ fun SportsWidget(
     onFollowTeam: (CountrySelectorSource) -> Unit,
     onSkip: () -> Unit,
     onGetCustomWallpaper: () -> Unit,
+    onShare: () -> Unit,
     onRefresh: (LiveMatchRefreshSource) -> Unit,
     onMatchClicked: (String?, String?, String?) -> Unit,
     onCardShown: (SportsCardType, SportsCardImpressionSource) -> Unit,
@@ -114,6 +118,7 @@ fun SportsWidget(
                 sportsWidgetState = sportsWidgetState,
                 onFollowTeam = onFollowTeam,
                 onGetCustomWallpaper = onGetCustomWallpaper,
+                onShare = onShare,
                 onDismiss = onDismiss,
                 onRefresh = onRefresh,
                 onMatchClicked = onMatchClicked,
@@ -130,6 +135,7 @@ private fun SportsCardPagerSection(
     sportsWidgetState: SportsWidgetState,
     onFollowTeam: (CountrySelectorSource) -> Unit,
     onGetCustomWallpaper: () -> Unit,
+    onShare: () -> Unit,
     onDismiss: () -> Unit,
     onRefresh: (LiveMatchRefreshSource) -> Unit,
     onMatchClicked: (String?, String?, String?) -> Unit,
@@ -152,6 +158,7 @@ private fun SportsCardPagerSection(
         sportsWidgetState.errorState,
         onFollowTeam,
         onGetCustomWallpaper,
+        onShare,
         onDismiss,
         onRefresh,
         onMatchClicked,
@@ -164,6 +171,7 @@ private fun SportsCardPagerSection(
             errorState = sportsWidgetState.errorState,
             onFollowTeam = onFollowTeam,
             onGetCustomWallpaper = onGetCustomWallpaper,
+            onShare = onShare,
             onRemove = onDismiss,
             onRefresh = onRefresh,
             onMatchClicked = onMatchClicked,
@@ -175,11 +183,13 @@ private fun SportsCardPagerSection(
         pages = pagesResult.pages,
         onChangeTeam = onFollowTeam,
         onGetCustomWallpaper = onGetCustomWallpaper,
+        onShare = onShare,
         onRemove = onDismiss,
         onCardShown = onCardShown,
         modifier = modifier,
         championsPageIndices = pagesResult.championsPageIndices,
         errorPageIndices = pagesResult.errorPageIndices,
+        initialPage = pagesResult.initialPage,
     )
 }
 
@@ -187,6 +197,9 @@ internal data class SportsCardPagesResult(
     val pages: List<SportsPage>,
     val championsPageIndices: Set<Int>,
     val errorPageIndices: Set<Int>,
+    // Page the pager should open on: the live card, else the next upcoming card, else the most
+    // recent past card (tournament over). Defaults to 0.
+    val initialPage: Int = 0,
 )
 
 @Suppress("LongParameterList")
@@ -198,6 +211,7 @@ internal fun sportsCardPages(
     errorState: SportCardErrorState?,
     onFollowTeam: (CountrySelectorSource) -> Unit,
     onGetCustomWallpaper: () -> Unit,
+    onShare: () -> Unit,
     onRemove: () -> Unit,
     onRefresh: (LiveMatchRefreshSource) -> Unit,
     onMatchClicked: (String?, String?, String?) -> Unit,
@@ -220,13 +234,42 @@ internal fun sportsCardPages(
         matchCardStates.forEach { matchCardState ->
             if (shouldDisplayChampionsCard(matchCardState.viewerOutcome)) {
                 championsPageIndices.add(size)
-                add(championsCardPage(matchCardState, onMatchClicked, onGetCustomWallpaper, onRemove))
+                add(championsCardPage(matchCardState, onMatchClicked, onGetCustomWallpaper, onShare, onRemove))
             } else {
                 add(matchCardPage(matchCardState, errorState, selectedTeam != null, onRefresh, onMatchClicked))
             }
         }
     }
-    return SportsCardPagesResult(pages, championsPageIndices, errorPageIndices)
+    // When the pager collapsed to a single error page there is no match card to open on; otherwise
+    // the match cards are the trailing pages, so their offset is everything added before them.
+    val initialPage = if (errorPageIndices.isEmpty()) {
+        initialMatchPage(matchCardStates, offset = pages.size - matchCardStates.size)
+    } else {
+        0
+    }
+    return SportsCardPagesResult(pages, championsPageIndices, errorPageIndices, initialPage)
+}
+
+/**
+ * Page the pager should open on, given the [matchCardStates] and the [offset] of the first match
+ * card within the page list: the first live card, else the first upcoming card, else the most
+ * recent past card (tournament over). Defaults to 0.
+ */
+private fun initialMatchPage(matchCardStates: List<MatchCardState>, offset: Int): Int {
+    var livePage: Int? = null
+    var firstUpcomingPage: Int? = null
+    var lastMatchPage: Int? = null
+    matchCardStates.forEachIndexed { index, matchCardState ->
+        val pageIndex = offset + index
+        lastMatchPage = pageIndex
+        val statuses = (matchCardState.matches + matchCardState.relatedMatches).map { it.matchStatus }
+        when {
+            statuses.any { it.isLive() } -> if (livePage == null) livePage = pageIndex
+            statuses.isNotEmpty() && statuses.all { it.isPast() } -> Unit
+            else -> if (firstUpcomingPage == null) firstUpcomingPage = pageIndex
+        }
+    }
+    return livePage ?: firstUpcomingPage ?: lastMatchPage ?: 0
 }
 
 /**
@@ -257,9 +300,10 @@ private fun MutableList<SportsPage>.addCollapsedErrorPage(
     if (anyLive) return false
     if (isOneWeekToWorldCup && matchCardStates.isNotEmpty()) return false
 
+    val type = SportsCardType.fromError(errorState)
     errorPageIndices.add(size)
     add(
-        SportsPage(type = SportsCardType.fromError(errorState)) { _, _ ->
+        SportsPage(type = type, key = type.pagerKey()) { _, _ ->
             SportsWidgetErrorCard(
                 error = errorState,
                 onRefresh = { onRefresh(LiveMatchRefreshSource.SPORTS_WIDGET_CARD_ERROR_BUTTON) },
@@ -296,7 +340,10 @@ private fun MutableList<SportsPage>.addPromoPage(
 
 private fun countdownFollowTeamPage(
     onFollowTeam: (CountrySelectorSource) -> Unit,
-): SportsPage = SportsPage(type = SportsCardType.COUNTDOWN_PROMO) { pageNumber, pageCount ->
+): SportsPage = SportsPage(
+    type = SportsCardType.COUNTDOWN_PROMO,
+    key = SportsCardType.COUNTDOWN_PROMO.pagerKey(),
+) { pageNumber, pageCount ->
     CountdownPromoCard(
         dateInUtc = worldCupKickoffCountdownTarget(),
         actionButtonLabelResId = R.string.sports_widget_country_selector_title,
@@ -309,7 +356,10 @@ private fun countdownFollowTeamPage(
 
 private fun followTeamPromoPage(
     onFollowTeam: (CountrySelectorSource) -> Unit,
-): SportsPage = SportsPage(type = SportsCardType.FOLLOW_TEAM_PROMO) { pageNumber, pageCount ->
+): SportsPage = SportsPage(
+    type = SportsCardType.FOLLOW_TEAM_PROMO,
+    key = SportsCardType.FOLLOW_TEAM_PROMO.pagerKey(),
+) { pageNumber, pageCount ->
     FollowTeamPromoCard(
         onFollowTeam = onFollowTeam,
         pageNumber = pageNumber,
@@ -319,7 +369,10 @@ private fun followTeamPromoPage(
 
 private fun followingPromoPage(
     team: Team,
-): SportsPage = SportsPage(type = SportsCardType.FOLLOWING_PROMO) { pageNumber, pageCount ->
+): SportsPage = SportsPage(
+    type = SportsCardType.FOLLOWING_PROMO,
+    key = SportsCardType.FOLLOWING_PROMO.pagerKey(),
+) { pageNumber, pageCount ->
     FollowingPromoCard(
         team = team,
         pageNumber = pageNumber,
@@ -331,17 +384,19 @@ private fun championsCardPage(
     state: MatchCardState,
     onMatchClicked: (String?, String?, String?) -> Unit,
     onGetCustomWallpaper: () -> Unit,
+    onShare: () -> Unit,
     onRemove: () -> Unit,
 ): SportsPage {
     val type = when (state.viewerOutcome) {
         is FollowedTeamOutcome.ThirdPlace -> SportsCardType.CHAMPIONS_THIRD_PLACE
         else -> SportsCardType.CHAMPIONS_WINNER
     }
-    return SportsPage(type = type) { pageNumber, pageCount ->
+    return SportsPage(type = type, key = state.pagerKey()) { pageNumber, pageCount ->
         ChampionsCard(
             state = state,
             onMatchClicked = onMatchClicked,
             onGetCustomWallpaper = onGetCustomWallpaper,
+            onShare = onShare,
             onRemove = onRemove,
             pageNumber = pageNumber,
             pageCount = pageCount,
@@ -355,7 +410,10 @@ private fun matchCardPage(
     isTeamSelected: Boolean,
     onRefresh: (LiveMatchRefreshSource) -> Unit,
     onMatchClicked: (String?, String?, String?) -> Unit,
-): SportsPage = SportsPage(type = SportsCardType.fromRound(state.round)) { pageNumber, pageCount ->
+): SportsPage = SportsPage(
+    type = SportsCardType.fromRound(state.round),
+    key = state.pagerKey(),
+) { pageNumber, pageCount ->
     MatchCard(
         state = state,
         errorState = errorState,
@@ -372,6 +430,19 @@ private fun shouldDisplayChampionsCard(followedTeamOutcome: FollowedTeamOutcome)
         is FollowedTeamOutcome.TournamentWinner, is FollowedTeamOutcome.ThirdPlace -> true
         else -> false
     }
+
+// Stable identity for a promo/error page: only one card of each type ever appears in the pager.
+private fun SportsCardType.pagerKey(): String = "type:$name"
+
+// Stable identity for a match-backed card: the set of its match ids (featured plus related),
+// order-independent, so it survives score refreshes and featured/related reshuffles within the
+// same fixtures but changes when the tournament advances to a different set of matches (a new
+// round). Used by the pager to restore the user's position by card rather than by raw index.
+private fun MatchCardState.pagerKey(): String =
+    (matches + relatedMatches)
+        .map { it.globalEventId }
+        .sorted()
+        .joinToString(prefix = "match:", separator = ",")
 
 @PreviewLightDark
 @Composable

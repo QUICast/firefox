@@ -6,7 +6,7 @@
 
 use crate::derives::*;
 use crate::parser::{Parse, ParserContext};
-use crate::typed_om::{NumericValue, ToTyped, TypedValue, UnitValue};
+use crate::typed_om::{NumericType, NumericValue, ToTyped, TypedValue, UnitValue};
 use crate::values::computed::time::Time as ComputedTime;
 use crate::values::computed::{Context, ToComputedValue};
 use crate::values::specified::calc::{CalcNode, CalcNumeric, Leaf};
@@ -29,6 +29,27 @@ pub enum TimeUnit {
     Second,
     /// `ms`
     Millisecond,
+}
+
+impl TimeUnit {
+    /// Returns the time unit for the given string.
+    #[inline]
+    pub fn from_str(unit: &str) -> Result<Self, ()> {
+        Ok(match_ignore_ascii_case! { unit,
+            "s" => Self::Second,
+            "ms" => Self::Millisecond,
+            _ => return Err(())
+        })
+    }
+
+    /// Returns this unit as a string.
+    #[inline]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Second => "s",
+            Self::Millisecond => "ms",
+        }
+    }
 }
 
 /// A time value according to CSS-VALUES § 6.2.
@@ -70,10 +91,7 @@ impl NoCalcTime {
     /// Returns the unit of the time as a string.
     #[inline]
     pub fn unit(&self) -> &'static str {
-        match self.unit {
-            TimeUnit::Second => "s",
-            TimeUnit::Millisecond => "ms",
-        }
+        self.unit.as_str()
     }
 
     /// Return the unitless, raw value.
@@ -89,11 +107,7 @@ impl NoCalcTime {
 
     /// Convert this value to the specified unit, if possible.
     pub fn to(&self, unit: &str) -> Result<Self, ()> {
-        let target = match_ignore_ascii_case! { unit,
-            "s" => TimeUnit::Second,
-            "ms" => TimeUnit::Millisecond,
-             _ => return Err(()),
-        };
+        let target = TimeUnit::from_str(unit)?;
         let value = match target {
             TimeUnit::Second => self.seconds(),
             TimeUnit::Millisecond => self.seconds() * 1000.0,
@@ -103,11 +117,7 @@ impl NoCalcTime {
 
     /// Parses a time according to CSS-VALUES § 6.2.
     pub fn parse_dimension(value: CSSFloat, unit: &str) -> Result<Self, ()> {
-        let unit = match_ignore_ascii_case! { unit,
-            "s" => TimeUnit::Second,
-            "ms" => TimeUnit::Millisecond,
-            _ => return Err(())
-        };
+        let unit = TimeUnit::from_str(unit)?;
         Ok(Self::new(unit, value))
     }
 }
@@ -141,6 +151,7 @@ impl ToComputedValue for NoCalcTime {
 impl ToTyped for NoCalcTime {
     fn to_typed(&self, dest: &mut ThinVec<TypedValue>) -> Result<(), ()> {
         let numeric_value = NumericValue::Unit(UnitValue {
+            numeric_type: NumericType::time(),
             value: self.unitless_value(),
             unit: CssString::from(self.unit()),
         });

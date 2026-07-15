@@ -241,6 +241,10 @@ void InspectorUtils::GetChildrenForNode(nsINode& aNode,
   if (auto* node = nsLayoutUtils::GetAfterPseudo(parent)) {
     aResult.AppendElement(node);
   }
+
+  if (auto* node = nsLayoutUtils::GetPickerIconPseudo(parent)) {
+    aResult.AppendElement(node);
+  }
 }
 
 class ReadOnlyInspectorDeclaration final : public nsDOMCSSDeclaration {
@@ -264,7 +268,10 @@ class ReadOnlyInspectorDeclaration final : public nsDOMCSSDeclaration {
   }
   void IndexedGetter(uint32_t aIndex, bool& aFound,
                      nsACString& aPropName) final {
-    aFound = Servo_DeclarationBlock_GetNthProperty(mRaw, aIndex, &aPropName);
+    CSSPropertyId id{eCSSProperty_UNKNOWN};
+    if ((aFound = Servo_DeclarationBlock_GetAt(mRaw, aIndex, &id))) {
+      id.ToString(aPropName);
+    }
   }
   void RemoveProperty(const nsACString& aPropertyName, nsACString& aValue,
                       ErrorResult& aRv) final {
@@ -1425,6 +1432,42 @@ void InspectorUtils::GetAnchorNamesFor(GlobalObject& aGlobalObject,
   }
 
   frame->PresShell()->CollectAnchorNames(frame, aResult);
+}
+
+/* static */
+void InspectorUtils::GetComputationStepsSupportedCSSFunctions(
+    GlobalObject& aGlobalObject, nsTArray<nsCString>& aResult) {
+  Servo_GetComputationStepsSupportedCSSFunctions(&aResult);
+}
+
+/* static */
+void InspectorUtils::GetComputationSteps(GlobalObject& aGlobalObject,
+                                         const nsAString& aExpression,
+                                         Element& aElement,
+                                         const nsAString& aPseudo,
+                                         nsTArray<nsString>& aResult) {
+  Document* doc = aElement.GetComposedDoc();
+  if (!doc) {
+    return;
+  }
+
+  auto pseudo = PseudoStyleRequest::Parse(
+      aPseudo, aElement.OwnerDoc()->DefaultStyleAttrURLData());
+  if (!pseudo) {
+    return;
+  }
+
+  RefPtr<const ComputedStyle> computedStyle =
+      GetCleanComputedStyleForElement(&aElement, *pseudo);
+  if (!computedStyle) {
+    // This can fail for elements that are not in the document or
+    // if the document they're in doesn't have a presshell.  Bail out.
+    return;
+  }
+
+  Servo_GetComputationSteps(&aExpression, &aElement, pseudo->mType,
+                            computedStyle, doc->EnsureStyleSet().RawData(),
+                            &aResult);
 }
 
 }  // namespace mozilla::dom

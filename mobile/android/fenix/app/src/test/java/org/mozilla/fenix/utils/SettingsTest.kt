@@ -8,6 +8,8 @@ import android.content.pm.PackageInfo
 import androidx.core.content.edit
 import io.mockk.every
 import io.mockk.spyk
+import io.mockk.verify
+import mozilla.components.browser.engine.gecko.cookiebanners.ReportSiteDomainsRepository.Companion.REPORT_SITE_DOMAINS_REPOSITORY_NAME
 import mozilla.components.concept.engine.Engine.HttpsOnlyMode.DISABLED
 import mozilla.components.concept.engine.Engine.HttpsOnlyMode.ENABLED
 import mozilla.components.concept.engine.Engine.HttpsOnlyMode.ENABLED_PRIVATE_ONLY
@@ -35,6 +37,7 @@ import org.mozilla.fenix.settings.ShortcutType
 import org.mozilla.fenix.settings.deletebrowsingdata.DeleteBrowsingDataOnQuitType
 import org.mozilla.fenix.wallpapers.Wallpaper
 import org.robolectric.RobolectricTestRunner
+import java.io.File
 import java.util.Calendar
 
 private const val TOU_VERSION = 5
@@ -827,26 +830,12 @@ class SettingsTest {
     }
 
     @Test
-    fun `GIVEN feature is disabled, hasUserBeenOnboarded is true and isLauncherIntent is true THEN shouldShowOnboarding returns false`() {
+    fun `GIVEN feature is disabled, hasUserBeenOnboarded is true THEN shouldShowOnboarding returns false`() {
         val settings = spyk(settings)
 
         val actual = settings.shouldShowOnboarding(
             featureEnabled = false,
             hasUserBeenOnboarded = true,
-            isLauncherIntent = true,
-        )
-
-        assertFalse(actual)
-    }
-
-    @Test
-    fun `GIVEN feature is enabled, hasUserBeenOnboarded is false and isLauncherIntent is false THEN shouldShowOnboarding returns false`() {
-        val settings = spyk(settings)
-
-        val actual = settings.shouldShowOnboarding(
-            featureEnabled = true,
-            hasUserBeenOnboarded = false,
-            isLauncherIntent = false,
         )
 
         assertFalse(actual)
@@ -859,20 +848,18 @@ class SettingsTest {
         val actual = settings.shouldShowOnboarding(
             featureEnabled = true,
             hasUserBeenOnboarded = true,
-            isLauncherIntent = true,
         )
 
         assertFalse(actual)
     }
 
     @Test
-    fun `GIVEN feature is enabled, hasUserBeenOnboarded is false and isLauncherIntent is true THEN shouldShowOnboarding returns true`() {
+    fun `GIVEN feature is enabled, hasUserBeenOnboarded is false THEN shouldShowOnboarding returns true`() {
         val settings = spyk(settings)
 
         val actual = settings.shouldShowOnboarding(
             featureEnabled = true,
             hasUserBeenOnboarded = false,
-            isLauncherIntent = true,
         )
 
         assertTrue(actual)
@@ -886,7 +873,6 @@ class SettingsTest {
         val actual = settings.shouldShowOnboarding(
             featureEnabled = false,
             hasUserBeenOnboarded = true,
-            isLauncherIntent = false,
         )
 
         assertTrue(actual)
@@ -1023,6 +1009,55 @@ class SettingsTest {
 
         settings.migrateSearchWidgetInstalledPrefIfNeeded()
         assertFalse(settings.searchWidgetInstalled)
+    }
+
+    @Test
+    fun `GIVEN the legacy pocket database has not been deleted WHEN deleteLegacyPocketDatabaseIfNeeded is called THEN the database is deleted`() {
+        val context = spyk(testContext)
+        val settings = Settings(context)
+
+        settings.deletePocketDatabaseIfNeeded()
+
+        verify { context.deleteDatabase("pocket_recommendations") }
+    }
+
+    @Test
+    fun `GIVEN the legacy pocket database was already deleted WHEN deleteLegacyPocketDatabaseIfNeeded is called again THEN the database is not deleted a second time`() {
+        val context = spyk(testContext)
+        val settings = Settings(context)
+
+        settings.deletePocketDatabaseIfNeeded()
+        settings.deletePocketDatabaseIfNeeded()
+
+        verify(exactly = 1) { context.deleteDatabase("pocket_recommendations") }
+    }
+
+    @Test
+    fun `GIVEN an existing report site domains datastore WHEN deleteReportSiteDomainsDataStoreIfNeeded is called THEN the datastore is deleted`() {
+        val settings = Settings(testContext)
+        val dataStoreFile = File(testContext.filesDir, "datastore/$REPORT_SITE_DOMAINS_REPOSITORY_NAME.preferences_pb")
+        dataStoreFile.parentFile?.mkdirs()
+        dataStoreFile.createNewFile()
+        assertTrue(dataStoreFile.exists())
+
+        settings.deleteReportSiteDomainsDataStoreIfNeeded()
+
+        assertFalse(dataStoreFile.exists())
+    }
+
+    @Test
+    fun `GIVEN the report site domains datastore was already deleted WHEN deleteReportSiteDomainsDataStoreIfNeeded is called again THEN the datastore is not deleted a second time`() {
+        val settings = Settings(testContext)
+        val dataStoreFile = File(testContext.filesDir, "datastore/$REPORT_SITE_DOMAINS_REPOSITORY_NAME.preferences_pb")
+        dataStoreFile.parentFile?.mkdirs()
+        dataStoreFile.createNewFile()
+
+        settings.deleteReportSiteDomainsDataStoreIfNeeded()
+        assertFalse(dataStoreFile.exists())
+
+        dataStoreFile.createNewFile()
+        settings.deleteReportSiteDomainsDataStoreIfNeeded()
+        assertTrue(dataStoreFile.exists())
     }
 
     @Test
@@ -1273,6 +1308,42 @@ class SettingsTest {
     }
 
     @Test
+    fun `WHEN this is a benchmark build and screen capture and screenshots are not allowed in private mode THEN shouldSecureModeBeOverridden is true`() {
+        val settings = Settings(appContext = testContext, isBenchmarkBuild = true)
+        settings.allowScreenshotsInPrivateMode = false
+        settings.allowScreenCaptureInSecureScreens = false
+
+        assertTrue(settings.shouldSecureModeBeOverridden)
+    }
+
+    @Test
+    fun `WHEN this is not a benchmark build and screen capture and screenshots are not allowed in private mode THEN shouldSecureModeBeOverridden is false`() {
+        val settings = Settings(appContext = testContext, isBenchmarkBuild = false)
+        settings.allowScreenshotsInPrivateMode = false
+        settings.allowScreenCaptureInSecureScreens = false
+
+        assertFalse(settings.shouldSecureModeBeOverridden)
+    }
+
+    @Test
+    fun `WHEN this is not a benchmark build and screenshots in private mode are allowed and screen capture in private mode is not allowed THEN shouldSecureModeBeOverridden is true`() {
+        val settings = Settings(appContext = testContext, isBenchmarkBuild = false)
+        settings.allowScreenshotsInPrivateMode = true
+        settings.allowScreenCaptureInSecureScreens = false
+
+        assertTrue(settings.shouldSecureModeBeOverridden)
+    }
+
+    @Test
+    fun `WHEN this is not a benchmark build and screenshots in private mode is not allowed and screen capture in private mode is allowed THEN shouldSecureModeBeOverridden is true`() {
+        val settings = Settings(appContext = testContext, isBenchmarkBuild = false)
+        settings.allowScreenCaptureInSecureScreens = true
+        settings.allowScreenshotsInPrivateMode = false
+
+        assertTrue(settings.shouldSecureModeBeOverridden)
+    }
+
+    @Test
     fun `WHEN user has accepted the ToU THEN termsOfUseAcceptedVersion returns the ToU version`() {
         settings.hasAcceptedTermsOfService = true
 
@@ -1334,6 +1405,24 @@ class SettingsTest {
 
         val result = settings.deleteDownloadBehavior
         assertEquals(Settings.DeleteDownloadBehavior.ASK_WHEN_DELETING, result)
+    }
+
+    @Test
+    fun `WHEN tab strip is disabled THEN activeSimpleToolbarShortcutKey reads the simple toolbar key`() {
+        settings.isTabStripEnabled = false
+        settings.toolbarSimpleShortcutKey = ShortcutType.NEW_TAB.value
+        settings.toolbarTabStripShortcutKey = ShortcutType.BOOKMARK.value
+
+        assertEquals(ShortcutType.NEW_TAB.value, settings.activeSimpleToolbarShortcutKey)
+    }
+
+    @Test
+    fun `WHEN tab strip is enabled THEN activeSimpleToolbarShortcutKey reads the tab strip key`() {
+        settings.isTabStripEnabled = true
+        settings.toolbarSimpleShortcutKey = ShortcutType.NEW_TAB.value
+        settings.toolbarTabStripShortcutKey = ShortcutType.BOOKMARK.value
+
+        assertEquals(ShortcutType.BOOKMARK.value, settings.activeSimpleToolbarShortcutKey)
     }
 
     @Test

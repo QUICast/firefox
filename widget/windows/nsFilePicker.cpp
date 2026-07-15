@@ -11,30 +11,34 @@
 #include <sysinfoapi.h>
 #include <winerror.h>
 #include <winuser.h>
+
 #include <utility>
 
 #include "ContentAnalysis.h"
+#include "WinUtils.h"
 #include "mozilla/Assertions.h"
 #include "mozilla/BackgroundHangMonitor.h"
 #include "mozilla/Components.h"
+#include "mozilla/Logging.h"
+#include "mozilla/ProfilerLabels.h"
+#include "mozilla/StaticPrefs_widget.h"
+#include "mozilla/UniquePtr.h"
 #include "mozilla/dom/BrowsingContext.h"
 #include "mozilla/dom/CanonicalBrowsingContext.h"
 #include "mozilla/dom/Directory.h"
 #include "mozilla/dom/WindowGlobalParent.h"
-#include "mozilla/Logging.h"
 #include "mozilla/ipc/UtilityProcessManager.h"
-#include "mozilla/ProfilerLabels.h"
-#include "mozilla/StaticPrefs_widget.h"
-#include "mozilla/UniquePtr.h"
+#include "mozilla/widget/filedialog/WinFileDialogCommands.h"
+#include "mozilla/widget/filedialog/WinFileDialogParent.h"
 #include "nsArrayEnumerator.h"
+#include "nsCExternalHandlerService.h"
 #include "nsCRT.h"
 #include "nsEnumeratorUtils.h"
 #include "nsHashPropertyBag.h"
 #include "nsIContentAnalysis.h"
+#include "nsIExternalHelperAppService.h"
 #include "nsIFile.h"
 #include "nsISimpleEnumerator.h"
-#include "nsCExternalHandlerService.h"
-#include "nsIExternalHelperAppService.h"
 #include "nsNetUtil.h"
 #include "nsPIDOMWindow.h"
 #include "nsPrintfCString.h"
@@ -42,10 +46,6 @@
 #include "nsString.h"
 #include "nsToolkit.h"
 #include "nsWindow.h"
-#include "WinUtils.h"
-
-#include "mozilla/widget/filedialog/WinFileDialogCommands.h"
-#include "mozilla/widget/filedialog/WinFileDialogParent.h"
 
 using mozilla::LogLevel;
 using mozilla::UniquePtr;

@@ -17,6 +17,7 @@
 #include "mozilla/RandomNum.h"
 #include "mozilla/ScopeExit.h"
 #include "mozilla/StaticPrefs_dom.h"
+#include "mozilla/StaticPrefs_network.h"
 #include "mozilla/StaticPrefs_security.h"
 #include "mozilla/StaticPtr.h"
 #include "nsXULAppAPI.h"
@@ -51,8 +52,9 @@
 #include "nsOSHelperAppService.h"
 #include "nsOSHelperAppServiceChild.h"
 #include "nsContentSecurityUtils.h"
-#include "nsUTF8Utils.h"
 #include "nsUnicodeProperties.h"
+#include "mozilla/Utf16.h"
+#include "mozilla/Utf8.h"
 
 // used to access our datastore of user-configured helper applications
 #include "nsIHandlerService.h"
@@ -99,6 +101,7 @@
 #include "ContentChild.h"
 #include "nsXULAppAPI.h"
 #include "nsPIDOMWindow.h"
+#include "nsPIDOMWindowInlines.h"
 #include "ExternalHelperAppChild.h"
 
 #include "mozilla/dom/nsHTTPSOnlyUtils.h"
@@ -717,7 +720,6 @@ nsresult nsExternalHelperAppService::DoContentContentProcessHelper(
   nsCString disp;
   nsCOMPtr<nsIURI> uri;
   int64_t contentLength = -1;
-  bool wasFileChannel = false;
   uint32_t contentDisposition = -1;
   nsAutoString fileName;
   nsCOMPtr<nsILoadInfo> loadInfo;
@@ -728,9 +730,6 @@ nsresult nsExternalHelperAppService::DoContentContentProcessHelper(
   aChannel->GetContentDispositionFilename(fileName);
   aChannel->GetContentDispositionHeader(disp);
   loadInfo = aChannel->LoadInfo();
-
-  nsCOMPtr<nsIFileChannel> fileChan(do_QueryInterface(aChannel));
-  wasFileChannel = fileChan != nullptr;
 
   nsCOMPtr<nsIURI> referrer;
   NS_GetReferrerFromChannel(aChannel, getter_AddRefs(referrer));
@@ -745,8 +744,8 @@ nsresult nsExternalHelperAppService::DoContentContentProcessHelper(
   RefPtr childListener = MakeRefPtr<ExternalHelperAppChild>();
   MOZ_ALWAYS_TRUE(child->SendPExternalHelperAppConstructor(
       childListener, uri, loadInfoArgs, nsCString(aMimeContentType), disp,
-      contentDisposition, fileName, aForceSave, contentLength, wasFileChannel,
-      referrer, aContentContext));
+      contentDisposition, fileName, aForceSave, contentLength, referrer,
+      aContentContext));
 
   NS_ADDREF(*aStreamListener = childListener);
 
@@ -869,6 +868,13 @@ NS_IMETHODIMP nsExternalHelperAppService::ApplyDecodingForExtension(
     const nsACString& aExtension, const nsACString& aEncodingType,
     bool* aApplyDecoding) {
   *aApplyDecoding = true;
+  // By default we decode the Content-Encoding even when the file extension
+  // matches the encoding, to avoid saving double-compressed files (bug 610679,
+  // bug 1470011). The legacy behavior can be restored via the pref.
+  if (StaticPrefs::
+          network_http_decode_content_for_known_compressed_extensions()) {
+    return NS_OK;
+  }
   uint32_t i;
   for (i = 0; i < std::size(nonDecodableExtensions); ++i) {
     if (aExtension.LowerCaseEqualsASCII(
@@ -1026,11 +1032,13 @@ nsExternalHelperAppService::LoadURI(nsIURI* aURI,
                                     bool aHasValidUserGestureActivation,
                                     bool aNewWindowTarget) {
   NS_ENSURE_ARG_POINTER(aURI);
+  NS_ENSURE_ARG_POINTER(aTriggeringPrincipal);
 
   if (XRE_IsContentProcess()) {
     mozilla::dom::ContentChild::GetSingleton()->SendLoadURIExternal(
-        aURI, aTriggeringPrincipal, aRedirectPrincipal, aBrowsingContext,
-        aTriggeredExternally, aHasValidUserGestureActivation, aNewWindowTarget);
+        WrapNotNull(aURI), WrapNotNull(aTriggeringPrincipal),
+        aRedirectPrincipal, aBrowsingContext, aTriggeredExternally,
+        aHasValidUserGestureActivation, aNewWindowTarget);
     return NS_OK;
   }
 
@@ -1098,7 +1106,7 @@ nsExternalHelperAppService::LoadURI(nsIURI* aURI,
   // links can always navigate everywhere, so this is a minor additional
   // restriction, only aiming to prevent some types of spoofing attacks
   // from otherwise disjoint browsingcontext trees.
-  if (aBrowsingContext && aTriggeringPrincipal &&
+  if (aBrowsingContext &&
       // Add-on principals are always allowed:
       !BasePrincipal::Cast(aTriggeringPrincipal)->AddonPolicy() &&
       // As is chrome code:
@@ -3595,7 +3603,7 @@ void nsExternalHelperAppService::SanitizeFileName(nsAString& aFileName,
     const char16_t* charStart = cp;
     // Get the full character code, and advance cp past it.
     bool err = false;
-    char32_t nextChar = UTF16CharEnumerator::NextChar(&cp, end, &err);
+    char32_t nextChar = DecodeOneUtf16CodePoint(&cp, end, &err);
     allBits |= nextChar;
     if (NS_WARN_IF(err)) {
       // Invalid (unpaired) surrogate: replace with REPLACEMENT CHARACTER,
@@ -3757,7 +3765,7 @@ void nsExternalHelperAppService::SanitizeFileName(nsAString& aFileName,
     const char16_t* end = aString.EndReading();
     for (const char16_t* cp = aString.BeginReading(); cp < end;) {
       bool err = false;
-      char32_t ch = UTF16CharEnumerator::NextChar(&cp, end, &err);
+      char32_t ch = DecodeOneUtf16CodePoint(&cp, end, &err);
       MOZ_ASSERT(!err, "unexpected lone surrogate");
       result += ch < 0x80 ? 1 : ch < 0x800 ? 2 : ch < 0x10000 ? 3 : 4;
     }
@@ -3796,13 +3804,17 @@ void nsExternalHelperAppService::SanitizeFileName(nsAString& aFileName,
   aFileName.Truncate();
   const char* endUtf8 = truncated.EndReading();
   for (const char* cp = truncated.BeginReading(); cp < endUtf8;) {
-    bool err = false;
-    char32_t ch = UTF8CharEnumerator::NextChar(&cp, endUtf8, &err);
-    if (err) {
+    Utf8Unit unit(*cp++);
+    if (IsAscii(unit)) {
+      aFileName.Append(char(unit.toUint8()));
+      continue;
+    }
+    Maybe<char32_t> ch = DecodeOneUtf8CodePoint(unit, &cp, endUtf8);
+    if (ch.isNothing()) {
       // Discard a possible broken final character.
       break;
     }
-    AppendUCS4ToUTF16(ch, aFileName);
+    AppendUCS4ToUTF16(ch.value(), aFileName);
   }
 
   // Trim any trailing space/vowel-separator/dots at the truncation point.

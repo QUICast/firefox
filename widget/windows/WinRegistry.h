@@ -6,14 +6,19 @@
 #define mozilla_widget_WinRegistry_h_
 
 #include <windows.h>
+
 #include <functional>
+
+#include "mozilla/Maybe.h"
+#include "mozilla/Span.h"
 #include "nsCOMPtr.h"
 #include "nsString.h"
 #include "nsTArray.h"
-#include "mozilla/Maybe.h"
-#include "mozilla/Span.h"
 
 class nsISerialEventTarget;
+
+#define LSTATUS_SUCCEEDED(x) (x == ERROR_SUCCESS)
+#define LSTATUS_FAILED(x) (x != ERROR_SUCCESS)
 
 namespace mozilla::widget::WinRegistry {
 
@@ -148,9 +153,9 @@ class Key {
   [[nodiscard]] bool WriteValueAsString(const nsString& aName,
                                         const nsString& aValue) {
     MOZ_ASSERT(mKey);
-    return SUCCEEDED(RegSetValueExW(mKey, aName.get(), 0, REG_SZ,
-                                    (const BYTE*)aValue.get(),
-                                    (aValue.Length() + 1) * sizeof(char16_t)));
+    return LSTATUS_SUCCEEDED(
+        RegSetValueExW(mKey, aName.get(), 0, REG_SZ, (const BYTE*)aValue.get(),
+                       (aValue.Length() + 1) * sizeof(char16_t)));
   }
 
   HKEY RawKey() const { return mKey; }

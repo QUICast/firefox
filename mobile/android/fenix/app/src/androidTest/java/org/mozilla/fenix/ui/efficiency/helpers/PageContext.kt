@@ -6,6 +6,8 @@ package org.mozilla.fenix.ui.efficiency.helpers
 
 import androidx.compose.ui.test.junit4.AndroidComposeTestRule
 import org.mozilla.fenix.helpers.HomeActivityIntentTestRule
+import org.mozilla.fenix.ui.efficiency.pageObjects.AddToHomeScreenComponent
+import org.mozilla.fenix.ui.efficiency.pageObjects.BookmarkSearchPage
 import org.mozilla.fenix.ui.efficiency.pageObjects.BookmarksPage
 import org.mozilla.fenix.ui.efficiency.pageObjects.BrowserPage
 import org.mozilla.fenix.ui.efficiency.pageObjects.CollectionsPage
@@ -48,10 +50,13 @@ import org.mozilla.fenix.ui.efficiency.pageObjects.ShareOverlayPage
 import org.mozilla.fenix.ui.efficiency.pageObjects.ShortcutsPage
 import org.mozilla.fenix.ui.efficiency.pageObjects.TabDrawerPage
 import org.mozilla.fenix.ui.efficiency.pageObjects.ToolbarComponent
+import org.mozilla.fenix.ui.efficiency.pageObjects.UnifiedTrustPanelPage
 import androidx.compose.ui.test.junit4.v2.AndroidComposeTestRule as AndroidComposeTestRuleV2
 
 class PageContext(val composeRule: AndroidComposeTestRule<HomeActivityIntentTestRule, *>) {
     // Let's make sure we have them in a lexicographic order
+    val addToHomescreen = AddToHomeScreenComponent(composeRule)
+    val bookmarkSearch = BookmarkSearchPage(composeRule)
     val bookmarks = BookmarksPage(composeRule)
     val browserPage = BrowserPage(composeRule)
     val collections = CollectionsPage(composeRule)
@@ -94,16 +99,15 @@ class PageContext(val composeRule: AndroidComposeTestRule<HomeActivityIntentTest
     val shortcuts = ShortcutsPage(composeRule)
     val tabDrawer = TabDrawerPage(composeRule)
     val toolbar = ToolbarComponent(composeRule)
+    val unifiedTrustPanel = UnifiedTrustPanelPage(composeRule)
 
     fun initTestRule(
         skipOnboarding: Boolean = true,
-        isMenuRedesignCFREnabled: Boolean = false,
         isPageLoadTranslationsPromptEnabled: Boolean = false,
     ): AndroidComposeTestRule<HomeActivityIntentTestRule, *> {
         return AndroidComposeTestRuleV2(
             HomeActivityIntentTestRule(
                 skipOnboarding = skipOnboarding,
-                isMenuRedesignCFREnabled = isMenuRedesignCFREnabled,
                 isPageLoadTranslationsPromptEnabled = isPageLoadTranslationsPromptEnabled,
             ),
         ) { it.activity }

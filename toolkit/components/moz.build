@@ -49,6 +49,7 @@ DIRS += [
     "find",
     "forgetaboutsite",
     "gecko-trace",
+    "geolocation",
     "glean",
     "httpsonlyerror",
     "jsoncpp",
@@ -79,6 +80,7 @@ DIRS += [
     "search",
     "sessionstore",
     "shell",
+    "sitecategories",
     "startup",
     "statusfilter",
     "telemetry",
@@ -103,6 +105,7 @@ if CONFIG["NS_PRINTING"]:
 if CONFIG["MOZ_BUILD_APP"] != "mobile/android":
     DIRS += [
         "aboutconfig",
+        "aboutpdf",
         "narrate",
         "pictureinpicture",
         "uniffi-js",

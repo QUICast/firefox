@@ -6,6 +6,7 @@ interface Principal;
 interface URI;
 interface nsIDocShell;
 interface RemoteTab;
+interface MozChannel;
 interface nsIDOMProcessParent;
 interface nsIRFPTargetSetIDL;
 
@@ -122,11 +123,21 @@ interface WindowGlobalParent : WindowContext {
 
   // Information about the currently loaded document.
   readonly attribute Principal documentPrincipal;
+  readonly attribute Principal documentPartitionedPrincipal;
   readonly attribute Principal documentStoragePrincipal;
   readonly attribute Principal? contentBlockingAllowListPrincipal;
   readonly attribute URI? documentURI;
   readonly attribute DOMString documentTitle;
   readonly attribute nsICookieJarSettings? cookieJarSettings;
+
+  // The bare nsIChannel instances which were created in the parent process by
+  // DocumentLoadListener to load this document.
+  //
+  // NOTE: These will not reflect content-process-only changes to the channel,
+  // such as the PDF.js & JSON stream converters, initial about:blank, and
+  // javascript: URI documents.
+  readonly attribute MozChannel? documentChannel;
+  readonly attribute MozChannel? failedChannel;
 
   // True if the the currently loaded document is in fullscreen.
   attribute boolean fullscreen;

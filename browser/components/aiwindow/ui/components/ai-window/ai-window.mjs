@@ -9,6 +9,8 @@ import "chrome://browser/content/aiwindow/components/smartwindow-prompts.mjs";
 // eslint-disable-next-line import/no-unassigned-import
 import "chrome://browser/content/aiwindow/components/smartwindow-promo.mjs";
 // eslint-disable-next-line import/no-unassigned-import
+import "chrome://browser/content/aiwindow/components/smartwindow-topsites.mjs";
+// eslint-disable-next-line import/no-unassigned-import
 import "chrome://browser/content/aiwindow/components/kit-mention.mjs";
 
 const { XPCOMUtils } = ChromeUtils.importESModule(
@@ -18,11 +20,14 @@ const { XPCOMUtils } = ChromeUtils.importESModule(
 const lazy = {};
 ChromeUtils.defineESModuleGetters(lazy, {
   Chat: "moz-src:///browser/components/aiwindow/models/Chat.sys.mjs",
+  GET_PAGE_CONTENT:
+    "moz-src:///browser/components/aiwindow/models/Tools.sys.mjs",
   FEATURE_MAJOR_VERSIONS:
     "moz-src:///browser/components/aiwindow/models/Utils.sys.mjs",
   MODEL_FEATURES: "moz-src:///browser/components/aiwindow/models/Utils.sys.mjs",
-  openAIEngine: "moz-src:///browser/components/aiwindow/models/Utils.sys.mjs",
-  loadCallContext:
+  openAIEngine:
+    "moz-src:///browser/components/aiwindow/models/openAIEngine.sys.mjs",
+  buildEngineForFeature:
     "moz-src:///browser/components/aiwindow/models/PromptLoader.sys.mjs",
   generateChatTitle:
     "moz-src:///browser/components/aiwindow/models/TitleGeneration.sys.mjs",
@@ -34,12 +39,12 @@ ChromeUtils.defineESModuleGetters(lazy, {
     "moz-src:///browser/components/aiwindow/ui/modules/FeedbackModal.sys.mjs",
   ChatConversation:
     "moz-src:///browser/components/aiwindow/ui/modules/ChatConversation.sys.mjs",
+  TopSites: "resource:///modules/topsites/TopSites.sys.mjs",
+  URILoadingHelper: "resource:///modules/URILoadingHelper.sys.mjs",
   MEMORIES_FLAG_SOURCE:
     "moz-src:///browser/components/aiwindow/ui/modules/ChatEnums.sys.mjs",
   MESSAGE_ROLE:
     "moz-src:///browser/components/aiwindow/ui/modules/ChatEnums.sys.mjs",
-  AssistantRoleOpts:
-    "moz-src:///browser/components/aiwindow/ui/modules/ChatMessage.sys.mjs",
   UserRoleOpts:
     "moz-src:///browser/components/aiwindow/ui/modules/ChatMessage.sys.mjs",
   getRoleLabel:
@@ -53,11 +58,13 @@ ChromeUtils.defineESModuleGetters(lazy, {
   MemoriesManager:
     "moz-src:///browser/components/aiwindow/models/memories/MemoriesManager.sys.mjs",
   getAllModelsData:
-    "moz-src:///browser/components/aiwindow/ui/modules/AIWindowConstants.sys.mjs",
+    "moz-src:///browser/components/aiwindow/models/Utils.sys.mjs",
+  refreshModelsDataCache:
+    "moz-src:///browser/components/aiwindow/models/Utils.sys.mjs",
   getCurrentModelChoiceId:
-    "moz-src:///browser/components/aiwindow/ui/modules/AIWindowConstants.sys.mjs",
+    "moz-src:///browser/components/aiwindow/models/Utils.sys.mjs",
   getCurrentModelName:
-    "moz-src:///browser/components/aiwindow/ui/modules/AIWindowConstants.sys.mjs",
+    "moz-src:///browser/components/aiwindow/models/Utils.sys.mjs",
   ToolUI: "moz-src:///browser/components/aiwindow/ui/modules/ToolUI.sys.mjs",
   ACTION_LOG_UI_TYPE:
     "moz-src:///browser/components/aiwindow/ui/modules/ToolActionLog.sys.mjs",
@@ -65,6 +72,8 @@ ChromeUtils.defineESModuleGetters(lazy, {
     "moz-src:///browser/components/aiwindow/ui/modules/ToolActionLog.sys.mjs",
   buildActionLogRow:
     "moz-src:///browser/components/aiwindow/ui/modules/ToolActionLog.sys.mjs",
+  UI_UPDATE_TYPES:
+    "moz-src:///browser/components/aiwindow/ui/modules/ToolUI.sys.mjs",
 });
 
 ChromeUtils.defineLazyGetter(lazy, "log", function () {
@@ -114,7 +123,7 @@ ChromeUtils.defineLazyGetter(lazy, "log", function () {
  */
 
 /**
- * @typedef {"button" | "enter" | "follow-up" | "starter" | "suggestion"} ChatSubmitType
+ * @typedef {"button" | "enter" | "follow-up" | "shortcuts" | "starter" | "suggestion"} ChatSubmitType
  */
 
 const MODE = {
@@ -136,11 +145,16 @@ const PREF_MEMORIES_HISTORY =
 const PREF_MEMORIES_HAS_SEEN_MEMORIES =
   "browser.smartwindow.memories.hasSeenMemories";
 const PREF_MODEL_CHOICE = "browser.smartwindow.firstrun.modelChoice";
+const PREF_CUSTOM_ENDPOINT = "browser.smartwindow.customEndpoint";
+// TODO Bug 2053495: remove with mistral release pref
+const PREF_MISTRAL_RELEASE = "browser.smartwindow.mistralRelease";
 const TAB_FAVICON_CHAT =
   "chrome://browser/content/aiwindow/assets/ask-icon.svg";
 const PREF_CHAT_INTERACTION_COUNT = "browser.smartwindow.chat.interactionCount";
+const PREF_HIDE_TOP_SITES = "browser.smartwindow.hideTopSites";
 const MAX_INTERACTION_COUNT = 1000;
 const MAX_SIDEBAR_STARTER_CACHE_KEYS = 20;
+const MAX_TOP_SITES = 8;
 
 // 1-6 are MLPA spec codes; 7 is set locally for Fastly-blocked 406s.
 const ERROR_TELEMETRY_NAME_BY_CODE = {
@@ -150,10 +164,10 @@ const ERROR_TELEMETRY_NAME_BY_CODE = {
   4: "maxUsersReached",
   5: "upstreamRateLimit",
   6: "fastlyWafRateLimit",
-  7: "invalidPageContent",
+  7: "fastlyBlocked",
 };
 
-// Fastly errors don't have the error attribute; map the 406 to invalidPageContent.
+// Fastly errors don't have the error attribute; map the 406 to fastlyBlocked.
 function getErrorCode(error) {
   return (
     error.error ??
@@ -193,6 +207,8 @@ export class AIWindow extends MozLitElement {
     isGenerating: { type: Boolean, state: true },
     availableModels: { type: Object, state: true },
     selectedModelId: { type: String, state: true },
+    topSites: { type: Array, state: true },
+    startersResolved: { type: Boolean, state: true },
   };
 
   #browser;
@@ -214,6 +230,7 @@ export class AIWindow extends MozLitElement {
   #swapDocShellsChromeWindow = null;
   #hasMemories = false;
   #selectedModelChoiceId = null;
+  #hasModelChoiceOverride = false;
 
   get #kitMention() {
     return this.shadowRoot?.querySelector("kit-mention");
@@ -315,6 +332,15 @@ export class AIWindow extends MozLitElement {
     await this.#syncMemoriesButtonUI();
   }
 
+  async focusSmartbar() {
+    await this.#smartbarReadyPromise;
+    if (!this.#smartbar) {
+      return false;
+    }
+    this.#smartbar.focus();
+    return true;
+  }
+
   async #refreshHasMemories() {
     try {
       const memories = await lazy.MemoriesManager.getAllMemories();
@@ -377,6 +403,24 @@ export class AIWindow extends MozLitElement {
       true,
       () => this.#syncMemoriesButtonUI()
     );
+    XPCOMUtils.defineLazyPreferenceGetter(
+      this,
+      "hideTopSitesPref",
+      PREF_HIDE_TOP_SITES,
+      false,
+      () => this.#syncTopSites()
+    );
+    // TODO Bug 2053495: remove with mistral release pref
+    XPCOMUtils.defineLazyPreferenceGetter(
+      this,
+      "mistralReleasePref",
+      PREF_MISTRAL_RELEASE,
+      false,
+      () => this.#onMistralReleasePrefChanged()
+    );
+    // defineLazyPreferenceGetter registers its pref observer on first read, so
+    // touch the value here to arm the onUpdate callback above.
+    void this.mistralReleasePref;
 
     this.userPrompt = "";
     this.#browser = null;
@@ -388,12 +432,13 @@ export class AIWindow extends MozLitElement {
 
     this.mode = this.#detectModeFromContext();
     this.showStarters = false;
+    this.topSites = [];
+    this.startersResolved = false;
     this.showFooter = this.mode === MODE.FULLPAGE;
     this.promoMessage = null;
     this.showDisclaimer = this.mode !== MODE.FULLPAGE;
     this.isGenerating = false;
-    this.selectedModelId = lazy.getCurrentModelName();
-    this.#selectedModelChoiceId = lazy.getCurrentModelChoiceId();
+    this.#setModelChoice(lazy.getCurrentModelChoiceId());
 
     // Apply chat-active immediately if restoring a conversation
     if (this.#hostBrowser?.getAttribute("data-conversation-id")) {
@@ -522,6 +567,10 @@ export class AIWindow extends MozLitElement {
     Services.prefs.addObserver(
       PREF_MODEL_CHOICE,
       this.#onModelChoicePrefChanged
+    );
+    Services.prefs.addObserver(
+      PREF_CUSTOM_ENDPOINT,
+      this.#onCustomEndpointPrefChanged
     );
 
     this.#loadPendingConversation();
@@ -708,6 +757,9 @@ export class AIWindow extends MozLitElement {
     this.#starterPromptsAbortController?.abort();
     this.#starterPromptsAbortController = null;
 
+    this.#abortController?.abort();
+    this.#abortController = null;
+
     // Clean up visibility change handler
     if (this.#visibilityChangeHandler) {
       this.ownerDocument.removeEventListener(
@@ -737,6 +789,10 @@ export class AIWindow extends MozLitElement {
     Services.prefs.removeObserver(
       PREF_MODEL_CHOICE,
       this.#onModelChoicePrefChanged
+    );
+    Services.prefs.removeObserver(
+      PREF_CUSTOM_ENDPOINT,
+      this.#onCustomEndpointPrefChanged
     );
 
     // Clean up smartbar toggle button
@@ -830,34 +886,97 @@ export class AIWindow extends MozLitElement {
   }
 
   #onModelChoicePrefChanged = async () => {
-    const defaultModelChoiceId = Services.prefs.getStringPref(
-      PREF_MODEL_CHOICE,
-      ""
-    );
-    const defaultModelData = this.availableModels[defaultModelChoiceId];
-    if (!defaultModelData) {
+    if (this.#hasModelChoiceOverride) {
       return;
     }
-    await this.#switchModel({
-      modelId: defaultModelData.model,
-      modelChoiceId: defaultModelChoiceId,
-    });
+    const defaultModelChoiceId = lazy.getCurrentModelChoiceId();
+    if (!this.availableModels[defaultModelChoiceId]) {
+      return;
+    }
+    // Switch without override so the tab stays in sync with global setting.
+    await this.#switchModel(defaultModelChoiceId, { isTabOverride: false });
     this.#updateSmartbarModels(this.#smartbar);
   };
 
   #handleModelChange = async event => {
-    const { modelId, modelChoiceId } = event.detail;
-    await this.#switchModel({ modelId, modelChoiceId });
+    await this.#switchModel(event.detail.modelChoiceId, {
+      isTabOverride: true,
+    });
   };
 
-  async #switchModel({ modelId, modelChoiceId }) {
-    this.selectedModelId = modelId;
+  #onCustomEndpointPrefChanged = async () => {
+    await this.#loadAvailableModels();
+    const defaultModelChoiceId = lazy.getCurrentModelChoiceId();
+    if (
+      !this.#hasModelChoiceOverride &&
+      this.availableModels[defaultModelChoiceId]
+    ) {
+      await this.#switchModel(defaultModelChoiceId, { isTabOverride: false });
+    }
+
+    this.#updateSmartbarModels(this.#smartbar);
+  };
+
+  // TODO Bug 2053495: remove with mistral release pref.
+  #onMistralReleasePrefChanged = async () => {
+    await lazy.refreshModelsDataCache();
+    await this.#loadAvailableModels();
+    // The model backing a choice can change across the flip, so re-resolve the
+    // current choice's model to keep selectedModelId valid; otherwise the select
+    // can't find the selected model and renders in a stale/blank state.
+    const defaultModelChoiceId = lazy.getCurrentModelChoiceId();
+    if (
+      !this.#hasModelChoiceOverride &&
+      this.availableModels[defaultModelChoiceId]
+    ) {
+      await this.#switchModel(defaultModelChoiceId, { isTabOverride: false });
+    }
+    this.#updateSmartbarModels(this.#smartbar);
+  };
+
+  /**
+   * Sets the selected model choice.
+   *
+   * @param {string} modelChoiceId
+   */
+  #setModelChoice(modelChoiceId) {
     this.#selectedModelChoiceId = modelChoiceId;
+    this.selectedModelId =
+      this.availableModels?.[modelChoiceId]?.model ??
+      lazy.getCurrentModelName();
+  }
+
+  async #switchModel(modelChoiceId, { isTabOverride }) {
+    this.#setModelChoice(modelChoiceId);
+    // Switching another model than the global default overrides the choice for
+    // the current tab.
+    this.#hasModelChoiceOverride =
+      isTabOverride && modelChoiceId !== lazy.getCurrentModelChoiceId();
 
     // Update the system prompt for the new model
     if (this.#conversation?.messages.length) {
-      await this.#conversation.updateSystemPromptForModel(modelChoiceId);
+      await this.#conversation.loadSystemPrompt({
+        modelChoiceIdOverride: modelChoiceId,
+      });
     }
+
+    if (isTabOverride) {
+      this.#dispatchChromeEvent(
+        "ai-window:model-changed",
+        this.#getAIWindowEventOptions()
+      );
+    }
+  }
+
+  /**
+   * Restores per tab model choice overrides.
+   *
+   * @param {?string} modelChoiceId - Override model choice id
+   */
+  restoreModelChoiceOverride(modelChoiceId) {
+    this.#hasModelChoiceOverride = modelChoiceId !== null;
+    this.#setModelChoice(modelChoiceId ?? lazy.getCurrentModelChoiceId());
+    this.#updateSmartbarModels(this.#smartbar);
   }
 
   #handleOpenModelSettings = () => {
@@ -927,6 +1046,8 @@ export class AIWindow extends MozLitElement {
     // AIWindowTabStatesManager receives ai-window:conversation-changed
     // so it can trigger the initial starter prompts loading
     this.#swapConversation(this.#conversation);
+
+    this.#syncTopSites();
 
     await this.#loadPendingConversation().catch(error => {
       console.error(
@@ -1032,20 +1153,22 @@ export class AIWindow extends MozLitElement {
     this.#starterPromptsAbortController = abortController;
 
     if (clear) {
-      this.#renderStarterPrompts([]);
+      this.#renderStarterPrompts([], false);
     }
 
     let starters = [];
     try {
       const gBrowser = window.browsingContext?.topChromeWindow.gBrowser;
       const tabCount = gBrowser?.tabs.length || 0;
-      starters = await lazy.NewTabStarterGenerator.getPrompts(tabCount).catch(
-        e => {
-          lazy.log.error("[Prompts] Failed to load initial starters:", e);
-          return [];
-        }
-      );
 
+      const newTabStarterIds =
+        await lazy.NewTabStarterGenerator.getPrompts(tabCount);
+
+      // Kick off the sidebar generation concurrently so its request is issued
+      // before the l10n await can be interrupted by a re-entrant call.
+      let sidebarStartersPromise = null;
+      let startersKey = null;
+      let sidebarStarters = null;
       if (this.mode === MODE.SIDEBAR && gBrowser) {
         const { contextWebsites } = this.#smartbar.getCurrentContextData();
         const contextTabs = contextWebsites.map(contextWebsite => ({
@@ -1056,14 +1179,14 @@ export class AIWindow extends MozLitElement {
         // Get memories setting from user preferences
         const memoriesEnabled =
           this.#memoriesToggled ?? this.#memoriesIconShown;
-        const startersKey = JSON.stringify({
+        startersKey = JSON.stringify({
           contextTabs,
           memoriesEnabled,
         });
-        let sidebarStarters = this.#sidebarStarterCache.get(startersKey);
+        sidebarStarters = this.#sidebarStarterCache.get(startersKey);
 
         if (!sidebarStarters) {
-          sidebarStarters = await lazy
+          sidebarStartersPromise = lazy
             .generateConversationStartersSidebar(
               contextTabs,
               2,
@@ -1078,6 +1201,22 @@ export class AIWindow extends MozLitElement {
               );
               return null;
             });
+        }
+      }
+
+      starters = await this.ownerDocument.l10n
+        .formatValues(newTabStarterIds.map(({ l10nId }) => ({ id: l10nId })))
+        .then(texts =>
+          texts.map((text, i) => ({ text, type: newTabStarterIds[i].type }))
+        )
+        .catch(e => {
+          lazy.log.error("[Prompts] Failed to load initial starters:", e);
+          return [];
+        });
+
+      if (this.mode === MODE.SIDEBAR && gBrowser) {
+        if (sidebarStartersPromise) {
+          sidebarStarters = await sidebarStartersPromise;
 
           if (sidebarStarters) {
             this.#sidebarStarterCache.delete(startersKey);
@@ -1117,9 +1256,12 @@ export class AIWindow extends MozLitElement {
    * Sets the starters data and shows the prompts element.
    *
    * @param {Array<{text: string, type: string}>} starters - Array of starter prompt objects
+   * @param {boolean} [resolved=true] - Whether starter loading has settled;
+   *   false for the transient clear before an async load, which keeps Top
+   *   Sites hidden until the prompts row is ready.
    * @private
    */
-  #renderStarterPrompts(starters) {
+  #renderStarterPrompts(starters, resolved = true) {
     if (!this.isConnected) {
       return;
     }
@@ -1127,11 +1269,93 @@ export class AIWindow extends MozLitElement {
     this.#starters = this.#conversation?.messages?.length ? [] : starters;
     this.showStarters = !!this.#starters.length;
 
+    // Gate Top Sites on starter resolution so the prompts row and Top Sites
+    // render in the same update, avoiding a layout shift where Top Sites
+    // paint first and then jump down once the prompts row is inserted above.
+    if (resolved) {
+      this.startersResolved = true;
+    }
+
     if (this.showStarters) {
       this.onQuickPromptDisplayed(this.#starters.length);
     }
     this.requestUpdate();
   }
+
+  /**
+   * Loads the user's Top Sites and renders a single row of them below the
+   * Smartbar in fullpage mode. TopSites.getSites() already excludes sponsored
+   * sites; we only keep the first MAX_TOP_SITES entries to fit a single row.
+   *
+   * @private
+   */
+  /**
+   * Loads or clears Top Sites based on the current mode and the
+   * hideTopSites pref. Invoked on connect and whenever the pref changes
+   * so every open AI window reflects the new value.
+   *
+   * @private
+   */
+  #syncTopSites() {
+    if (this.mode === MODE.FULLPAGE) {
+      Glean.smartWindow.topsitesEnabled.set(!this.hideTopSitesPref);
+    }
+
+    if (this.mode === MODE.FULLPAGE && !this.hideTopSitesPref) {
+      // Only the visible tab can exhibit the prompts-row layout shift, so gate
+      // its Top Sites on starter resolution (see #renderStarterPrompts).
+      // Background tabs are hidden and never reload starters on tab switch, so
+      // reveal their Top Sites immediately to avoid leaving them blank.
+      if (this.ownerDocument.hidden) {
+        this.startersResolved = true;
+      }
+      this.#loadTopSites();
+    } else {
+      this.topSites = [];
+    }
+  }
+
+  async #loadTopSites() {
+    let sites = [];
+    try {
+      sites = await lazy.TopSites.getSites();
+    } catch (e) {
+      lazy.log.error("[TopSites] Failed to load top sites:", e);
+    }
+
+    if (!this.isConnected) {
+      return;
+    }
+
+    this.topSites = (sites ?? [])
+      .filter(site => site?.url)
+      .slice(0, MAX_TOP_SITES);
+
+    if (this.topSites.length) {
+      Glean.smartWindow.topsitesImpression.record({
+        visible_topsites: this.topSites.length,
+      });
+    }
+  }
+
+  /**
+   * Navigates the current tab to the selected Top Site.
+   *
+   * @param {CustomEvent} event - The site-selected event
+   * @private
+   */
+  #handleTopSiteSelected = event => {
+    const { url, position } = event.detail;
+    const win = this.#topChromeWindow;
+    if (!url || !win) {
+      return;
+    }
+    Glean.smartWindow.topsitesClick.record({
+      position,
+      visible_topsites: this.topSites.length,
+    });
+    lazy.URILoadingHelper.openTrustedLinkIn(win, url, "current");
+  };
 
   /**
    * Helper method to get or create the smartbar element
@@ -1302,6 +1526,7 @@ export class AIWindow extends MozLitElement {
     this.#dispatchMessageToChatContent({
       role: "assistant-message-complete",
       content: { id: lastAssistant?.id },
+      historyResults: this.#conversation?.getHistoryResultsSnapshot() ?? [],
     });
   };
 
@@ -1317,8 +1542,6 @@ export class AIWindow extends MozLitElement {
       this.#handleSmartbarCommit.name,
       this.conversationId
     );
-    this.#smartbar.clearSmartbarInput();
-
     const {
       value,
       action,
@@ -1337,9 +1560,15 @@ export class AIWindow extends MozLitElement {
         ? "button"
         : "enter");
 
+    // Read inline @mentions before clearing input.
+    const currentMentions =
+      action === ACTION.CHAT
+        ? this.#calculateCurrentMentions(contextMentions)
+        : null;
+    this.#smartbar.clearSmartbarInput();
+
     if (action === ACTION.CHAT) {
-      const { mergedMentions, allUrls, inlineMentions } =
-        this.#calculateCurrentMentions(contextMentions);
+      const { mergedMentions, allUrls, inlineMentions } = currentMentions;
 
       if (allUrls.size) {
         this.#conversation.addSeenUrls(allUrls);
@@ -1458,6 +1687,13 @@ export class AIWindow extends MozLitElement {
       return;
     }
 
+    // Auto-cancel any active website confirmation when starting a new prompt
+    lazy.ToolUI.autoCancelActiveConfirmation(
+      this.#conversation,
+      this.#topChromeWindow,
+      this.mode
+    ).catch(e => lazy.log.error("Failed to auto-cancel confirmation:", e));
+
     Glean.smartWindow.chatSubmit.record({
       chat_id: this.conversationId,
       detected_intent: detectedIntent,
@@ -1469,6 +1705,10 @@ export class AIWindow extends MozLitElement {
       submit_type: submitType,
       tabs: contextMentions.length,
     });
+
+    if (this.#conversation) {
+      this.#conversation.lastSubmitType = submitType;
+    }
 
     this.#recordChatInteraction();
     this.#fetchAIResponse(trimmed, {
@@ -1685,7 +1925,8 @@ export class AIWindow extends MozLitElement {
     this.#updateBrowserTabbable();
     this.#smartbar?.unsuppressStartQuery();
     if (this.#smartbar?.inputField) {
-      this.#smartbar.inputField.showPlaceholderAnimation = true;
+      this.#smartbar.inputField.showPlaceholderAnimation =
+        this.mode === MODE.FULLPAGE;
     }
   }
 
@@ -1729,6 +1970,9 @@ export class AIWindow extends MozLitElement {
     this.#abortController?.abort();
     this.#abortController = new AbortController();
     const { signal } = this.#abortController;
+    const stopWatchingTabClose =
+      this.#watchTabCloseForAbort(browsingContext, this.#abortController) ??
+      (() => {});
     this.isGenerating = true;
 
     const requestStart = ChromeUtils.now();
@@ -1748,15 +1992,20 @@ export class AIWindow extends MozLitElement {
     conversation.on("chat-conversation:message-update", onUpdate);
 
     try {
-      const callContext = await lazy.loadCallContext(lazy.MODEL_FEATURES.CHAT, {
+      const { engine, parameters } = await lazy.buildEngineForFeature(
+        lazy.MODEL_FEATURES.CHAT,
+        {
+          flowId: this.conversationId,
+          modelChoiceIdOverride: this.#selectedModelChoiceId,
+        }
+      );
+      conversation.engine = engine;
+      conversation.parameters = parameters;
+
+      // Upsert the system prompt for the current model choice. Idempotent —
+      // no-op if it already matches.
+      await conversation.loadSystemPrompt({
         modelChoiceIdOverride: this.#selectedModelChoiceId,
-      });
-      const engineInstance = await lazy.openAIEngine.build({
-        model: callContext.model,
-        serviceType: callContext.serviceType,
-        purpose: callContext.purpose,
-        flowId: this.conversationId,
-        feature: lazy.MODEL_FEATURES.CHAT,
       });
 
       if (inputText) {
@@ -1767,20 +2016,15 @@ export class AIWindow extends MozLitElement {
           skipUserDispatch
         );
 
-        // @todo
-        // fill out these assistant message flags
-        const assistantRoleOpts = new lazy.AssistantRoleOpts();
-        conversation.addAssistantMessage("text", "", assistantRoleOpts);
+        conversation.addAssistantMessage("text", "");
 
         this.#sendModelRequestTelemetryEvent();
       }
 
       await lazy.Chat.fetchWithHistory({
         conversation,
-        engineInstance,
         browsingContext,
         mode: this.mode,
-        callContext,
         signal,
       });
 
@@ -1806,11 +2050,38 @@ export class AIWindow extends MozLitElement {
       }
       this.requestUpdate?.();
     } finally {
+      stopWatchingTabClose();
       if (this.#abortController?.signal === signal) {
         this.isGenerating = false;
         this.#abortController = null;
       }
     }
+  }
+
+  /**
+   * Aborts the given controller when the tab that owns the captured
+   * browsingContext is closed. Sidebar mode only — in fullpage mode the AI
+   * window itself owns the browsingContext, and tearing down the element
+   * already stops generation. Returns a cleanup function, or null if no
+   * watcher was installed.
+   *
+   * @param {BrowsingContext} browsingContext
+   * @param {AbortController} controller
+   * @returns {(() => void) | null}
+   */
+  #watchTabCloseForAbort(browsingContext, controller) {
+    if (this.mode != MODE.SIDEBAR || !browsingContext) {
+      return null;
+    }
+    const browser = browsingContext.embedderElement;
+    const chromeWin = window.browsingContext?.topChromeWindow;
+    const tab = browser && chromeWin?.gBrowser?.getTabForBrowser(browser);
+    if (!tab) {
+      return null;
+    }
+    const onTabClose = () => controller.abort();
+    tab.addEventListener("TabClose", onTabClose);
+    return () => tab.removeEventListener("TabClose", onTabClose);
   }
 
   updated(changedProps) {
@@ -1823,18 +2094,50 @@ export class AIWindow extends MozLitElement {
         this.isGenerating
       );
     }
-    if (changedProps.has("availableModels") && this.#smartbar) {
-      this.#updateSmartbarModels(this.#smartbar);
+    if (changedProps.has("availableModels")) {
+      this.#setModelChoice(this.#selectedModelChoiceId);
+      if (this.#smartbar) {
+        this.#updateSmartbarModels(this.#smartbar);
+      }
     }
   }
 
   #onMessageComplete = (_event, msg) => {
     this.#addConversationTitle(msg?.content?.body);
+
+    // Check if we need to inject retry toolUIData
+    // This handles the case where a user cancelled a website confirmation dialog
+    // and then submitted a new prompt. The cancelled confirmation's original prompt
+    // is stored in conversation.pendingRetry. When this new message completes,
+    // we inject a retry UI component at the top of the message, allowing the user
+    // to retry the previously cancelled action if they wish.
+    const retryInjected = lazy.ToolUI.injectRetryToolUIDataIfNeeded(
+      msg,
+      this.#conversation
+    );
+
+    // If retry toolUIData was injected, dispatch the updated message
+    if (retryInjected) {
+      this.#dispatchMessageToChatContent({
+        ...msg,
+        role: "assistant",
+        isPreviousMessage: false,
+        // Deep clone toolUIData to prevent UI mutations from affecting the conversation model
+        toolUIData: msg.toolUIData
+          ? structuredClone(msg.toolUIData)
+          : undefined,
+      });
+    }
+
     this.#dispatchMessageToChatContent({
       role: "assistant-message-complete",
       content: {
         id: msg?.id,
       },
+      // Carry the history results snapshot with completion so the content page
+      // renders the grid even if the streaming-time dispatch was delayed or
+      // missed (its delivery races the message lifecycle).
+      historyResults: this.#conversation?.getHistoryResultsSnapshot() ?? [],
     });
     const followupCount = msg?.tokens?.followup?.length;
     if (followupCount) {
@@ -2134,6 +2437,9 @@ export class AIWindow extends MozLitElement {
         pageUrl: lazy.getCurrentTabUrl(window),
         conversation: this.#conversation,
         conversationId: this.#getDataConvId(),
+        modelChoiceId: this.#hasModelChoiceOverride
+          ? this.#selectedModelChoiceId
+          : null,
 
         // The tab this ai-window instance relates to: for fullpage that's
         // the tab hosting the element; for sidebar (no owner tab), fall
@@ -2380,13 +2686,71 @@ export class AIWindow extends MozLitElement {
     }
   }
 
-  handleToolUIUpdate(data) {
-    lazy.ToolUI.handleUpdate(
+  async handleToolUIUpdate(data) {
+    const success = await lazy.ToolUI.handleUpdate(
       data,
       this.#conversation,
       this.#topChromeWindow,
       this.mode
     );
+
+    // Check if this was a retry prompt update
+    if (success && data?.updateType === lazy.UI_UPDATE_TYPES.RETRY_PROMPT) {
+      const retryPrompt = data?.updateData?.prompt;
+      if (retryPrompt) {
+        this.submitChatMessage({
+          text: retryPrompt,
+          submitType: "retry",
+        });
+      }
+    }
+  }
+
+  #buildChatLogPayload() {
+    const messages = this.#conversation?.messages ?? [];
+
+    // Build a version of the log without page content by dropping:
+    // - tool result messages that are get_page_content responses (the raw page text)
+    // - assistant messages whose only tool call was get_page_content (the request to fetch it)
+    const withoutPageContent = messages.filter(msg => {
+      if (
+        msg.role === lazy.MESSAGE_ROLE.TOOL &&
+        msg.content?.name === lazy.GET_PAGE_CONTENT
+      ) {
+        return false;
+      }
+      if (msg.content?.body?.tool_calls?.length) {
+        const remaining = msg.content.body.tool_calls.filter(
+          tc => tc.function?.name !== lazy.GET_PAGE_CONTENT
+        );
+        if (!remaining.length) {
+          return false;
+        }
+      }
+      return true;
+    });
+
+    const hasPageContent = withoutPageContent.length < messages.length;
+    return {
+      withPageContent: { log: messages },
+      withoutPageContent: hasPageContent ? { log: withoutPageContent } : null,
+    };
+  }
+
+  /**
+   * Cache resolved history-result page assets (thumbnail/favicon) onto the
+   * conversation's pool so later message snapshots carry them. Called by the
+   * actor after it resolves assets requested by a rendered grid.
+   *
+   * @param {string} conversationId
+   * @param {Array<{url: string, image: ?string, hasFavicon: boolean}>} assets
+   */
+  applyHistoryAssets(conversationId, assets) {
+    if (this.conversationId !== conversationId) {
+      return;
+    }
+
+    this.#conversation?.applyHistoryAssets(assets);
   }
 
   #openFeedbackModal(type) {
@@ -2394,12 +2758,17 @@ export class AIWindow extends MozLitElement {
     if (!browser) {
       return;
     }
+    // Two versions of the chat log are built so the user can toggle whether to
+    // include page content in the submitted report via the preview checkbox.
+    const { withPageContent, withoutPageContent } = this.#buildChatLogPayload();
     const metadata = {
       metadata: {
         model: this.modelName,
         turn_count: this.#conversation?.messageCount ?? 0,
         prompt_version: lazy.FEATURE_MAJOR_VERSIONS[lazy.MODEL_FEATURES.CHAT],
       },
+      chatLog: withPageContent,
+      chatLogWithoutPageContent: withoutPageContent,
     };
     lazy.FeedbackModal.open(browser, type, metadata);
   }
@@ -2602,6 +2971,15 @@ export class AIWindow extends MozLitElement {
                     @SmartWindowPrompt:prompt-selected=${this
                       .#handlePromptSelected}
                   ></smartwindow-prompts>
+                `
+              : ""}
+            ${this.startersResolved
+              ? html`
+                  <smartwindow-topsites
+                    .sites=${this.topSites}
+                    @SmartWindowTopSites:site-selected=${this
+                      .#handleTopSiteSelected}
+                  ></smartwindow-topsites>
                 `
               : ""}
           `}

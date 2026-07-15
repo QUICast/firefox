@@ -2,23 +2,23 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include <algorithm>
-
 #include "nsSocketTransport2.h"
+
+#include <algorithm>
 
 #include "MockNetworkLayer.h"
 #include "MockNetworkLayerController.h"
 #include "NSSErrorsService.h"
 #include "NetworkDataCountLayer.h"
 #include "QuicSocketControl.h"
+#include "mozilla/ProfilerBandwidthCounter.h"
 #include "mozilla/StaticPrefs_network.h"
 #include "mozilla/SyncRunnable.h"
-#include "mozilla/glean/NetwerkMetrics.h"
 #include "mozilla/Telemetry.h"
 #include "mozilla/dom/ToJSValue.h"
+#include "mozilla/glean/NetwerkMetrics.h"
 #include "mozilla/net/NeckoChild.h"
 #include "mozilla/net/SSLTokensCache.h"
-#include "mozilla/ProfilerBandwidthCounter.h"
 #include "nsCOMPtr.h"
 #include "nsICancelable.h"
 #include "nsIClassInfoImpl.h"
@@ -57,8 +57,8 @@
 /* Following inclusions required for keepalive config not supported by NSPR. */
 #include "private/pprio.h"
 #if defined(XP_WIN)
-#  include <winsock2.h>
 #  include <mstcpip.h>
+#  include <winsock2.h>
 #elif defined(XP_UNIX)
 #  include <errno.h>
 #  include <netinet/tcp.h>
@@ -3136,8 +3136,9 @@ nsSocketTransport::SetKeepaliveVals(int32_t aIdleTime, int32_t aRetryInterval) {
 
 #ifdef ENABLE_SOCKET_TRACING
 
-#  include <stdio.h>
 #  include <ctype.h>
+#  include <stdio.h>
+
 #  include "prenv.h"
 
 static void DumpBytesToFile(const char* path, const char* header,

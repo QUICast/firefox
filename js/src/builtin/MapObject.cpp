@@ -45,8 +45,9 @@ static Value NormalizeDoubleValue(double d) {
     return Int32Value(i);
   }
 
-  // Normalize the sign bit of a NaN.
-  return JS::CanonicalizedDoubleValue(d);
+  // JS::Value can store NaN values with the sign bit set. Use JS::DoubleValue
+  // to ensure the canonical NaN is used.
+  return DoubleValue(d);
 }
 
 bool HashableValue::setValue(JSContext* cx, const Value& v) {
@@ -588,8 +589,8 @@ MapObject* MapObject::createWithProto(JSContext* cx, HandleObject proto,
   gc::AllocKind allocKind = gc::GetGCObjectKind(SlotCount);
 
   AutoSetNewObjectMetadata metadata(cx);
-  auto* mapObj =
-      NewObjectWithGivenProtoAndKinds<MapObject>(cx, proto, allocKind, newKind);
+  auto* mapObj = NewObjectWithGivenProto<MapObject>(
+      cx, proto, {.newKind = newKind, .allocKind = allocKind});
   if (!mapObj) {
     return nullptr;
   }
@@ -1297,8 +1298,8 @@ SetObject* SetObject::createWithProto(JSContext* cx, HandleObject proto,
   gc::AllocKind allocKind = gc::GetGCObjectKind(SlotCount);
 
   AutoSetNewObjectMetadata metadata(cx);
-  auto* setObj =
-      NewObjectWithGivenProtoAndKinds<SetObject>(cx, proto, allocKind, newKind);
+  auto* setObj = NewObjectWithGivenProto<SetObject>(
+      cx, proto, {.newKind = newKind, .allocKind = allocKind});
   if (!setObj) {
     return nullptr;
   }

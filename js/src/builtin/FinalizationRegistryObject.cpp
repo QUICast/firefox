@@ -251,10 +251,14 @@ void FinalizationRegistryObject::trace(JSTracer* trc, JSObject* obj) {
 
 void FinalizationRegistryObject::traceWeak(JSTracer* trc,
                                            bool* hasSymbolRegistrations) {
-  // Trace and update the contents of the registrations map's keys, which
-  // are weakly held.
+  // Trace and update the contents of the registrations map's keys, which are
+  // weakly held. Remove any old records that have been queued or cleaned up.
+  MOZ_ASSERT(recordsWithoutToken());
   MOZ_ASSERT(registrations());
   MOZ_ASSERT(hasSymbolRegistrations);
+
+  recordsWithoutToken()->mutableEraseIf(
+      [](FinalizationRecordObject* record) { return !record->isRegistered(); });
 
   for (auto iter = registrations()->modIter(); !iter.done(); iter.next()) {
     auto result = TraceWeakEdge(trc, &iter.getMutable().mutableKey(),
@@ -267,8 +271,19 @@ void FinalizationRegistryObject::traceWeak(JSTracer* trc,
         oomUnsafe.crash("FinalizationRegistryObject::traceWeak");
       }
       iter.remove();
-    } else if (result.finalTarget().isSymbol()) {
-      *hasSymbolRegistrations = true;
+    } else {
+      if (result.finalTarget().isSymbol()) {
+        *hasSymbolRegistrations = true;
+      }
+
+      FinalizationRecordVector& records = iter.get().value();
+      records.mutableEraseIf([](FinalizationRecordObject* record) {
+        return !record->isRegistered();
+      });
+
+      if (records.empty()) {
+        iter.remove();
+      }
     }
   }
 
@@ -389,9 +404,7 @@ bool FinalizationRegistryObject::register_(JSContext* cx, unsigned argc,
     target = ObjectValue(*object);
 
     // If the target is a DOM wrapper, preserve it.
-    if (!preserveDOMWrapper(cx, object)) {
-      return false;
-    }
+    MaybePreserveDOMWrapper(cx, object);
   } else {
     JS::Symbol* symbol = target.toSymbol();
     isPermanent = symbol->isPermanentAndMayBeShared();
@@ -409,18 +422,6 @@ bool FinalizationRegistryObject::register_(JSContext* cx, unsigned argc,
   // 8. Return undefined.
   registrationGuard.release();
   args.rval().setUndefined();
-  return true;
-}
-
-/* static */
-bool FinalizationRegistryObject::preserveDOMWrapper(JSContext* cx,
-                                                    HandleObject obj) {
-  if (!MaybePreserveDOMWrapper(cx, obj)) {
-    JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
-                              JSMSG_BAD_FINALIZATION_REGISTRY_OBJECT);
-    return false;
-  }
-
   return true;
 }
 

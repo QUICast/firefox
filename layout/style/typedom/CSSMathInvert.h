@@ -7,6 +7,7 @@
 
 #include "js/TypeDecls.h"
 #include "mozilla/RefPtr.h"
+#include "mozilla/UniquePtr.h"
 #include "mozilla/dom/CSSMathValue.h"
 #include "mozilla/dom/CSSNumericValueBindingFwd.h"
 #include "nsCycleCollectionParticipant.h"
@@ -21,6 +22,9 @@ class nsISupports;
 namespace mozilla {
 
 struct CSSPropertyId;
+template <typename T>
+class MovingNotNull;
+struct StyleMathInvert;
 
 namespace dom {
 
@@ -28,7 +32,12 @@ class GlobalObject;
 
 class CSSMathInvert final : public CSSMathValue {
  public:
-  CSSMathInvert(nsCOMPtr<nsISupports> aParent, RefPtr<CSSNumericValue> aValue);
+  CSSMathInvert(nsCOMPtr<nsISupports> aParent,
+                MovingNotNull<UniquePtr<StyleNumericType>> aNumericType,
+                RefPtr<CSSNumericValue> aValue);
+
+  static RefPtr<CSSMathInvert> Create(nsCOMPtr<nsISupports> aParent,
+                                      const StyleMathInvert& aMathInvert);
 
   NS_DECL_ISUPPORTS_INHERITED
   NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(CSSMathInvert, CSSMathValue)
@@ -49,6 +58,8 @@ class CSSMathInvert final : public CSSMathValue {
   void ToCssTextWithProperty(const CSSPropertyId& aPropertyId,
                              const SerializationContext& aContext,
                              nsACString& aDest) const;
+
+  StyleMathInvert ToStyleMathInvert() const;
 
  private:
   virtual ~CSSMathInvert() = default;

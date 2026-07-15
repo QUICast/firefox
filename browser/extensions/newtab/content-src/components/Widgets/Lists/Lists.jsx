@@ -11,11 +11,12 @@ import React, {
 } from "react";
 import { useSelector, batch } from "react-redux";
 import { actionCreators as ac, actionTypes as at } from "common/Actions.mjs";
-import { useIntersectionObserver, useSizeSubmenu } from "../../../lib/utils";
 import { WIDGET_REGISTRY, resolveWidgetSize } from "common/WidgetsRegistry.mjs";
 import { WidgetCelebration } from "../WidgetCelebration";
 import { useWidgetCelebration } from "../useWidgetCelebration";
-import { MoveSubmenu } from "../MoveSubmenu";
+import { SizeSubmenu } from "../SizeSubmenu";
+import { WidgetMenuFooter } from "../WidgetMenuFooter";
+import { useWidgetTelemetry } from "../useWidgetTelemetry";
 
 const TASK_TYPE = {
   IN_PROGRESS: "tasks",
@@ -198,7 +199,6 @@ function Lists({
   const inputRef = useRef(null);
   const reorderListRef = useRef(null);
   const widgetRef = useRef(null);
-  const impressionFired = useRef(false);
   const {
     celebrationFrame,
     celebrationId,
@@ -206,6 +206,17 @@ function Lists({
     isCelebrating,
     triggerCelebration,
   } = useWidgetCelebration(widgetRef);
+
+  // Pre-hook code reported widget_size as "medium" when the widgets row is
+  // not maximizable, regardless of the resolved widgetSize. Preserve that.
+  const telemetrySize = widgetsMayBeMaximized ? widgetSize : "medium";
+  const { impressionRef, recordUserAction } = useWidgetTelemetry({
+    dispatch,
+    widget: listsWidget,
+    widgetSize: telemetrySize,
+    legacyImpressionTypes: [at.WIDGETS_LISTS_USER_IMPRESSION],
+    legacyUserEventType: at.WIDGETS_LISTS_USER_EVENT,
+  });
 
   const handleListInteraction = useCallback(
     () => handleUserInteraction("lists"),
@@ -227,35 +238,8 @@ function Lists({
     [dispatch, handleListInteraction]
   );
 
-  // store selectedList with useMemo so it isnt re-calculated on every re-render
+  // store selectedList with useMemo so it isn't re-calculated on every re-render
   const isValidUrl = useCallback(str => URL.canParse(str), []);
-
-  const handleIntersection = useCallback(() => {
-    if (impressionFired.current) {
-      return;
-    }
-    impressionFired.current = true;
-
-    batch(() => {
-      dispatch(
-        ac.AlsoToMain({
-          type: at.WIDGETS_LISTS_USER_IMPRESSION,
-        })
-      );
-      const telemetryData = {
-        widget_name: "lists",
-        widget_size: widgetsMayBeMaximized ? widgetSize : "medium",
-      };
-      dispatch(
-        ac.AlsoToMain({
-          type: at.WIDGETS_IMPRESSION,
-          data: telemetryData,
-        })
-      );
-    });
-  }, [dispatch, widgetsMayBeMaximized, widgetSize]);
-
-  const listsRef = useIntersectionObserver(handleIntersection);
 
   const reorderLists = useCallback(
     (draggedElement, targetElement, before = false) => {
@@ -380,24 +364,10 @@ function Lists({
             data: { lists: updatedLists },
           })
         );
-        dispatch(
-          ac.OnlyToMain({
-            type: at.WIDGETS_LISTS_USER_EVENT,
-            data: { userAction: USER_ACTION_TYPES.TASK_CREATE },
-          })
-        );
-        const telemetryData = {
-          widget_name: "lists",
-          widget_source: "widget",
-          user_action: USER_ACTION_TYPES.TASK_CREATE,
-          widget_size: widgetsMayBeMaximized ? widgetSize : "medium",
-        };
-        dispatch(
-          ac.OnlyToMain({
-            type: at.WIDGETS_USER_EVENT,
-            data: telemetryData,
-          })
-        );
+        recordUserAction(USER_ACTION_TYPES.TASK_CREATE, {
+          source: "widget",
+          legacy: true,
+        });
       });
       setNewTask("");
     }
@@ -465,24 +435,11 @@ function Lists({
         })
       );
       if (userAction) {
-        dispatch(
-          ac.AlsoToMain({
-            type: at.WIDGETS_LISTS_USER_EVENT,
-            data: { userAction },
-          })
-        );
-        const telemetryData = {
-          widget_name: "lists",
-          widget_source: "widget",
-          user_action: userAction,
-          widget_size: widgetsMayBeMaximized ? widgetSize : "medium",
-        };
-        dispatch(
-          ac.AlsoToMain({
-            type: at.WIDGETS_USER_EVENT,
-            data: telemetryData,
-          })
-        );
+        recordUserAction(userAction, {
+          source: "widget",
+          legacy: true,
+          alsoToMain: true,
+        });
       }
     });
     handleListInteraction();
@@ -506,24 +463,10 @@ function Lists({
           data: { lists: updatedLists },
         })
       );
-      dispatch(
-        ac.OnlyToMain({
-          type: at.WIDGETS_LISTS_USER_EVENT,
-          data: { userAction: USER_ACTION_TYPES.TASK_DELETE },
-        })
-      );
-      const telemetryData = {
-        widget_name: "lists",
-        widget_source: "widget",
-        user_action: USER_ACTION_TYPES.TASK_DELETE,
-        widget_size: widgetsMayBeMaximized ? widgetSize : "medium",
-      };
-      dispatch(
-        ac.OnlyToMain({
-          type: at.WIDGETS_USER_EVENT,
-          data: telemetryData,
-        })
-      );
+      recordUserAction(USER_ACTION_TYPES.TASK_DELETE, {
+        source: "widget",
+        legacy: true,
+      });
     });
     handleListInteraction();
   }
@@ -580,24 +523,10 @@ function Lists({
             data: id,
           })
         );
-        dispatch(
-          ac.OnlyToMain({
-            type: at.WIDGETS_LISTS_USER_EVENT,
-            data: { userAction: USER_ACTION_TYPES.LIST_CREATE },
-          })
-        );
-        const telemetryData = {
-          widget_name: "lists",
-          widget_source: "widget",
-          user_action: USER_ACTION_TYPES.LIST_CREATE,
-          widget_size: widgetsMayBeMaximized ? widgetSize : "medium",
-        };
-        dispatch(
-          ac.OnlyToMain({
-            type: at.WIDGETS_USER_EVENT,
-            data: telemetryData,
-          })
-        );
+        recordUserAction(USER_ACTION_TYPES.LIST_CREATE, {
+          source: "widget",
+          legacy: true,
+        });
       });
       handleListInteraction();
       return;
@@ -618,24 +547,10 @@ function Lists({
             data: { lists: updatedLists },
           })
         );
-        dispatch(
-          ac.OnlyToMain({
-            type: at.WIDGETS_LISTS_USER_EVENT,
-            data: { userAction: USER_ACTION_TYPES.LIST_EDIT },
-          })
-        );
-        const telemetryData = {
-          widget_name: "lists",
-          widget_source: "widget",
-          user_action: USER_ACTION_TYPES.LIST_EDIT,
-          widget_size: widgetsMayBeMaximized ? widgetSize : "medium",
-        };
-        dispatch(
-          ac.OnlyToMain({
-            type: at.WIDGETS_USER_EVENT,
-            data: telemetryData,
-          })
-        );
+        recordUserAction(USER_ACTION_TYPES.LIST_EDIT, {
+          source: "widget",
+          legacy: true,
+        });
       });
       setIsEditing(false);
       handleListInteraction();
@@ -686,53 +601,13 @@ function Lists({
             data: key,
           })
         );
-        dispatch(
-          ac.OnlyToMain({
-            type: at.WIDGETS_LISTS_USER_EVENT,
-            data: { userAction: USER_ACTION_TYPES.LIST_DELETE },
-          })
-        );
-        const telemetryData = {
-          widget_name: "lists",
-          widget_source: "widget",
-          user_action: USER_ACTION_TYPES.LIST_DELETE,
-          widget_size: widgetsMayBeMaximized ? widgetSize : "medium",
-        };
-        dispatch(
-          ac.OnlyToMain({
-            type: at.WIDGETS_USER_EVENT,
-            data: telemetryData,
-          })
-        );
+        recordUserAction(USER_ACTION_TYPES.LIST_DELETE, {
+          source: "widget",
+          legacy: true,
+        });
       });
     }
     handleListInteraction();
-  }
-
-  function handleHideLists() {
-    batch(() => {
-      dispatch(
-        ac.OnlyToMain({
-          type: at.SET_PREF,
-          data: {
-            name: "widgets.lists.enabled",
-            value: false,
-          },
-        })
-      );
-      const telemetryData = {
-        widget_name: "lists",
-        widget_source: "context_menu",
-        enabled: false,
-        widget_size: widgetsMayBeMaximized ? widgetSize : "medium",
-      };
-      dispatch(
-        ac.OnlyToMain({
-          type: at.WIDGETS_ENABLED,
-          data: telemetryData,
-        })
-      );
-    });
   }
 
   function handleCopyListToClipboard() {
@@ -762,39 +637,10 @@ function Lists({
       console.error("Copy failed", err);
     }
 
-    batch(() => {
-      dispatch(
-        ac.OnlyToMain({
-          type: at.WIDGETS_LISTS_USER_EVENT,
-          data: { userAction: USER_ACTION_TYPES.LIST_COPY },
-        })
-      );
-      const telemetryData = {
-        widget_name: "lists",
-        widget_source: "widget",
-        user_action: USER_ACTION_TYPES.LIST_COPY,
-        widget_size: widgetsMayBeMaximized ? widgetSize : "medium",
-      };
-      dispatch(
-        ac.OnlyToMain({
-          type: at.WIDGETS_USER_EVENT,
-          data: telemetryData,
-        })
-      );
+    recordUserAction(USER_ACTION_TYPES.LIST_COPY, {
+      source: "widget",
+      legacy: true,
     });
-    handleListInteraction();
-  }
-
-  function handleLearnMore() {
-    dispatch(
-      ac.OnlyToMain({
-        type: at.OPEN_LINK,
-        data: {
-          url: "https://support.mozilla.org/kb/firefox-new-tab-widgets",
-          where: "tab",
-        },
-      })
-    );
     handleListInteraction();
   }
 
@@ -807,24 +653,15 @@ function Lists({
             data: { name: PREF_WIDGETS_LISTS_SIZE, value: size },
           })
         );
-        dispatch(
-          ac.OnlyToMain({
-            type: at.WIDGETS_USER_EVENT,
-            data: {
-              widget_name: "lists",
-              widget_source: "context_menu",
-              user_action: USER_ACTION_TYPES.CHANGE_SIZE,
-              action_value: size,
-              widget_size: size,
-            },
-          })
-        );
+        recordUserAction(USER_ACTION_TYPES.CHANGE_SIZE, {
+          source: "context_menu",
+          value: size,
+          size,
+        });
       });
     },
-    [dispatch]
+    [dispatch, recordUserAction]
   );
-
-  const sizeSubmenuRef = useSizeSubmenu(handleChangeSize);
 
   useEffect(() => {
     setIsAddingTask(false);
@@ -925,7 +762,7 @@ function Lists({
       className={`lists widget ${novaEnabled ? "col-4" : ""} ${listsSizeClass} ${isMaximized ? "is-maximized" : ""}${showEmptyState ? " is-empty" : ""}${hasVisibleTasks ? " has-visible-tasks" : ""}${isAddingTask ? " is-adding-task" : ""}${isCelebrating ? " is-celebrating" : ""}`}
       ref={el => {
         widgetRef.current = el;
-        listsRef.current = [el];
+        impressionRef(el);
       }}
     >
       {isCelebrating && celebrationFrame ? (
@@ -1007,7 +844,7 @@ function Lists({
           )}
         <moz-button
           className="lists-panel-button"
-          data-l10n-id="newtab-menu-section-tooltip"
+          data-l10n-id="newtab-widget-lists-menu-button"
           iconSrc="chrome://global/skin/icons/more.svg"
           menuId="lists-panel"
           type="ghost"
@@ -1027,41 +864,31 @@ function Lists({
             data-l10n-id="newtab-widget-lists-menu-delete"
             onClick={() => handleDeleteList()}
           ></panel-item>
-          <hr />
           <panel-item
             data-l10n-id="newtab-widget-lists-menu-copy"
             onClick={() => handleCopyListToClipboard()}
           ></panel-item>
-          {novaEnabled && widgetsMayBeMaximized && (
-            <panel-item submenu="lists-size-submenu">
-              <span data-l10n-id="newtab-widget-menu-change-size"></span>
-              <panel-list
-                ref={sizeSubmenuRef}
-                slot="submenu"
-                id="lists-size-submenu"
-              >
-                {["medium", "large"].map(size => (
-                  <panel-item
-                    key={size}
-                    type="checkbox"
-                    checked={widgetSize === size || undefined}
-                    data-size={size}
-                    data-l10n-id={`newtab-widget-size-${size}`}
-                  />
-                ))}
-              </panel-list>
-            </panel-item>
-          )}
-          <MoveSubmenu widgetId="lists" widgetEnabledMap={widgetEnabledMap} />
-          <panel-item
-            data-l10n-id="newtab-widget-menu-hide"
-            onClick={() => handleHideLists()}
-          ></panel-item>
-          <panel-item
-            className="learn-more"
-            data-l10n-id="newtab-widget-lists-menu-learn-more"
-            onClick={handleLearnMore}
-          ></panel-item>
+          <WidgetMenuFooter
+            dispatch={dispatch}
+            widgetId="lists"
+            widgetEnabledMap={widgetEnabledMap}
+            widgetName="lists"
+            enabledPref="widgets.lists.enabled"
+            widgetSize={widgetsMayBeMaximized ? widgetSize : "medium"}
+            learnMoreL10nId="newtab-widget-lists-menu-learn-more"
+            onLearnMore={handleListInteraction}
+            sizeSubmenu={
+              novaEnabled &&
+              widgetsMayBeMaximized && (
+                <SizeSubmenu
+                  submenuId="lists-size-submenu"
+                  sizes={["medium", "large"]}
+                  checkedSize={widgetSize}
+                  onChangeSize={handleChangeSize}
+                />
+              )
+            }
+          />
         </panel-list>
       </div>
       {(showInlineAddButton || isAddingTask) && (

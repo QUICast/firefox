@@ -17,7 +17,10 @@
 #include "mozilla/ClearOnShutdown.h"
 #include "mozilla/Components.h"
 #include "mozilla/ErrorNames.h"
+#include "mozilla/ExtensionPolicyService.h"
 #include "mozilla/Try.h"
+#include "mozilla/dom/ContentParent.h"
+#include "mozilla/dom/RemoteType.h"
 #include "mozilla/dom/Element.h"
 #include "mozilla/dom/Event.h"
 #include "mozilla/dom/EventBinding.h"
@@ -739,6 +742,46 @@ int64_t ChannelWrapper::ParentFrameId() const {
   return -1;
 }
 
+uint64_t ChannelWrapper::DocumentInnerWindowId() const {
+  if (nsCOMPtr<nsILoadInfo> loadInfo = GetLoadInfo()) {
+    auto type = loadInfo->GetExternalContentPolicyType();
+    // Exclude document requests: innerWindowId is used to compute documentId,
+    // which reflects the document for which the request is made. When a
+    // navigation request is initiated, the target document is unknown. There
+    // is not even a guarantee for the received document to be rendering when
+    // webRequest.onCompleted is received!
+    if (type == ExtContentPolicy::TYPE_DOCUMENT ||
+        type == ExtContentPolicy::TYPE_SUBDOCUMENT) {
+      return 0;
+    }
+    // Note: we are intentionally not checking the associated browsing context,
+    // because requests from web workers are not made by documents.
+    return loadInfo->GetInnerWindowID();
+  }
+  return 0;
+}
+
+uint64_t ChannelWrapper::ParentDocumentInnerWindowId() const {
+  if (nsCOMPtr<nsILoadInfo> loadInfo = GetLoadInfo()) {
+    RefPtr<BrowsingContext> parentBC;
+    if (loadInfo->GetFrameBrowsingContextID()) {
+      parentBC = loadInfo->GetBrowsingContext();
+    } else {
+      RefPtr<BrowsingContext> bc = loadInfo->GetBrowsingContext();
+      if (bc) {
+        parentBC = bc->GetParent();
+      }
+    }
+    if (parentBC) {
+      // This is a live read that could race against a parent navigation, but
+      // Cached+Constant in the WebIDL ensures a consistent value across all
+      // events for the same channel.
+      return parentBC->GetCurrentInnerWindowId();
+    }
+  }
+  return 0;
+}
+
 void ChannelWrapper::GetFrameAncestors(
     dom::Nullable<nsTArray<dom::MozFrameAncestorInfo>>& aFrameAncestors,
     ErrorResult& aRv) const {
@@ -797,8 +840,8 @@ nsresult ChannelWrapper::GetFrameAncestors(
  * Response filtering
  *****************************************************************************/
 
-void ChannelWrapper::RegisterTraceableChannel(const WebExtensionPolicy& aAddon,
-                                              nsIRemoteTab* aBrowserParent) {
+void ChannelWrapper::RegisterTraceableChannel(
+    const WebExtensionPolicy& aAddon) {
   // We can't attach new listeners after the response has started, so don't
   // bother registering anything.
   // NOTE: It is possible for mResponseStarted to be false despite the response
@@ -807,18 +850,29 @@ void ChannelWrapper::RegisterTraceableChannel(const WebExtensionPolicy& aAddon,
     return;
   }
 
-  mAddonEntries.InsertOrUpdate(aAddon.Id(), aBrowserParent);
+  if (!mAddonEntries.Contains(aAddon.Id())) {
+    mAddonEntries.AppendElement(aAddon.Id());
+  }
   if (!mChannelEntry) {
     mChannelEntry = WebRequestService::GetSingleton().RegisterChannel(this);
     CheckEventListeners();
+    if (!mAddedStreamListener) {
+      // If the stream listener was not connected before, and still fails to be
+      // added, then we know that ChannelWrapper::RequestListener::Init() has
+      // failed to register itself as a stream listener with the channel.
+      // There can be various reasons (channel not opened, or response already
+      // started before we started tracing). In any case, RequestListener will
+      // be unable to detect when it should clear mChannelEntry, so the safest
+      // thing to do here is to drop mChannelEntry now, to prevent bug 2044517.
+      mChannelEntry = nullptr;
+    }
   }
 }
 
 already_AddRefed<nsITraceableChannel> ChannelWrapper::GetTraceableChannel(
     const WebExtensionPolicy& aAddon,
     dom::ContentParent* aContentParent) const {
-  nsCOMPtr<nsIRemoteTab> remoteTab;
-  if (mAddonEntries.Get(aAddon.Id(), getter_AddRefs(remoteTab))) {
+  if (mAddonEntries.Contains(aAddon.Id())) {
     // aAddon existing in mAddonEntries implies that RegisterTraceableChannel
     // was called before (in WebRequest.sys.mjs), which implies that
     // ChannelWrapper::Matches() returned true before. That implies that
@@ -833,16 +887,25 @@ already_AddRefed<nsITraceableChannel> ChannelWrapper::GetTraceableChannel(
       return nullptr;
     }
 
-    ContentParent* contentParent = nullptr;
-    if (remoteTab) {
-      contentParent =
-          BrowserHost::GetFrom(remoteTab.get())->GetActor()->Manager();
+    if (aContentParent) {
+      RefPtr<BrowsingContextGroup> group =
+          BrowsingContextGroup::GetExisting(aAddon.GetBrowsingContextGroupId());
+      if (!group ||
+          group->GetHostProcess(EXTENSION_REMOTE_TYPE) != aContentParent) {
+        return nullptr;
+      }
+    } else {
+      // aContentParent must be set to the process of the extension on whose
+      // behalf we are handling the request for a traceable channel.
+      // It can only be nullptr (=not from a content process) when extensions
+      // are running in-process.
+      if (ExtensionPolicyService::GetSingleton().UseRemoteExtensions()) {
+        return nullptr;
+      }
     }
 
-    if (contentParent == aContentParent) {
-      nsCOMPtr<nsITraceableChannel> chan = QueryChannel();
-      return chan.forget();
-    }
+    nsCOMPtr<nsITraceableChannel> chan = QueryChannel();
+    return chan.forget();
   }
   return nullptr;
 }
@@ -1294,6 +1357,10 @@ void ChannelWrapper::CheckEventListeners() {
        HasListenersFor(nsGkAtoms::onstop) || mChannelEntry)) {
     auto listener = MakeRefPtr<RequestListener>(this);
     if (!NS_WARN_IF(NS_FAILED(listener->Init()))) {
+      // Once registered, the listener sticks to the channel. When redirected,
+      // AsyncOpen on the new channel receives the listener of the original
+      // (pre-redirect) channel, which is the listener we just added, or
+      // another stream listener that eventually calls our listener.
       mAddedStreamListener = true;
     }
   }

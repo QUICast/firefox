@@ -62,7 +62,7 @@ class OverOutElementsWrapper final : public nsISupports {
   enum class BoundaryEventType : bool { Mouse, Pointer };
   explicit OverOutElementsWrapper(BoundaryEventType aType) : mType(aType) {}
 
-  NS_DECL_CYCLE_COLLECTING_ISUPPORTS
+  NS_DECL_CYCLE_COLLECTING_ISUPPORTS_FINAL
   NS_DECL_CYCLE_COLLECTION_CLASS(OverOutElementsWrapper)
 
   already_AddRefed<nsIWidget> GetLastOverWidget() const;
@@ -1467,6 +1467,11 @@ class EventStateManager : public nsSupportsWeakReference, public nsIObserver {
   MOZ_CAN_RUN_SCRIPT static void SetPointerLock(nsIWidget* aWidget,
                                                 nsPresContext* aPresContext,
                                                 bool aUnadjustedMovement);
+  static void RequestLockPointer(nsIWidget* aWidget,
+                                 nsPresContext* aPresContext,
+                                 bool aUnadjustedMovement);
+  static void ReleaseLockedPointer(nsIWidget* aWidget);
+
   static void sClickHoldCallback(nsITimer* aTimer, void* aESM);
 };
 

@@ -443,7 +443,8 @@ function platformIsMac()
 
 function canOverlapOSChrome()
 {
-  return navigator.platform.startsWith("Win");
+  // Bug 1251981: no platform allows popups to overlap OS chrome anymore
+  return false;
 }
 
 window.arguments[0].SimpleTest.waitForFocus(runTests, window);

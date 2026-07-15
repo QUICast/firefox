@@ -24,6 +24,7 @@
 #include "nsFrameSelection.h"
 #include "nsGenericHTMLElement.h"
 #include "nsIContent.h"
+#include "nsIContentInlines.h"
 #include "nsIDocumentViewer.h"
 #include "nsIDocumentViewerPrint.h"
 #include "nsIFrame.h"
@@ -1215,7 +1216,8 @@ nsDocumentViewer::DispatchBeforeUnload() {
   if (window->AreDialogsEnabled() && mDocument &&
       !(mDocument->GetSandboxFlags() & SANDBOXED_MODALS) &&
       (!StaticPrefs::dom_require_user_interaction_for_beforeunload() ||
-       mDocument->ChromeRulesEnabled() || mDocument->UserHasInteracted()) &&
+       mDocument->ChromeRulesEnabled() ||
+       mDocument->HasBeenUserGestureActivated()) &&
       (event->WidgetEventPtr()->DefaultPrevented() || !text.IsEmpty())) {
     return eCanceledByBeforeUnload;
   }
@@ -1971,6 +1973,10 @@ MOZ_CAN_RUN_SCRIPT_BOUNDARY NS_IMETHODIMP nsDocumentViewer::SelectAll() {
     return NS_ERROR_FAILURE;
   }
 
+  // XXX Chrome and Safari select all in the shadow, but we do it in the <body>
+  // or the document element. Shouldn't we consider the root element from the
+  // selection range or the focused element if there is no selection range and
+  // use the shadow root?
   nsCOMPtr<nsINode> bodyNode;
   if (mDocument->IsHTMLOrXHTML()) {
     // XXXbz why not just do GetBody() for all documents, then GetRootElement()

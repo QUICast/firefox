@@ -332,12 +332,15 @@ void IDBTransaction::OnNewRequest() {
 
 void IDBTransaction::TransitionToActive() {
   AssertIsOnOwningThread();
-  MOZ_ASSERT(mReadyState == ReadyState::Inactive);
+  MOZ_DIAGNOSTIC_ASSERT(mReadyState == ReadyState::Inactive ||
+                        mReadyState == ReadyState::Finished);
 
   if (!mDeferralActive) {
     MOZ_DIAGNOSTIC_ASSERT(mDeferredRunnables.IsEmpty());
 
-    mReadyState = ReadyState::Active;
+    if (mReadyState == ReadyState::Inactive) {
+      mReadyState = ReadyState::Active;
+    }
     return;
   }
 
@@ -345,7 +348,9 @@ void IDBTransaction::TransitionToActive() {
 
   DrainDeferredResponses();
 
-  mReadyState = ReadyState::Active;
+  if (mReadyState == ReadyState::Inactive) {
+    mReadyState = ReadyState::Active;
+  }
 }
 
 void IDBTransaction::TransitionToInactiveWithDeferral() {
@@ -383,7 +388,8 @@ void IDBTransaction::OnRequestFinished(
     const bool aRequestCompletedSuccessfully) {
   AssertIsOnOwningThread();
   MOZ_ASSERT(mReadyState != ReadyState::Active);
-  MOZ_ASSERT_IF(mReadyState == ReadyState::Finished, !NS_SUCCEEDED(mAbortCode));
+  MOZ_ASSERT_IF(mReadyState == ReadyState::Finished,
+                NS_FAILED(mAbortCode) || mFiredCompleteOrAbort);
   MOZ_ASSERT(mPendingRequestCount);
 
   --mPendingRequestCount;

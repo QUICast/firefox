@@ -2,23 +2,23 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "mozilla/gfx/PrintTargetCG.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/WidgetUtils.h"
 #include "mozilla/dom/Promise.h"
+#include "mozilla/gfx/PrintTargetCG.h"
 
-#include "nsPrintDialogX.h"
+#include "nsCOMPtr.h"
+#include "nsCRT.h"
+#include "nsIGlobalObject.h"
 #include "nsIPrintSettings.h"
 #include "nsIPrintSettingsService.h"
-#include "nsPrintSettingsX.h"
-#include "nsCOMPtr.h"
-#include "nsIGlobalObject.h"
+#include "nsIStringBundle.h"
 #include "nsIWidget.h"
 #include "nsPIDOMWindow.h"
+#include "nsPrintDialogX.h"
+#include "nsPrintSettingsX.h"
 #include "nsQueryObject.h"
 #include "nsServiceManagerUtils.h"
-#include "nsIStringBundle.h"
-#include "nsCRT.h"
 #include "nsThreadUtils.h"
 #include "xpcpublic.h"
 
@@ -212,10 +212,11 @@ nsPrintDialogServiceX::ShowPrintDialog(mozIDOMWindowProxy* aParent,
   MozPrintPanelDidEndAdapter* adapter =
       [[MozPrintPanelDidEndAdapter alloc] initWithHandler:^(NSInteger button) {
         NS_OBJC_BEGIN_TRY_IGNORE_BLOCK;
-        // Retrieve a printInfo with the updated settings. (The
-        // NSPrintOperation operates on a copy, so the object we passed in
-        // will not have been modified.)
-        NSPrintInfo* result = [[NSPrintOperation currentOperation] printInfo];
+        // The sheet writes the user's choices (including the print
+        // destination) back into the printInfo we passed to
+        // beginSheetWithPrintInfo:, so read the updated settings from
+        // printInfo.
+        NSPrintInfo* result = printInfo;
         [NSPrintOperation setCurrentOperation:nil];
         [tmpView release];
 

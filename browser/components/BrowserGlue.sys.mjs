@@ -24,7 +24,7 @@ ChromeUtils.defineESModuleGetters(lazy, {
   ContentBlockingPrefs:
     "moz-src:///browser/components/protections/ContentBlockingPrefs.sys.mjs",
   ContextualIdentityService:
-    "resource://gre/modules/ContextualIdentityService.sys.mjs",
+    "moz-src:///toolkit/components/contextualidentity/ContextualIdentityService.sys.mjs",
   DAPIncrementality: "resource://gre/modules/DAPIncrementality.sys.mjs",
   DAPTelemetrySender: "resource://gre/modules/DAPTelemetrySender.sys.mjs",
   DAPVisitCounter: "resource://gre/modules/DAPVisitCounter.sys.mjs",
@@ -113,6 +113,7 @@ ChromeUtils.defineLazyGetter(
 
 if (AppConstants.MOZ_CRASHREPORTER) {
   ChromeUtils.defineESModuleGetters(lazy, {
+    CrashFileCleaner: "resource:///modules/ContentCrashHandlers.sys.mjs",
     UnsubmittedCrashHandler: "resource:///modules/ContentCrashHandlers.sys.mjs",
   });
 }
@@ -622,6 +623,18 @@ BrowserGlue.prototype = {
         return false;
       }
 
+      // Bug 1635927: skip the early blank window when the user passes window
+      // sizing/positioning flags, otherwise the blank window's persisted size
+      // from xulstore is reused and the CLI values are silently dropped.
+      if (
+        cmdLine.findFlag("width", false) != -1 ||
+        cmdLine.findFlag("height", false) != -1 ||
+        cmdLine.findFlag("left", false) != -1 ||
+        cmdLine.findFlag("top", false) != -1
+      ) {
+        return false;
+      }
+
       // Until bug 1450626 and bug 1488384 are fixed, skip the blank window when
       // using a non-default theme.
       if (
@@ -863,9 +876,10 @@ BrowserGlue.prototype = {
         // This usually happens after the test harness is done collecting
         // test errors, thus we can't easily add a failure to it. The only
         // noticeable solution we have is crashing.
+        // See bug 2034905 for filename / fileName shenanigans.
         Cc["@mozilla.org/xpcom/debug;1"]
           .getService(Ci.nsIDebug2)
-          .abort(ex.filename, ex.lineNumber);
+          .abort(ex.filename || ex.fileName, ex.lineNumber);
       }
     }
 
@@ -955,6 +969,8 @@ BrowserGlue.prototype = {
     }
 
     if (AppConstants.MOZ_CRASHREPORTER) {
+      lazy.CrashFileCleaner.init();
+      lazy.CrashFileCleaner.scheduleCleanup();
       lazy.UnsubmittedCrashHandler.init();
       lazy.UnsubmittedCrashHandler.scheduleCheckForUnsubmittedCrashReports();
     }
@@ -1611,7 +1627,7 @@ BrowserGlue.prototype = {
     // Use an increasing number to keep track of the current state of the user's
     // profile, so we can move data around as needed as the browser evolves.
     // Completely unrelated to the current Firefox release number.
-    const APP_DATA_VERSION = 175;
+    const APP_DATA_VERSION = 177;
     const PREF = "browser.migration.version";
 
     let profileDataVersion = Services.prefs.getIntPref(PREF, -1);

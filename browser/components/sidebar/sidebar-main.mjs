@@ -97,7 +97,7 @@ export default class SidebarMain extends MozLitElement {
   connectedCallback() {
     super.connectedCallback();
     this._sidebarBox = document.getElementById("sidebar-box");
-    this._sidebarMain = document.getElementById("sidebar-main");
+    this._sidebarContainer = document.getElementById("sidebar-container");
     this._contextMenu = document.getElementById("sidebar-context-menu");
     this._toolsOverflowMenu = document.getElementById("sidebar-tools-overflow");
     this._toolsOverflowButtonGroup =
@@ -127,7 +127,7 @@ export default class SidebarMain extends MozLitElement {
 
     this._sidebarBox.addEventListener("sidebar-show", this);
     this._sidebarBox.addEventListener("sidebar-hide", this);
-    this._sidebarMain.addEventListener("contextmenu", this);
+    this._sidebarContainer.addEventListener("contextmenu", this);
     this._contextMenu.addEventListener("popuphidden", this);
     this._contextMenu.addEventListener("command", this);
     this._toolsOverflowMenu.addEventListener("popupshown", this);
@@ -146,7 +146,7 @@ export default class SidebarMain extends MozLitElement {
     super.disconnectedCallback();
     this._sidebarBox.removeEventListener("sidebar-show", this);
     this._sidebarBox.removeEventListener("sidebar-hide", this);
-    this._sidebarMain.removeEventListener("contextmenu", this);
+    this._sidebarContainer.removeEventListener("contextmenu", this);
     this._contextMenu.removeEventListener("popuphidden", this);
     this._contextMenu.removeEventListener("command", this);
     this._toolsOverflowMenu.removeEventListener("popupshown", this);
@@ -170,6 +170,13 @@ export default class SidebarMain extends MozLitElement {
   createToolsObservers() {
     this._toolsIntersectionObserver = new IntersectionObserver(
       entries => {
+        // In horizontal tabs mode while the launcher is collapsed or hidden, every
+        // button is considered non-intersecting by the intersection observer which
+        // can cause visibility issues once the sidebar is shown again. We should
+        // return early here if horizontal tabs are enabled to prevent this.
+        if (!window.SidebarController.sidebarVerticalTabsEnabled) {
+          return;
+        }
         this.shouldShowOverflowButton = entries.some(
           entry =>
             !entry.isIntersecting &&
@@ -528,7 +535,7 @@ export default class SidebarMain extends MozLitElement {
               window.SidebarController._animationEnabled &&
               !window.gReduceMotion
             ) {
-              window.SidebarController._animateSidebarMain();
+              window.SidebarController._animateSidebarContainer();
             }
             window.SidebarController.hide({ dismissPanel: false });
             window.SidebarController._state.updateVisibility(false);
@@ -649,26 +656,40 @@ export default class SidebarMain extends MozLitElement {
   }
 
   updated() {
+    const isExpandOnHover =
+      window.SidebarController.sidebarRevampVisibility === "expand-on-hover";
+
     if (
-      window.SidebarController.sidebarRevampVisibility !== "expand-on-hover"
+      !isExpandOnHover &&
+      window.SidebarController.sidebarVerticalTabsEnabled
     ) {
       for (const buttonEl of this.allButtons) {
         if (buttonEl.hasAttribute("view")) {
           this._toolsIntersectionObserver.observe(buttonEl);
         }
       }
-
       this._toolsResizeObserver.observe(this.buttonGroup);
-    } else {
-      this.shouldShowOverflowButton = !this.expanded;
-      for (const buttonEl of this.allButtons) {
-        if (buttonEl.style.visibility === "hidden") {
-          buttonEl.style.visibility = "visible";
-        }
-      }
-      this._toolsIntersectionObserver.disconnect();
-      this._toolsResizeObserver.disconnect();
+      return;
     }
+
+    // In expand-on-hover or horizontal tabs mode we don't track tool overflow,
+    // so restore any previously overflown/hidden tool buttons and stop
+    // observing. In horizontal tabs mode we also clear the overflow panel
+    // copies that were populated while in vertical tabs.
+    this.shouldShowOverflowButton = isExpandOnHover ? !this.expanded : false;
+    const overflowList = isExpandOnHover
+      ? null
+      : document.getElementById("tools-overflow-list");
+    for (const buttonEl of this.allButtons) {
+      if (buttonEl.style.visibility === "hidden") {
+        buttonEl.style.visibility = "visible";
+      }
+      overflowList
+        ?.querySelector(`[view='${buttonEl.getAttribute("view")}']`)
+        ?.remove();
+    }
+    this._toolsIntersectionObserver.disconnect();
+    this._toolsResizeObserver.disconnect();
   }
 
   getEntrypointValues(action) {

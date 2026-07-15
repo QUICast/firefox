@@ -1282,7 +1282,7 @@ class ScriptSourceObject : public NativeObject {
 //   Interpreter.
 //
 class ScriptWarmUpData {
-  uintptr_t data_ = ResetState();
+  GCData<uintptr_t> data_{ResetState()};
 
  private:
   static constexpr uintptr_t NumTagBits = 2;
@@ -1297,6 +1297,8 @@ class ScriptWarmUpData {
   static constexpr uintptr_t WarmUpCountTag = 3;
 
  private:
+  explicit ScriptWarmUpData(uintptr_t data) : data_(data) {}
+
   // A gc-safe value to clear to.
   constexpr uintptr_t ResetState() { return 0 | WarmUpCountTag; }
 
@@ -1322,6 +1324,8 @@ class ScriptWarmUpData {
   }
 
  public:
+  ScriptWarmUpData() = default;
+
   void trace(JSTracer* trc);
 
   bool isEnclosingScript() const {
@@ -1480,8 +1484,7 @@ class PendingSourceCompressionEntry {
 // [SMDOC] Script Representation (js::BaseScript)
 //
 // A "script" corresponds to a JavaScript function or a top-level (global, eval,
-// module) body that will be executed using SpiderMonkey bytecode. Note that
-// special forms such as asm.js do not use bytecode or the BaseScript type.
+// module) body that will be executed using SpiderMonkey bytecode.
 //
 // BaseScript may be generated directly from the parser/emitter, or by cloning
 // or deserializing another script. Cloning is typically used when a script is
@@ -1808,13 +1811,6 @@ class JSScript : public js::BaseScript {
   static JSScript* CastFromLazy(js::BaseScript* lazy) {
     return static_cast<JSScript*>(lazy);
   }
-
-  // NOTE: If you use createPrivateScriptData directly instead of via
-  // fullyInitFromStencil, you are responsible for notifying the debugger
-  // after successfully creating the script.
-  static bool createPrivateScriptData(JSContext* cx,
-                                      JS::Handle<JSScript*> script,
-                                      uint32_t ngcthings);
 
  public:
   static bool fullyInitFromStencil(
@@ -2166,8 +2162,13 @@ class JSScript : public js::BaseScript {
     if (!atom) {
       return false;
     }
-    js::gc::CellPtrPreWriteBarrier(data_->gcthings()[index]);
-    data_->gcthings()[index] = JS::GCCellPtr(atom);
+    JS::GCCellPtr& ref = data_->gcthings()[index];
+    js::gc::CellPtrPreWriteBarrier(ref);
+#ifdef JS_GC_CONCURRENT_MARKING
+    ref.atomicSet(JS::GCCellPtr(atom));
+#else
+    ref = JS::GCCellPtr(atom);
+#endif
     return true;
   }
 
@@ -2272,35 +2273,25 @@ class JSScript : public js::BaseScript {
   // invariants of debuggee compartments, scripts, and frames.
   inline bool isDebuggee() const;
 
-  // A helper class to prevent relazification of the given function's script
-  // while it's holding on to it.  This class automatically roots the script.
-  class AutoDelazify;
-  friend class AutoDelazify;
+  // A helper class to prevent relazification of the given script while it's
+  // holding on to it.  This class automatically roots the script.
+  class AutoKeepDelazified;
+  friend class AutoKeepDelazified;
 
-  class AutoDelazify {
-    JS::RootedScript script_;
-    JSContext* cx_;
+  class MOZ_RAII AutoKeepDelazified {
+    JS::Rooted<JSScript*> script_;
     bool oldAllowRelazify_ = false;
 
    public:
-    explicit AutoDelazify(JSContext* cx, JS::HandleFunction fun = nullptr)
-        : script_(cx), cx_(cx) {
-      holdScript(fun);
+    AutoKeepDelazified(JSContext* cx, JSScript* script) : script_(cx, script) {
+      MOZ_ASSERT(script_->hasBytecode());
+      oldAllowRelazify_ = script_->allowRelazify();
+      script_->clearAllowRelazify();
     }
 
-    ~AutoDelazify() { dropScript(); }
+    ~AutoKeepDelazified() { script_->setAllowRelazify(oldAllowRelazify_); }
 
-    void operator=(JS::HandleFunction fun) {
-      dropScript();
-      holdScript(fun);
-    }
-
-    operator JS::HandleScript() const { return script_; }
-    explicit operator bool() const { return script_; }
-
-   private:
-    void holdScript(JS::HandleFunction fun);
-    void dropScript();
+    JSScript* script() const { return script_; }
   };
 
 #if defined(DEBUG) || defined(JS_JITSPEW)

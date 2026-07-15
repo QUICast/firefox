@@ -99,7 +99,7 @@ describe("<FocusTimer>", () => {
       ).toBeInTheDocument();
     });
 
-    it("disables the small size entry and leaves medium/large enabled", () => {
+    it("offers only medium/large sizes (no small entry)", () => {
       const { container } = renderTimer({
         state: novaState(),
         props: { widgetsMayBeMaximized: true },
@@ -107,13 +107,8 @@ describe("<FocusTimer>", () => {
       const items = container.querySelectorAll(
         "#focus-timer-size-submenu panel-item[type='checkbox']"
       );
-      const bySize = Array.from(items).reduce((acc, el) => {
-        acc[el.getAttribute("data-size")] = el;
-        return acc;
-      }, {});
-      expect(bySize.small.hasAttribute("disabled")).toBe(true);
-      expect(bySize.medium.hasAttribute("disabled")).toBe(false);
-      expect(bySize.large.hasAttribute("disabled")).toBe(false);
+      const sizes = Array.from(items).map(el => el.getAttribute("data-size"));
+      expect(sizes).toEqual(["medium", "large"]);
     });
   });
 
@@ -735,6 +730,51 @@ describe("<FocusTimer>", () => {
         ([action]) => action.type === "WIDGETS_TIMER_SET_TYPE"
       );
       expect(setTypeCalls).toHaveLength(1);
+    });
+
+    it("converges on the completed type's opposite even if the shared type already flipped (multi-document)", () => {
+      // Reproduce the multi-document case via a re-render: this document's break
+      // session ends, then another document flips the shared type to focus
+      // before this one's celebration finishes; it must still land on focus.
+      const dispatch = jest.fn();
+      const { container, rerender } = render(
+        <WrapWithProvider
+          state={novaState(
+            {},
+            {
+              timerType: "break",
+              break: {
+                duration: 1,
+                initialDuration: 5 * 60,
+                isRunning: true,
+                startTime: Math.floor(Date.now() / 1000) - 1,
+              },
+            }
+          )}
+        >
+          <FocusTimer {...defaultProps} dispatch={dispatch} />
+        </WrapWithProvider>
+      );
+
+      tickToZero();
+
+      act(() => {
+        rerender(
+          <WrapWithProvider state={novaState({}, { timerType: "focus" })}>
+            <FocusTimer {...defaultProps} dispatch={dispatch} />
+          </WrapWithProvider>
+        );
+      });
+
+      const overlay = container.querySelector(".focus-timer-celebration");
+      expect(overlay).toBeInTheDocument();
+      fireLifecycleEnd(overlay);
+
+      const setType = dispatch.mock.calls.find(
+        ([action]) => action.type === "WIDGETS_TIMER_SET_TYPE"
+      );
+      expect(setType).toBeDefined();
+      expect(setType[0].data.timerType).toBe("focus");
     });
 
     it("falls back to immediate Focus<->Break toggle under reduced motion", () => {

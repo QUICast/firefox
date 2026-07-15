@@ -340,8 +340,7 @@ float NonSVGFrameUserSpaceMetrics::GetLineHeight(Type aType) const {
   switch (aType) {
     case Type::This: {
       const auto lineHeightAu = ReflowInput::CalcLineHeight(
-          *mFrame->Style(), context, mFrame->GetContent(), NS_UNCONSTRAINEDSIZE,
-          1.0f);
+          *mFrame->Style(), context, mFrame->GetContent(), 1.0f);
       return CSSPixel::FromAppUnits(lineHeightAu);
     }
     case Type::Root:
@@ -681,7 +680,7 @@ void SVGLengthAndInfo::Interpolate(const SVGLengthAndInfo& aStart,
     endValue = aEnd.ConvertUnits(aStart);
   }
   aResult.mElement = aEnd.mElement;
-  aResult.mValue = startValue + (endValue - startValue) * aUnitDistance;
+  aResult.mValue = std::lerp(startValue, endValue, aUnitDistance);
 }
 
 }  // namespace mozilla

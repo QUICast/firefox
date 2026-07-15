@@ -2,37 +2,36 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+#include "nsFilePicker.h"
+
 #include <dlfcn.h>
 #include <gtk/gtk.h>
-#include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/types.h>
 #include <unistd.h>
 
 #include "AsyncDBus.h"
-#include "nsGtkUtils.h"
-#include "nsIFileURL.h"
-#include "nsIGIOService.h"
-#include "nsIURI.h"
-#include "nsIWidget.h"
-#include "nsIFile.h"
-#include "nsIStringBundle.h"
-#include "nsWindow.h"
-#include "mozilla/Components.h"
-#include "mozilla/Preferences.h"
-#include "mozilla/dom/Promise.h"
-#include "mozilla/dom/Document.h"
-
-#include "nsArrayEnumerator.h"
-#include "nsEnumeratorUtils.h"
-#include "nsNetUtil.h"
-#include "nsReadableUtils.h"
+#include "GRefPtr.h"
 #include "MozContainer.h"
 #include "WidgetUtilsGtk.h"
-
 #include "gfxPlatform.h"
+#include "mozilla/Components.h"
+#include "mozilla/Preferences.h"
+#include "mozilla/dom/Document.h"
+#include "mozilla/dom/Promise.h"
+#include "nsArrayEnumerator.h"
+#include "nsEnumeratorUtils.h"
+#include "nsGtkUtils.h"
+#include "nsIFile.h"
+#include "nsIFileURL.h"
+#include "nsIGIOService.h"
+#include "nsIStringBundle.h"
+#include "nsIURI.h"
+#include "nsIWidget.h"
+#include "nsNetUtil.h"
+#include "nsReadableUtils.h"
+#include "nsWindow.h"
 #include "nsXULAppAPI.h"
-#include "GRefPtr.h"
-#include "nsFilePicker.h"
 
 #undef LOG
 #ifdef MOZ_LOGGING

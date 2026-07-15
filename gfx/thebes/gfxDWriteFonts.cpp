@@ -5,18 +5,18 @@
 #include "gfxDWriteFonts.h"
 
 #include <algorithm>
-#include "gfxDWriteFontList.h"
+
 #include "gfxContext.h"
+#include "gfxDWriteFontList.h"
 #include "gfxHarfBuzzShaper.h"
 #include "gfxTextRun.h"
+#include "harfbuzz/hb.h"
+#include "mozilla/FontPropertyTypes.h"
+#include "mozilla/Preferences.h"
 #include "mozilla/gfx/2D.h"
 #include "mozilla/gfx/DWriteSettings.h"
 #include "mozilla/gfx/Logging.h"
 #include "mozilla/gfx/gfxVars.h"
-#include "mozilla/Preferences.h"
-
-#include "harfbuzz/hb.h"
-#include "mozilla/FontPropertyTypes.h"
 
 using namespace mozilla;
 using namespace mozilla::gfx;
@@ -646,10 +646,11 @@ gfxFont::RunMetrics gfxDWriteFont::Measure(const gfxTextRun* aTextRun,
                                            BoundingBoxType aBoundingBoxType,
                                            DrawTarget* aRefDrawTarget,
                                            Spacing* aSpacing,
+                                           nscoord aLetterSpacing,
                                            gfx::ShapedTextFlags aOrientation) {
   gfxFont::RunMetrics metrics =
       gfxFont::Measure(aTextRun, aStart, aEnd, aBoundingBoxType, aRefDrawTarget,
-                       aSpacing, aOrientation);
+                       aSpacing, aLetterSpacing, aOrientation);
 
   // if aBoundingBoxType is LOOSE_INK_EXTENTS
   // and the underlying cairo font may be antialiased,

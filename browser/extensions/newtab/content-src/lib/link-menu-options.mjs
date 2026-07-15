@@ -314,6 +314,16 @@ export const LinkMenuOptions = {
       data: { index },
     },
   }),
+  // Opens the "New Shortcut" dialog. index -1 routes through the feed's insert
+  // path (append to the pinned group / first free slot), like the add button.
+  AddTopSite: () => ({
+    id: "newtab-menu-add-topsite",
+    ariaHasPopup: "dialog",
+    action: {
+      type: at.TOP_SITES_EDIT,
+      data: { index: -1 },
+    },
+  }),
   CheckBookmark: site =>
     site.bookmarkGuid
       ? LinkMenuOptions.RemoveBookmark(site)
@@ -431,6 +441,18 @@ export const LinkMenuOptions = {
     id: "newtab-menu-manage-sponsored-content",
     action: ac.OnlyToMain({ type: at.SETTINGS_OPEN }),
     userEvent: "OPEN_NEWTAB_PREFS",
+  }),
+  SectionLearnMore: ({ learnMoreUrl }) => ({
+    id: "newtab-menu-section-learn-more",
+    action: ac.OnlyToMain({
+      type: at.OPEN_LINK,
+      data: { url: learnMoreUrl },
+    }),
+    impression: ac.OnlyToMain({
+      type: at.CLICK_SECTION_LEARN_MORE,
+      data: {},
+    }),
+    userEvent: "CLICK_SECTION_LEARN_MORE",
   }),
   // eslint-disable-next-line max-params
   OurSponsorsAndYourPrivacy: (

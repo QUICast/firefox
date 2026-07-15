@@ -6,9 +6,9 @@
 #define nsAboutProtocolHandler_h_
 
 #include "nsIProtocolHandler.h"
+#include "nsIURIMutator.h"
 #include "nsSimpleNestedURI.h"
 #include "nsWeakReference.h"
-#include "nsIURIMutator.h"
 
 class nsIURI;
 

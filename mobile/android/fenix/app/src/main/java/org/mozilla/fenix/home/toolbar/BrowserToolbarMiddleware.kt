@@ -83,6 +83,7 @@ import org.mozilla.fenix.search.ext.searchEngineShortcuts
 import org.mozilla.fenix.settings.ShortcutType
 import org.mozilla.fenix.tabstray.redux.state.Page
 import org.mozilla.fenix.utils.Settings
+import mozilla.components.feature.summarize.R as summariesR
 import mozilla.components.lib.state.Action as MVIAction
 import mozilla.components.ui.icons.R as iconsR
 import mozilla.components.ui.tabcounter.R as tabcounterR
@@ -291,7 +292,7 @@ class BrowserToolbarMiddleware(
         store.dispatch(
             PageOriginUpdated(
                 PageOrigin(
-                    hint = if (settings.showVoiceSearchInDisplayToolbar) {
+                    hint = if (isVoiceSearchEnabledForDisplayToolbar()) {
                         R.string.search_hint_short
                     } else {
                         R.string.search_hint
@@ -320,7 +321,7 @@ class BrowserToolbarMiddleware(
         )
 
     private fun buildEndPageActions(): List<Action> = buildList {
-        if (settings.showVoiceSearchInDisplayToolbar && isSpeechRecognitionAvailable()) {
+        if (isVoiceSearchEnabledForDisplayToolbar() && isSpeechRecognitionAvailable()) {
             add(
                 ActionButtonRes(
                     drawableResId = iconsR.drawable.mozac_ic_microphone_24,
@@ -330,6 +331,9 @@ class BrowserToolbarMiddleware(
             )
         }
     }
+
+    private fun isVoiceSearchEnabledForDisplayToolbar() =
+        settings.shouldShowVoiceSearch && settings.showVoiceSearchInDisplayToolbar
 
     private fun isSpeechRecognitionAvailable() =
         Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
@@ -505,6 +509,7 @@ class BrowserToolbarMiddleware(
         FakeTranslate,
         FakeHomepage,
         FakeBack,
+        FakeSummarize,
     }
 
     private data class HomeToolbarActionConfig(
@@ -596,6 +601,13 @@ class BrowserToolbarMiddleware(
             state = ActionButton.State.DISABLED,
             onClick = FakeClicked,
         )
+
+        HomeToolbarAction.FakeSummarize -> ActionButtonRes(
+            drawableResId = iconsR.drawable.mozac_ic_lightning_24,
+            contentDescription = summariesR.string.mozac_summarize_settings_summarize_pages,
+            state = ActionButton.State.DISABLED,
+            onClick = FakeClicked,
+        )
     }
 
     companion object {
@@ -607,6 +619,7 @@ class BrowserToolbarMiddleware(
             ShortcutType.TRANSLATE -> HomeToolbarAction.FakeTranslate
             ShortcutType.HOMEPAGE -> HomeToolbarAction.FakeHomepage
             ShortcutType.BACK -> HomeToolbarAction.FakeBack
+            ShortcutType.SUMMARIZE -> HomeToolbarAction.FakeSummarize
             ShortcutType.NONE -> null
         }
     }

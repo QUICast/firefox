@@ -14,7 +14,7 @@
     "resource:///modules/sessionstore/TabStateFlusher.sys.mjs"
   );
   const { ContentSharingUtils } = ChromeUtils.importESModule(
-    "resource:///modules/contentsharing/ContentSharingUtils.sys.mjs"
+    "moz-src:///browser/components/contentsharing/ContentSharingUtils.sys.mjs"
   );
 
   ChromeUtils.importESModule(
@@ -478,7 +478,11 @@
       this.#commandButtons.moveGroupToNewWindow.addEventListener(
         "command",
         () => {
-          gBrowser.replaceGroupWithWindow(this.activeGroup);
+          gBrowser.replaceGroupWithWindow(this.activeGroup, {
+            metricsContext: gBrowser.TabMetrics.userTriggeredContext(
+              gBrowser.TabMetrics.METRIC_SOURCE.TAB_GROUP_MENU
+            ),
+          });
         }
       );
 
@@ -492,23 +496,27 @@
       });
 
       this.#commandButtons.ungroupTabs.addEventListener("command", () => {
-        this.activeGroup.ungroupTabs({
-          isUserTriggered: true,
-          telemetrySource: TabMetrics.METRIC_SOURCE.TAB_GROUP_MENU,
-        });
-      });
-
-      this.#commandButtons.saveAndCloseGroup.addEventListener("command", () => {
-        this.activeGroup.saveAndClose({ isUserTriggered: true });
-      });
-
-      this.#commandButtons.deleteGroup.addEventListener("command", () => {
-        gBrowser.removeTabGroup(
-          this.activeGroup,
+        this.activeGroup.ungroupTabs(
           TabMetrics.userTriggeredContext(
             TabMetrics.METRIC_SOURCE.TAB_GROUP_MENU
           )
         );
+      });
+
+      this.#commandButtons.saveAndCloseGroup.addEventListener("command", () => {
+        this.activeGroup.saveAndClose(
+          TabMetrics.userTriggeredContext(
+            TabMetrics.METRIC_SOURCE.TAB_GROUP_MENU
+          )
+        );
+      });
+
+      this.#commandButtons.deleteGroup.addEventListener("command", () => {
+        gBrowser.removeTabGroup(this.activeGroup, {
+          metricsContext: TabMetrics.userTriggeredContext(
+            TabMetrics.METRIC_SOURCE.TAB_GROUP_MENU
+          ),
+        });
       });
 
       this.#commandButtons.shareTabGroup.addEventListener("command", () => {
@@ -743,13 +751,11 @@
         label.htmlFor = input.id;
         label.style.setProperty(
           "--tabgroup-swatch-color",
-          Services.prefs.getBoolPref("browser.nova.enabled")
-            ? `var(--tab-group-${colorCode})`
-            : `var(--tab-group-color-${colorCode})`
+          `var(--tab-group-${colorCode})`
         );
         label.style.setProperty(
           "--tabgroup-swatch-color-invert",
-          `var(--tab-group-color-${colorCode}-invert)`
+          `var(--tab-group-${colorCode}-invert)`
         );
         this.#swatchesContainer.append(input, label);
         this.#swatches.push(input);
@@ -998,10 +1004,11 @@
             this.#handleMlTelemetry("save-popup-hidden");
           }
         } else {
-          this.activeGroup.ungroupTabs({
-            isUserTriggered: true,
-            telemetrySource: TabMetrics.METRIC_SOURCE.CANCEL_TAB_GROUP_CREATION,
-          });
+          this.activeGroup.ungroupTabs(
+            TabMetrics.userTriggeredContext(
+              TabMetrics.METRIC_SOURCE.CANCEL_TAB_GROUP_CREATION
+            )
+          );
         }
       }
       if (this.#nameField.disabled) {

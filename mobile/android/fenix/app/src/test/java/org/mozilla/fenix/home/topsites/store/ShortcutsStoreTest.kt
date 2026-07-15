@@ -13,6 +13,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.mozilla.fenix.home.topsites.AddShortcutSource
 
 @RunWith(AndroidJUnit4::class)
 class ShortcutsStoreTest {
@@ -48,6 +49,20 @@ class ShortcutsStoreTest {
         store.dispatch(ShortcutsAction.UpdateTopSites(topSites))
 
         assertEquals(topSites, store.state.topSites)
+    }
+
+    @Test
+    fun `WHEN UpdatePopularSites action is dispatched THEN popularSites are updated`() = runTest {
+        val store = ShortcutsStore(initialState = ShortcutsState.INITIAL)
+
+        assertTrue(store.state.popularSites.isEmpty())
+
+        val popularSites = listOf(
+            PopularSite(title = "Mozilla", url = "https://mozilla.org", iconUrl = null),
+        )
+        store.dispatch(ShortcutsAction.UpdatePopularSites(popularSites))
+
+        assertEquals(popularSites, store.state.popularSites)
     }
 
     @Test
@@ -99,7 +114,13 @@ class ShortcutsStoreTest {
         val initialState = ShortcutsState.INITIAL.copy(dialogState = DialogState.AddShortcut)
         val store = ShortcutsStore(initialState = initialState)
 
-        store.dispatch(ShortcutsAction.SaveShortcut(title = "Mozilla", url = "https://mozilla.org"))
+        store.dispatch(
+            ShortcutsAction.SaveShortcut(
+                title = "Mozilla",
+                url = "https://mozilla.org",
+                source = AddShortcutSource.MANUAL,
+            ),
+        )
 
         assertEquals(initialState, store.state)
     }

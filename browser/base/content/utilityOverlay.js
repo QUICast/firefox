@@ -17,7 +17,7 @@ ChromeUtils.defineESModuleGetters(this, {
   BrowserUtils: "resource://gre/modules/BrowserUtils.sys.mjs",
   BrowserWindowTracker: "resource:///modules/BrowserWindowTracker.sys.mjs",
   ContextualIdentityService:
-    "resource://gre/modules/ContextualIdentityService.sys.mjs",
+    "moz-src:///toolkit/components/contextualidentity/ContextualIdentityService.sys.mjs",
   ExtensionSettingsStore:
     "resource://gre/modules/ExtensionSettingsStore.sys.mjs",
   ExtensionUtils: "resource://gre/modules/ExtensionUtils.sys.mjs",
@@ -182,6 +182,8 @@ function createUserContextMenu(
     excludeUserContextId = 0,
     showDefaultTab = false,
     useAccessKeys = true,
+    showAddContainer = true,
+    showManageContainers = true,
   } = {}
 ) {
   while (event.target.hasChildNodes()) {
@@ -191,14 +193,15 @@ function createUserContextMenu(
   MozXULElement.insertFTLIfNeeded("toolkit/global/contextual-identity.ftl");
   let docfrag = document.createDocumentFragment();
 
-  // If we are excluding a userContextId, we want to add a 'no-container' item.
+  // Add an item for a tab without a container, labeled "New Tab".
   if (excludeUserContextId || showDefaultTab) {
     let menuitem = document.createXULElement("menuitem");
     if (useAccessKeys) {
-      document.l10n.setAttributes(menuitem, "user-context-none");
+      document.l10n.setAttributes(menuitem, "user-context-new-tab");
     } else {
-      const label =
-        ContextualIdentityService.formatContextLabel("user-context-none");
+      const label = ContextualIdentityService.formatContextLabel(
+        "user-context-new-tab"
+      );
       menuitem.setAttribute("label", label);
     }
     menuitem.setAttribute("data-usercontextid", "0");
@@ -242,9 +245,25 @@ function createUserContextMenu(
     docfrag.appendChild(menuitem);
   });
 
-  if (!isContextMenu) {
+  if (showAddContainer || showManageContainers) {
     docfrag.appendChild(document.createXULElement("menuseparator"));
+  }
 
+  if (showAddContainer) {
+    let menuitem = document.createXULElement("menuitem");
+    if (useAccessKeys) {
+      document.l10n.setAttributes(menuitem, "user-context-add-container");
+    } else {
+      const label = ContextualIdentityService.formatContextLabel(
+        "user-context-add-container"
+      );
+      menuitem.setAttribute("label", label);
+    }
+    menuitem.setAttribute("command", "Browser:AddContainer");
+    docfrag.appendChild(menuitem);
+  }
+
+  if (showManageContainers) {
     let menuitem = document.createXULElement("menuitem");
     if (useAccessKeys) {
       document.l10n.setAttributes(menuitem, "user-context-manage-containers");

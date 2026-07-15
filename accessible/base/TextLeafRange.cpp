@@ -5,21 +5,24 @@
 #include "TextLeafRange.h"
 
 #include "HyperTextAccessible-inl.h"
+#include "Pivot.h"
+#include "TextAttrs.h"
+#include "TextRange.h"
+#include "mozilla/BinarySearch.h"
+#include "mozilla/Casting.h"
+#include "mozilla/PresShell.h"
+#include "mozilla/StaticPrefs_layout.h"
+#include "mozilla/TextEditor.h"
 #include "mozilla/a11y/Accessible.h"
 #include "mozilla/a11y/CacheConstants.h"
 #include "mozilla/a11y/DocAccessible.h"
 #include "mozilla/a11y/DocAccessibleParent.h"
 #include "mozilla/a11y/LocalAccessible.h"
-#include "mozilla/BinarySearch.h"
-#include "mozilla/Casting.h"
 #include "mozilla/dom/AbstractRange.h"
 #include "mozilla/dom/CharacterData.h"
 #include "mozilla/dom/HTMLInputElement.h"
-#include "mozilla/PresShell.h"
 #include "mozilla/intl/Segmenter.h"
 #include "mozilla/intl/WordBreaker.h"
-#include "mozilla/StaticPrefs_layout.h"
-#include "mozilla/TextEditor.h"
 #include "nsAccUtils.h"
 #include "nsBlockFrame.h"
 #include "nsFocusManager.h"
@@ -31,9 +34,6 @@
 #include "nsTArray.h"
 #include "nsTextFrame.h"
 #include "nsUnicharUtils.h"
-#include "Pivot.h"
-#include "TextAttrs.h"
-#include "TextRange.h"
 
 using mozilla::intl::WordBreaker;
 using FindWordOptions = mozilla::intl::WordBreaker::FindWordOptions;
@@ -906,7 +906,12 @@ TextLeafPoint TextLeafPoint::FindLineStartSameRemoteAcc(
   if (aDirection == eDirPrevious) {
     --index;
   }
-  return TextLeafPoint(mAcc, lines->ElementAt(index));
+  int32_t offset = lines->ElementAt(index);
+  if (MOZ_UNLIKELY(offset < 0 || static_cast<uint32_t>(offset) >
+                                     nsAccUtils::TextLength(mAcc))) {
+    return TextLeafPoint();
+  }
+  return TextLeafPoint(mAcc, offset);
 }
 
 TextLeafPoint TextLeafPoint::FindLineStartSameAcc(

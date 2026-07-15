@@ -20,9 +20,9 @@
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/OperatorNewExtensions.h"
 #include "mozilla/fallible.h"
+#include "nsCycleCollectionContainerParticipant.h"
 #include "nsPointerHashKeys.h"
 #include "nsTArrayForwardDeclare.h"
-#include "nsCycleCollectionContainerParticipant.h"
 
 template <class EntryType>
 class nsTHashtable;
@@ -571,6 +571,13 @@ class MOZ_NEEDS_NO_VTABLE_TYPE nsTHashtable {
    * constructor.
    */
   void Clear() { mTable.Clear(); }
+
+  /**
+   * Remove all entries but keep the entry storage allocated, retaining the
+   * current capacity. Prefer this over Clear() when the table is about to be
+   * re-populated and repeated free/realloc of the storage would be wasteful.
+   */
+  void ClearAndRetainStorage() { mTable.ClearAndRetainStorage(); }
 
   /**
    * Measure the size of the table's entry storage. Does *not* measure anything

@@ -23,8 +23,8 @@
 #include "mozilla/ProfilerMarkers.h"
 #include "mozilla/SpinEventLoopUntil.h"
 #include "mozilla/StaticPrefs_network.h"
-#include "mozilla/glean/NetwerkProtocolHttpMetrics.h"
 #include "mozilla/glean/NetwerkMetrics.h"
+#include "mozilla/glean/NetwerkProtocolHttpMetrics.h"
 #include "mozilla/net/DNS.h"
 #include "mozilla/net/DashboardTypes.h"
 #include "nsCOMPtr.h"
@@ -1101,6 +1101,17 @@ bool nsHttpConnectionMgr::DispatchPendingQ(
              "TryDispatchTransaction returning hard error %" PRIx32 "\n",
              static_cast<uint32_t>(rv)));
         if (rv == NS_ERROR_HTTP2_FALLBACK_TO_HTTP1) {
+          // The transaction is about to restart under a re-keyed entry. Abandon
+          // the in-flight attempt it still owns here, or that attempt completes
+          // later and re-queues the restarted transaction (bug 2051415).
+          nsWeakPtr weak =
+              pendingTransInfo->ForgetConnectionAttemptAndActiveConn();
+          if (RefPtr<ConnectionAttempt> attempt = do_QueryReferent(weak)) {
+            // Detach first so the abandoned attempt's teardown won't touch the
+            // transaction we Close()/Restart() below.
+            attempt->ForgetRealTransaction();
+            ent->RemoveConnectionAttempt(attempt, /* abandon = */ true);
+          }
           pendingTransInfo->Transaction()->Close(
               NS_ERROR_HTTP2_FALLBACK_TO_HTTP1);
         }
@@ -1233,6 +1244,11 @@ bool nsHttpConnectionMgr::ProcessPendingQForEntry(ConnectionEntry* ent,
   if (ent->PendingQueueIsEmpty() && ent->UrgentStartQueueIsEmpty()) {
     return false;
   }
+
+  // Move any HTTP/3 connection that is still in active list but can no longer
+  // serve new transactions.
+  ent->MoveUnusableH3ConnsToPending();
+
   ProcessSpdyPendingQ(ent);
 
   bool dispatchedSuccessfully = false;
@@ -3797,9 +3813,6 @@ void nsHttpConnectionMgr::RegisterOriginCoalescingKey(HttpConnectionBase* conn,
 
 bool nsHttpConnectionMgr::GetConnectionData(nsTArray<HttpRetParams>* aArg) {
   for (const RefPtr<ConnectionEntry>& ent : mCT.Values()) {
-    if (ent->mConnInfo->GetPrivate()) {
-      continue;
-    }
     aArg->AppendElement(ent->GetConnectionData());
   }
 

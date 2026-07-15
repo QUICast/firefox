@@ -33,12 +33,16 @@ import {
 import {
   WIDGET_REGISTRY,
   isWidgetEnabled,
+  isWidgetToggleVisible,
+  isWidgetsContainerVisible,
   resolveWidgetHasSidebar,
   resolveWidgetSize,
 } from "common/WidgetsRegistry.mjs";
 
 const VISIBLE = "visible";
 const VISIBILITY_CHANGE_EVENT = "visibilitychange";
+// Minimum scroll distance in pixels to record a scroll telemetry event.
+const SCROLL_TELEMETRY_THRESHOLD = 50;
 const PREF_INFERRED_PERSONALIZATION_SYSTEM =
   "discoverystream.sections.personalization.inferred.enabled";
 const PREF_INFERRED_PERSONALIZATION_USER =
@@ -133,6 +137,7 @@ export class BaseContent extends React.PureComponent {
     this.attachSearchSentinel = this.attachSearchSentinel.bind(this);
     this.onSearchSentinelIntersect = this.onSearchSentinelIntersect.bind(this);
     this.searchStickyObserver = null;
+    this._hasScrolledForSession = false;
     this.state = {
       fixedSearch: false,
       colorMode: "",
@@ -456,6 +461,14 @@ export class BaseContent extends React.PureComponent {
   }
 
   onWindowScroll() {
+    if (
+      !this._hasScrolledForSession &&
+      global.scrollY > SCROLL_TELEMETRY_THRESHOLD
+    ) {
+      this._hasScrolledForSession = true;
+      this.props.dispatch(ac.OnlyToMain({ type: at.NEW_TAB_SCROLL }));
+    }
+
     if (this.props.Prefs.values[PREF_NOVA_ENABLED]) {
       // Nova restores sticky search via IntersectionObserver
       // (attachSearchSentinel); the scroll-based fixed-search math below
@@ -858,47 +871,32 @@ export class BaseContent extends React.PureComponent {
     const pocketRegion = prefs["feeds.system.topstories"];
     const mayHaveInferredPersonalization =
       prefs[PREF_INFERRED_PERSONALIZATION_SYSTEM];
+    // Weather's visibility gate differs from the other widgets (it keys off
+    // system.showWeather / trainhopConfig.weather), so it keeps its own check
+    // plus the additive widgetsSettings.weatherVisible override.
     const mayHaveWeather =
-      prefs["system.showWeather"] || prefs.trainhopConfig?.weather?.enabled;
+      prefs["system.showWeather"] ||
+      prefs.trainhopConfig?.weather?.enabled ||
+      prefs.trainhopConfig?.widgetsSettings?.weatherVisible;
     const supportUrl = prefs["support.url"];
 
-    // Widgets experiment pref check
-    const nimbusWidgetsEnabled = prefs.widgetsConfig?.enabled;
-    const nimbusListsEnabled = prefs.widgetsConfig?.listsEnabled;
-    const nimbusTimerEnabled = prefs.widgetsConfig?.timerEnabled;
-    const nimbusClocksEnabled = prefs.widgetsConfig?.clocksEnabled;
-    const nimbusWidgetsTrainhopEnabled = prefs.trainhopConfig?.widgets?.enabled;
-    const nimbusListsTrainhopEnabled =
-      prefs.trainhopConfig?.widgets?.listsEnabled;
-    const nimbusTimerTrainhopEnabled =
-      prefs.trainhopConfig?.widgets?.timerEnabled;
-    const nimbusClocksTrainhopEnabled =
-      prefs.trainhopConfig?.widgets?.clocksEnabled;
-
-    const mayHaveWidgets =
-      prefs["widgets.system.enabled"] ||
-      nimbusWidgetsEnabled ||
-      nimbusWidgetsTrainhopEnabled;
-    const mayHaveListsWidget =
-      prefs["widgets.system.lists.enabled"] ||
-      nimbusListsEnabled ||
-      nimbusListsTrainhopEnabled;
-    const mayHaveTimerWidget =
-      prefs["widgets.system.focusTimer.enabled"] ||
-      nimbusTimerEnabled ||
-      nimbusTimerTrainhopEnabled;
-    const mayHaveClocksWidget =
-      prefs["widgets.system.clocks.enabled"] ||
-      nimbusClocksEnabled ||
-      nimbusClocksTrainhopEnabled;
-
-    const nimbusSportsWidgetEnabled = prefs.widgetsConfig?.sportsWidgetEnabled;
-    const nimbusSportsWidgetTrainhopEnabled =
-      prefs.trainhopConfig?.widgets?.sportsWidgetEnabled;
-    const mayHaveSportsWidget =
-      prefs["widgets.system.sportsWidget.enabled"] ||
-      nimbusSportsWidgetEnabled ||
-      nimbusSportsWidgetTrainhopEnabled;
+    // Widget toggle visibility is resolved by the shared registry helpers, which
+    // are additive across the system pref, the legacy widgetsConfig variable,
+    // trainhopConfig.widgets (addable), and trainhopConfig.widgetsSettings.
+    const widgetVisibleById = id =>
+      isWidgetToggleVisible(
+        WIDGET_REGISTRY.find(w => w.id === id),
+        prefs
+      );
+    const mayHaveWidgets = isWidgetsContainerVisible(prefs);
+    const mayHaveListsWidget = widgetVisibleById("lists");
+    const mayHaveTimerWidget = widgetVisibleById("focusTimer");
+    const mayHaveClocksWidget = widgetVisibleById("clocks");
+    const mayHaveSportsWidget = widgetVisibleById("sportsWidget");
+    const mayHavePrivacyWidget = widgetVisibleById("privacy");
+    const mayHaveCrosswordWidget = widgetVisibleById("crossword");
+    const mayHaveStocksWidget = widgetVisibleById("stocks");
+    const mayHavePictureOfTheDayWidget = widgetVisibleById("pictureOfTheDay");
 
     // These prefs set the initial values on the Customize panel toggle switches
     const enabledWidgets = {
@@ -909,6 +907,10 @@ export class BaseContent extends React.PureComponent {
         ? prefs["widgets.weather.enabled"]
         : prefs.showWeather,
       sportsWidgetEnabled: prefs["widgets.sportsWidget.enabled"],
+      privacyEnabled: prefs["widgets.privacy.enabled"],
+      crosswordEnabled: prefs["widgets.crossword.enabled"],
+      stocksEnabled: prefs["widgets.stocks.enabled"],
+      pictureOfTheDayEnabled: prefs["widgets.pictureOfTheDay.enabled"],
       widgetsMaximized: prefs["widgets.maximized"],
       widgetsMayBeMaximized: prefs["widgets.system.maximized"],
     };
@@ -1190,6 +1192,10 @@ export class BaseContent extends React.PureComponent {
                 mayHaveListsWidget={mayHaveListsWidget}
                 mayHaveSportsWidget={mayHaveSportsWidget}
                 mayHaveClocksWidget={mayHaveClocksWidget}
+                mayHavePrivacyWidget={mayHavePrivacyWidget}
+                mayHaveCrosswordWidget={mayHaveCrosswordWidget}
+                mayHaveStocksWidget={mayHaveStocksWidget}
+                mayHavePictureOfTheDayWidget={mayHavePictureOfTheDayWidget}
                 mayHaveWeatherForecast={
                   prefs["widgets.system.weatherForecast.enabled"]
                 }
@@ -1211,6 +1217,10 @@ export class BaseContent extends React.PureComponent {
                 shouldShowOMCHighlight(
                   this.props.Messages,
                   "WorldCupWallpaperHighlight"
+                ) ||
+                shouldShowOMCHighlight(
+                  this.props.Messages,
+                  "WorldCupSemiFinalWallpaperHighlight"
                 )) && (
                 <MessageWrapper dispatch={this.props.dispatch}>
                   <WallpaperFeatureHighlight
@@ -1358,6 +1368,10 @@ export class BaseContent extends React.PureComponent {
               mayHaveListsWidget={mayHaveListsWidget}
               mayHaveSportsWidget={mayHaveSportsWidget}
               mayHaveClocksWidget={mayHaveClocksWidget}
+              mayHavePrivacyWidget={mayHavePrivacyWidget}
+              mayHaveCrosswordWidget={mayHaveCrosswordWidget}
+              mayHaveStocksWidget={mayHaveStocksWidget}
+              mayHavePictureOfTheDayWidget={mayHavePictureOfTheDayWidget}
               mayHaveWeatherForecast={
                 prefs["widgets.system.weatherForecast.enabled"]
               }

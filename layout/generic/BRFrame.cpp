@@ -6,6 +6,7 @@
 
 #include "gfxContext.h"
 #include "mozilla/CaretAssociationHint.h"
+#include "mozilla/Likely.h"
 #include "mozilla/PresShell.h"
 #include "mozilla/TextControlElement.h"
 #include "mozilla/dom/HTMLBRElement.h"
@@ -15,6 +16,7 @@
 #include "nsContainerFrame.h"
 #include "nsFontMetrics.h"
 #include "nsHTMLParts.h"
+#include "nsIContentInlines.h"
 #include "nsIFrame.h"
 #include "nsLayoutUtils.h"
 #include "nsLineLayout.h"
@@ -134,9 +136,14 @@ void BRFrame::Reflow(nsPresContext* aPresContext, ReflowOutput& aMetrics,
       // normal inline frame.  That line-height is used is important
       // here for cases where the line-height is less than 1.
       RefPtr<nsFontMetrics> fm =
-          nsLayoutUtils::GetInflatedFontMetricsForFrame(this);
+          nsLayoutUtils::GetInflatedFontMetricsForFrame(GetParent());
       if (fm) {
-        nscoord logicalHeight = aReflowInput.GetLineHeight();
+        nscoord logicalHeight;
+        if (MOZ_LIKELY(aReflowInput.mParentReflowInput)) {
+          logicalHeight = aReflowInput.mParentReflowInput->GetLineHeight();
+        } else {
+          logicalHeight = aReflowInput.GetLineHeight();
+        }
         finalSize.BSize(wm) = logicalHeight;
         aMetrics.SetBlockStartAscent(nsLayoutUtils::GetCenteredFontBaseline(
             fm, logicalHeight, wm.IsLineInverted()));

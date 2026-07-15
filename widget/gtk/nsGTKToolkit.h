@@ -5,8 +5,9 @@
 #ifndef GTKTOOLKIT_H
 #define GTKTOOLKIT_H
 
-#include "nsString.h"
 #include <gtk/gtk.h>
+
+#include "nsString.h"
 
 /**
  * Wrapper around the thread running the message pump.
@@ -25,12 +26,15 @@ class nsGTKToolkit final {
   }
 
   /**
-   * Get/set our startup token value. (XDG_ACTIVATION_TOKEN/DESKTOP_STARTUP_ID)
-   * When non-empty, this is applied to the next toplevel window to be shown or
-   * focused (and then immediately cleared).
+   * Get/set our activation token value.
+   * (XDG_ACTIVATION_TOKEN/DESKTOP_STARTUP_ID) When non-empty, this is applied
+   * to the next toplevel window to be shown or focused (and then immediately
+   * cleared).
    */
-  void SetStartupToken(const nsACString& aToken) { mStartupToken = aToken; }
-  const nsCString& GetStartupToken() const { return mStartupToken; }
+  void SetActivationToken(const nsACString& aToken) {
+    mActivationToken = aToken;
+  }
+  const nsCString& GetActivationToken() const { return mActivationToken; }
 
   /**
    * Get/set the timestamp value to be used, if non-zero, to focus the
@@ -42,7 +46,7 @@ class nsGTKToolkit final {
  private:
   static nsGTKToolkit* gToolkit;
 
-  nsCString mStartupToken;
+  nsCString mActivationToken;
   uint32_t mFocusTimestamp = 0;
 };
 

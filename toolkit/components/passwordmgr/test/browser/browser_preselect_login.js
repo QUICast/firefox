@@ -103,9 +103,9 @@ add_task(
         await openACPopup(popup, browser, "#form-basic-username");
 
         const secondLoginItem = popup.firstChild.getItemAtIndex(1);
-        const secondLoginItemSecondaryAction = secondLoginItem.querySelector(
-          ".ac-secondary-action"
-        );
+        const secondLoginItemSecondaryAction = secondLoginItem
+          .querySelector("autocomplete-row-item")
+          .shadowRoot.querySelector("moz-button.secondary-action");
 
         Assert.ok(
           !secondLoginItemSecondaryAction.checkVisibility({
@@ -117,7 +117,7 @@ add_task(
         await EventUtils.synthesizeKey("KEY_ArrowDown");
         await EventUtils.synthesizeKey("KEY_ArrowDown");
 
-        await BrowserTestUtils.waitForCondition(
+        await TestUtils.waitForCondition(
           () => secondLoginItem.attributes.selected,
           "Wait for second login to become active"
         );

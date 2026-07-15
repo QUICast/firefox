@@ -7,16 +7,16 @@
 
 #include <stdint.h>
 
+#include "Units.h"
 #include "mozilla/EventForwards.h"
 #include "mozilla/TimeStamp.h"
 #include "mozilla/dom/EventTarget.h"
 #include "mozilla/layers/LayersTypes.h"
-#include "nsCOMPtr.h"
 #include "nsAtom.h"
+#include "nsCOMPtr.h"
 #include "nsISupportsImpl.h"
 #include "nsIWidget.h"
 #include "nsString.h"
-#include "Units.h"
 
 #ifdef DEBUG
 #  include "nsXULAppAPI.h"
@@ -108,6 +108,11 @@ struct BaseEventFlags {
   // If mIsSynthesizedForTests is true, the event has been synthesized for
   // automated tests or something hacky approach of an add-on.
   bool mIsSynthesizedForTests : 1;
+  // If mIsAsyncSynthesizedForTests is true, the event has been synthesized for
+  // automated tests and dispatched asynchronously through WebDriver(i.e.
+  // injected in the parent process), rather than dispatched synchronously in
+  // the process that requested it.  This implies mIsSynthesizedForTests.
+  bool mIsAsyncSynthesizedForTests : 1;
   // If mExceptionWasRaised is true, one of the event handlers has raised an
   // exception.
   bool mExceptionWasRaised : 1;
@@ -160,9 +165,6 @@ struct BaseEventFlags {
   // Certain mouse events can be marked as positionless to return 0 from
   // coordinate related getters.
   bool mIsPositionless : 1;
-  // Indicates if a key handler is registered to execute a command for the key
-  // combination.
-  bool mIsShortcutKey : 1;
 
   // Flags managing state of propagation between processes.
   // Note the the following flags shouldn't be referred directly.  Use utility

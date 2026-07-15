@@ -112,6 +112,7 @@ for (const type of [
   "BOOKMARK_URL",
   "CARD_SECTION_IMPRESSION",
   "CLEAR_PREF",
+  "CLICK_SECTION_LEARN_MORE",
   "COPY_DOWNLOAD_LINK",
   "DELETE_BOOKMARK_BY_ID",
   "DELETE_HISTORY_URL",
@@ -178,10 +179,12 @@ for (const type of [
   "MESSAGE_NOTIFY_VISIBILITY",
   "MESSAGE_SET",
   "MESSAGE_TOGGLE_VISIBILITY",
+  "MULTIPLE_PREFS_CHANGED",
   "NEW_TAB_INIT",
   "NEW_TAB_INITIAL_STATE",
   "NEW_TAB_LOAD",
   "NEW_TAB_REHYDRATED",
+  "NEW_TAB_SCROLL",
   "NEW_TAB_STATE_REQUEST",
   "NEW_TAB_STATE_REQUEST_STARTUPCACHE",
   "NEW_TAB_STATE_REQUEST_WITHOUT_STARTUPCACHE",
@@ -192,6 +195,7 @@ for (const type of [
   "OPEN_PRIVATE_WINDOW",
   "OPEN_WEBEXT_SETTINGS",
   "PARTNER_LINK_ATTRIBUTION",
+  "PICTURE_OF_THE_DAY_UPDATE",
   "PLACES_BOOKMARKS_REMOVED",
   "PLACES_BOOKMARK_ADDED",
   "PLACES_HISTORY_CLEARED",
@@ -230,6 +234,7 @@ for (const type of [
   "SECTION_UPDATE_CARD",
   "SETTINGS_CLOSE",
   "SETTINGS_OPEN",
+  "SET_MULTIPLE_PREFS",
   "SET_PREF",
   "SHOW_DOWNLOAD_FILE",
   "SHOW_FIREFOX_ACCOUNTS",
@@ -295,6 +300,9 @@ for (const type of [
   "WEATHER_USER_OPT_IN_LOCATION",
   "WEBEXT_CLICK",
   "WEBEXT_DISMISS",
+  "WEB_NOTIFICATIONS_ERROR",
+  "WEB_NOTIFICATIONS_REQUEST",
+  "WEB_NOTIFICATIONS_UPDATED",
   "WIDGETS_CONTAINER_ACTION",
   "WIDGETS_ENABLED",
   "WIDGETS_ERROR",
@@ -307,23 +315,31 @@ for (const type of [
   "WIDGETS_LISTS_USER_EVENT",
   "WIDGETS_LISTS_USER_IMPRESSION",
   "WIDGETS_OPT_IN",
+  "WIDGETS_PICTURE_SET_WALLPAPER",
+  "WIDGETS_PRIVACY_UPDATE",
   "WIDGETS_SPORTS_CHANGE_FOLLOWED_ONLY",
   "WIDGETS_SPORTS_CHANGE_LIVE_INDEX",
   "WIDGETS_SPORTS_CHANGE_MATCHES_TAB",
   "WIDGETS_SPORTS_CHANGE_SELECTED_TEAMS",
   "WIDGETS_SPORTS_CHANGE_WIDGET_STATE",
+  "WIDGETS_SPORTS_FETCH_MORE_MATCHES",
   "WIDGETS_SPORTS_LIVE_HIDDEN",
+  "WIDGETS_SPORTS_LIVE_REFRESH",
   "WIDGETS_SPORTS_LIVE_UPDATE",
   "WIDGETS_SPORTS_LIVE_VISIBLE",
+  "WIDGETS_SPORTS_MARK_CELEBRATED",
   "WIDGETS_SPORTS_OPEN_MATCH_SEARCH",
+  "WIDGETS_SPORTS_SET_CELEBRATIONS",
   "WIDGETS_SPORTS_SET_FOLLOWED_ONLY",
   "WIDGETS_SPORTS_SET_LIVE_INDEX",
+  "WIDGETS_SPORTS_SET_LOAD_MORE",
   "WIDGETS_SPORTS_SET_MATCHES_TAB",
   "WIDGETS_SPORTS_SET_SELECTED_TEAMS",
   "WIDGETS_SPORTS_SET_WIDGET_STATE",
   "WIDGETS_SPORTS_WATCH_LIVE_REQUEST",
   "WIDGETS_SPORTS_WATCH_LIVE_SET",
   "WIDGETS_SPORTS_WIDGET_SET",
+  "WIDGETS_STOCKS_UPDATE",
   "WIDGETS_TIMER_END",
   "WIDGETS_TIMER_PAUSE",
   "WIDGETS_TIMER_PLAY",
@@ -541,6 +557,15 @@ function SetPref(prefName, value, importContext = globalImportContext) {
   return importContext === UI_CODE ? AlsoToMain(action) : action;
 }
 
+// Routed to main, which applies all values and echoes one MULTIPLE_PREFS_CHANGED.
+const SetMultiplePrefs = (values, importContext = globalImportContext) => {
+  const action = {
+    type: actionTypes.SET_MULTIPLE_PREFS,
+    data: { values },
+  };
+  return importContext === UI_CODE ? AlsoToMain(action) : action;
+};
+
 function WebExtEvent(type, data, importContext = globalImportContext) {
   if (!data || !data.source) {
     throw new Error(
@@ -562,6 +587,7 @@ const actionCreators = {
   OnlyToMain,
   AlsoToPreloaded,
   SetPref,
+  SetMultiplePrefs,
   WebExtEvent,
   DiscoveryStreamImpressionStats,
   DiscoveryStreamLoadedContent,
@@ -1090,7 +1116,7 @@ class DiscoveryStreamAdminUI extends (external_React_default()).PureComponent {
     }, /*#__PURE__*/external_React_default().createElement("moz-toggle", {
       id: "inferred-personalization-overrides",
       pressed: overridesEnabled || null,
-      onToggle: this.handleDebugOverridesToggle,
+      ontoggle: this.handleDebugOverridesToggle,
       label: "Enable overrides"
     })))), /*#__PURE__*/external_React_default().createElement(Row, {
       className: "inferred-overrides-refresh-row"
@@ -1238,7 +1264,7 @@ class DiscoveryStreamAdminUI extends (external_React_default()).PureComponent {
       id: "sections-toggle",
       disabled: !unifiedAdsSpocsEnabled || null,
       pressed: allizomEnabled || null,
-      onToggle: this.handleAllizomToggle,
+      ontoggle: this.handleAllizomToggle,
       label: "Toggle allizom"
     }))), /*#__PURE__*/external_React_default().createElement(Row, null, /*#__PURE__*/external_React_default().createElement("td", {
       className: "min"
@@ -1329,7 +1355,7 @@ class DiscoveryStreamAdminUI extends (external_React_default()).PureComponent {
     }, /*#__PURE__*/external_React_default().createElement("moz-toggle", {
       id: "sections-toggle",
       pressed: sectionsEnabled || null,
-      onToggle: this.handleSectionsToggle,
+      ontoggle: this.handleSectionsToggle,
       label: "Toggle DS Sections"
     })), /*#__PURE__*/external_React_default().createElement("details", {
       className: "details-section"
@@ -1338,21 +1364,21 @@ class DiscoveryStreamAdminUI extends (external_React_default()).PureComponent {
     }, /*#__PURE__*/external_React_default().createElement("moz-toggle", {
       id: "newtab_leaderboard",
       pressed: leaderboardPressed || null,
-      onToggle: this.toggleIABBanners,
+      ontoggle: this.toggleIABBanners,
       label: "Enable IAB Leaderboard"
     })), /*#__PURE__*/external_React_default().createElement("div", {
       className: "toggle-wrapper"
     }, /*#__PURE__*/external_React_default().createElement("moz-toggle", {
       id: "newtab_billboard",
       pressed: billboardPressed || null,
-      onToggle: this.toggleIABBanners,
+      ontoggle: this.toggleIABBanners,
       label: "Enable IAB Billboard"
     })), /*#__PURE__*/external_React_default().createElement("div", {
       className: "toggle-wrapper"
     }, /*#__PURE__*/external_React_default().createElement("moz-toggle", {
       id: "newtab_rectangle",
       pressed: mediumRectangleEnabledPressed || null,
-      onToggle: this.toggleIABBanners,
+      ontoggle: this.toggleIABBanners,
       label: "Enable IAB Medium Rectangle (MREC)"
     }))), /*#__PURE__*/external_React_default().createElement("button", {
       className: "button",
@@ -1703,10 +1729,11 @@ class DSImage extends (external_React_default()).PureComponent {
           srcSetRules.push(srcSetRule);
           srcSetRules.push(srcSetRule2x);
         }
+        const explicitSize = this.props.sizes[this.props.sizes.length - 1];
         if (this.props.sizes.length) {
           // We have to supply a fallback in the very unlikely event that none of
           // the media queries match. The smallest dimension was chosen arbitrarily.
-          sizeRules.push(`${this.props.sizes[this.props.sizes.length - 1].width}px`);
+          sizeRules.push(`${explicitSize.width}px`);
         }
         img = /*#__PURE__*/external_React_default().createElement("img", {
           loading: "lazy",
@@ -1716,7 +1743,11 @@ class DSImage extends (external_React_default()).PureComponent {
           onError: this.onOptimizedImageError,
           sizes: sizeRules.join(","),
           src: securedSource,
-          srcSet: srcSetRules.join(",")
+          srcSet: srcSetRules.join(","),
+          style: explicitSize ? {
+            width: `${explicitSize.width}px`,
+            height: `${explicitSize.height}px`
+          } : undefined
         });
       } else if (this.props.source && !this.state.nonOptimizedImageFailed) {
         img = /*#__PURE__*/external_React_default().createElement("img", {
@@ -2251,6 +2282,16 @@ const LinkMenuOptions = {
       data: { index },
     },
   }),
+  // Opens the "New Shortcut" dialog. index -1 routes through the feed's insert
+  // path (append to the pinned group / first free slot), like the add button.
+  AddTopSite: () => ({
+    id: "newtab-menu-add-topsite",
+    ariaHasPopup: "dialog",
+    action: {
+      type: actionTypes.TOP_SITES_EDIT,
+      data: { index: -1 },
+    },
+  }),
   CheckBookmark: site =>
     site.bookmarkGuid
       ? LinkMenuOptions.RemoveBookmark(site)
@@ -2369,6 +2410,18 @@ const LinkMenuOptions = {
     action: actionCreators.OnlyToMain({ type: actionTypes.SETTINGS_OPEN }),
     userEvent: "OPEN_NEWTAB_PREFS",
   }),
+  SectionLearnMore: ({ learnMoreUrl }) => ({
+    id: "newtab-menu-section-learn-more",
+    action: actionCreators.OnlyToMain({
+      type: actionTypes.OPEN_LINK,
+      data: { url: learnMoreUrl },
+    }),
+    impression: actionCreators.OnlyToMain({
+      type: actionTypes.CLICK_SECTION_LEARN_MORE,
+      data: {},
+    }),
+    userEvent: "CLICK_SECTION_LEARN_MORE",
+  }),
   // eslint-disable-next-line max-params
   OurSponsorsAndYourPrivacy: (
     site,
@@ -2433,7 +2486,7 @@ const LinkMenuOptions = {
 
 
 
-const DEFAULT_SITE_MENU_OPTIONS = ["CheckPinTopSite", "EditTopSite", "Separator", "OpenInNewWindow", "OpenInPrivateWindow", "Separator", "BlockUrl"];
+const DEFAULT_SITE_MENU_OPTIONS = ["CheckPinTopSite", "EditTopSite", "AddTopSite", "Separator", "OpenInNewWindow", "OpenInPrivateWindow", "Separator", "BlockUrl"];
 class _LinkMenu extends (external_React_default()).PureComponent {
   getOptions() {
     const {
@@ -3027,6 +3080,7 @@ const TOP_SITES_SOURCE = "TOP_SITES";
 const TOP_SITES_CONTEXT_MENU_OPTIONS = [
   "CheckPinTopSite",
   "EditTopSite",
+  "AddTopSite",
   "Separator",
   "OpenInNewWindow",
   "OpenInPrivateWindow",
@@ -3058,6 +3112,16 @@ const TOP_SITES_SEARCH_SHORTCUTS_CONTEXT_MENU_OPTIONS = [
 const MIN_RICH_FAVICON_SIZE = 96;
 // minimum size necessary to show any icon
 const MIN_SMALL_FAVICON_SIZE = 16;
+
+// "SPOC" = Sponsored Pocket content; one of the two sponsored-topsite sources.
+const SPOC_TYPE = "SPOC";
+
+// We have two sources for sponsored topsites: sponsored_position is set by one
+// source, and type is set by another. Use this when we only care whether a link
+// is sponsored by either.
+function isSponsored(link) {
+  return link?.sponsored_position || link?.type === SPOC_TYPE;
+}
 
 ;// CONCATENATED MODULE: ./content-src/components/DiscoveryStreamImpressionStats/ImpressionStats.jsx
 /* This Source Code Form is subject to the terms of the Mozilla Public
@@ -6584,6 +6648,8 @@ class Dedupe {
 
 const TOP_SITES_DEFAULT_ROWS = 1;
 const TOP_SITES_MAX_SITES_PER_ROW = 8;
+// Maximum number of shortcut rows the grid can grow to.
+const TOP_SITES_MAX_ROWS = 4;
 
 ;// CONCATENATED MODULE: ./common/Reducers.sys.mjs
 /* This Source Code Form is subject to the terms of the Mozilla Public
@@ -6592,8 +6658,19 @@ const TOP_SITES_MAX_SITES_PER_ROW = 8;
 
 
 
+// Namespace import: a named import of an export missing on older train-hop
+// platforms is a link error; a namespace member is just undefined.
 
 
+
+
+// @backward-compat { version 154 }
+// TOP_SITES_MAX_ROWS lands in platform constants.mjs in 154; until that reaches
+// Release it's absent on train-hop, so fall back to 4. At 154-Release: drop the
+// namespace import above, delete this shim, and add TOP_SITES_MAX_ROWS to the
+// re-export block above.
+const Reducers_sys_TOP_SITES_MAX_ROWS =
+  TOP_SITES_MAX_ROWS ?? 4;
 
 const dedupe = new Dedupe(site => site && site.url);
 
@@ -6610,6 +6687,10 @@ const INITIAL_STATE = {
       Wallpaper: false,
     },
     customizeMenuVisible: false,
+    // When the customize panel is opened via a CTA that should deep-link into a
+    // specific wallpaper category (e.g. "firefox"), this holds that category id
+    // so WallpaperCategories can open it. Cleared when the panel closes.
+    customizePanelWallpaperCategory: null,
   },
   Ads: {
     initialized: false,
@@ -6716,6 +6797,17 @@ const INITIAL_STATE = {
     // For can be a queue in the future, but for now is one item
     toastQueue: [],
   },
+  // Snapshot of the platform NotificationDB (persisted web notifications).
+  // Distinct from `Notifications` above, which is in-newtab toast UI state.
+  // Normalized: `notifications` is the canonical id-keyed table; `byOrigin`
+  // is an id-only index. Fed by WebNotificationsFeed.
+  WebNotifications: {
+    initialized: false,
+    lastUpdated: null,
+    notifications: {},
+    byOrigin: {},
+    error: null,
+  },
   InferredPersonalization: {
     initialized: false,
     lastUpdated: null,
@@ -6760,6 +6852,24 @@ const INITIAL_STATE = {
     suggestedLocations: [],
   },
   // Widgets
+  Stocks: {
+    tickers: [],
+    lastUpdated: null,
+  },
+  PictureOfTheDay: {
+    initialized: false,
+    lastUpdated: null,
+    imageUrl: "",
+    thumbnailUrl: "",
+    title: "",
+    description: "",
+    publishedDate: "",
+    sourceUrl: "",
+    author: "",
+    licenseLabel: "",
+    licenseUrl: "",
+    error: null,
+  },
   ListsWidget: {
     // value pointing to last selectled list
     selected: "taskList",
@@ -6815,6 +6925,28 @@ const INITIAL_STATE = {
     lastLiveUpdated: null,
     // Index into the live matches list for the Now tab's single-card pager.
     liveIndex: 0,
+    // End-of-match celebration bookkeeping (set by the feed): `endedAt` maps a
+    // just-ended match's global_event_id to the ms timestamp it left /live;
+    // `celebrated` lists ids that have already triggered a celebration.
+    celebrations: { endedAt: {}, celebrated: [] },
+    // Session-only state for infinite-scroll load-more on the Upcoming and
+    // Results expanded "View all" lists. Each direction tracks its own
+    // in-flight flag, end-of-data flag, and the most recently requested
+    // date. Fetched windows are NOT persisted — they re-fetch on next
+    // session start.
+    loadMore: {
+      upcoming: { loading: false, exhausted: false, lastFetchedDate: null },
+      results: { loading: false, exhausted: false, lastFetchedDate: null },
+    },
+  },
+  PrivacyWidget: {
+    initialized: false,
+    // Count of trackers blocked today, fetched by PrivacyFeed.
+    trackersToday: 0,
+    // Count of distinct sites visited today (Places-based proxy for
+    // "sites where we blocked something"; see PrivacyFeed).
+    sitesToday: 0,
+    lastUpdated: null,
   },
 };
 
@@ -6858,10 +6990,12 @@ function App(prevState = INITIAL_STATE.App, action) {
     case actionTypes.SHOW_PERSONALIZE:
       return Object.assign({}, prevState, {
         customizeMenuVisible: true,
+        customizePanelWallpaperCategory: action.data?.wallpaperCategory ?? null,
       });
     case actionTypes.HIDE_PERSONALIZE:
       return Object.assign({}, prevState, {
         customizeMenuVisible: false,
+        customizePanelWallpaperCategory: null,
       });
     default:
       return prevState;
@@ -7022,6 +7156,10 @@ function Prefs(prevState = INITIAL_STATE.Prefs, action) {
       newValues = Object.assign({}, prevState.values);
       newValues[action.data.name] = action.data.value;
       return Object.assign({}, prevState, { values: newValues });
+    case actionTypes.MULTIPLE_PREFS_CHANGED:
+      return Object.assign({}, prevState, {
+        values: Object.assign({}, prevState.values, action.data.values),
+      });
     default:
       return prevState;
   }
@@ -7655,6 +7793,27 @@ function Notifications(prevState = INITIAL_STATE.Notifications, action) {
   }
 }
 
+function WebNotifications(prevState = INITIAL_STATE.WebNotifications, action) {
+  switch (action.type) {
+    case actionTypes.WEB_NOTIFICATIONS_UPDATED:
+      return {
+        ...prevState,
+        initialized: true,
+        lastUpdated: action.data.lastUpdated,
+        notifications: action.data.notifications,
+        byOrigin: action.data.byOrigin,
+        error: null,
+      };
+    case actionTypes.WEB_NOTIFICATIONS_ERROR:
+      return {
+        ...prevState,
+        error: action.data,
+      };
+    default:
+      return prevState;
+  }
+}
+
 function Weather(prevState = INITIAL_STATE.Weather, action) {
   switch (action.type) {
     case actionTypes.WEATHER_UPDATE:
@@ -7674,6 +7833,44 @@ function Weather(prevState = INITIAL_STATE.Weather, action) {
       return { ...prevState, suggestedLocations: action.data };
     case actionTypes.WEATHER_LOCATION_DATA_UPDATE:
       return { ...prevState, locationData: action.data };
+    default:
+      return prevState;
+  }
+}
+
+const PictureOfTheDay = (prevState = INITIAL_STATE.PictureOfTheDay, action) => {
+  switch (action.type) {
+    case actionTypes.PICTURE_OF_THE_DAY_UPDATE:
+      return {
+        ...prevState,
+        imageUrl: action.data.imageUrl ?? "",
+        thumbnailUrl: action.data.thumbnailUrl ?? "",
+        title: action.data.title ?? "",
+        description: action.data.description ?? "",
+        publishedDate: action.data.publishedDate ?? "",
+        sourceUrl: action.data.sourceUrl ?? "",
+        author: action.data.author ?? "",
+        licenseLabel: action.data.licenseLabel ?? "",
+        licenseUrl: action.data.licenseUrl ?? "",
+        lastUpdated: action.data.lastUpdated ?? null,
+        error: action.data.error ?? null,
+        initialized: true,
+      };
+    default:
+      return prevState;
+  }
+};
+
+function PrivacyWidget(prevState = INITIAL_STATE.PrivacyWidget, action) {
+  switch (action.type) {
+    case actionTypes.WIDGETS_PRIVACY_UPDATE:
+      return {
+        ...prevState,
+        trackersToday: action.data.trackersToday,
+        sitesToday: action.data.sitesToday,
+        lastUpdated: action.data.lastUpdated,
+        initialized: true,
+      };
     default:
       return prevState;
   }
@@ -7780,6 +7977,19 @@ function TimerWidget(prevState = INITIAL_STATE.TimerWidget, action) {
   }
 }
 
+function Stocks(prevState = INITIAL_STATE.Stocks, action) {
+  switch (action.type) {
+    case actionTypes.WIDGETS_STOCKS_UPDATE:
+      return {
+        ...prevState,
+        tickers: action.data.tickers,
+        lastUpdated: action.data.lastUpdated,
+      };
+    default:
+      return prevState;
+  }
+}
+
 function ListsWidget(prevState = INITIAL_STATE.ListsWidget, action) {
   switch (action.type) {
     case actionTypes.WIDGETS_LISTS_SET:
@@ -7805,8 +8015,6 @@ function ExternalComponents(
 
 function SportsWidget(prevState = INITIAL_STATE.SportsWidget, action) {
   switch (action.type) {
-    case actionTypes.WIDGETS_SPORTS_WIDGET_SET:
-      return { ...prevState, data: action.data, initialized: true };
     case actionTypes.WIDGETS_SPORTS_SET_WIDGET_STATE:
       return { ...prevState, widgetState: action.data };
     case actionTypes.WIDGETS_SPORTS_SET_SELECTED_TEAMS:
@@ -7818,11 +8026,19 @@ function SportsWidget(prevState = INITIAL_STATE.SportsWidget, action) {
         ...prevState,
         followedOnly: { ...prevState.followedOnly, ...action.data },
       };
-    case actionTypes.WIDGETS_SPORTS_WATCH_LIVE_REQUEST:
+    case actionTypes.WIDGETS_SPORTS_WATCH_LIVE_REQUEST: {
+      // Preserve any previously-fetched payload so a re-request (e.g. the modal
+      // refreshing links on open) doesn't drop the data the "Watch live" entry
+      // point is gated on. Only show the loading state when nothing is cached.
+      const existingWatchLiveData = prevState.watchLive?.data ?? null;
       return {
         ...prevState,
-        watchLive: { loaded: false, data: null },
+        watchLive: {
+          loaded: !!existingWatchLiveData,
+          data: existingWatchLiveData,
+        },
       };
+    }
     case actionTypes.WIDGETS_SPORTS_WATCH_LIVE_SET:
       return {
         ...prevState,
@@ -7840,6 +8056,69 @@ function SportsWidget(prevState = INITIAL_STATE.SportsWidget, action) {
     }
     case actionTypes.WIDGETS_SPORTS_SET_LIVE_INDEX:
       return { ...prevState, liveIndex: action.data };
+    case actionTypes.WIDGETS_SPORTS_SET_CELEBRATIONS:
+      return { ...prevState, celebrations: action.data };
+    case actionTypes.WIDGETS_SPORTS_SET_LOAD_MORE: {
+      const {
+        direction,
+        matches: newMatches,
+        ...loadMoreUpdates
+      } = action.data || {};
+      if (direction !== "upcoming" && direction !== "results") {
+        return prevState;
+      }
+      // Upcoming appends to data.matches.next; results appends to
+      // data.matches.previous. The key used to skip duplicates is the same
+      // in both cases.
+      const targetField = direction === "upcoming" ? "next" : "previous";
+      const nextState = {
+        ...prevState,
+        loadMore: {
+          ...prevState.loadMore,
+          [direction]: {
+            ...prevState.loadMore[direction],
+            ...loadMoreUpdates,
+          },
+        },
+      };
+      if (Array.isArray(newMatches) && newMatches.length && prevState.data) {
+        const existing = prevState.data.matches?.[targetField] ?? [];
+        // Build a stable key for each match so we can skip ones already in
+        // the list. Prefer global_event_id; fall back to a composite that
+        // mirrors the React row key used in the list view.
+        const matchKey = match =>
+          match?.global_event_id ??
+          `${match?.home_team?.key}-${match?.away_team?.key}-${match?.date}`;
+        const existingKeys = new Set(existing.map(matchKey));
+        const additions = newMatches.filter(
+          m => !existingKeys.has(matchKey(m))
+        );
+        if (additions.length) {
+          nextState.data = {
+            ...prevState.data,
+            matches: {
+              ...(prevState.data.matches || {
+                previous: [],
+                current: [],
+                next: [],
+              }),
+              [targetField]: [...existing, ...additions],
+            },
+          };
+        }
+      }
+      return nextState;
+    }
+    case actionTypes.WIDGETS_SPORTS_WIDGET_SET:
+      // A wholesale-replace of `data` (initial load / post-match resync) also
+      // resets the session-only load-more state so we don't keep stale
+      // lastFetchedDate / exhausted flags from a previous fetch round.
+      return {
+        ...prevState,
+        data: action.data,
+        initialized: true,
+        loadMore: { ...INITIAL_STATE.SportsWidget.loadMore },
+      };
     default:
       return prevState;
   }
@@ -7854,6 +8133,7 @@ const reducers = {
   Sections,
   Messages,
   Notifications,
+  WebNotifications,
   Pocket,
   InferredPersonalization,
   DiscoveryStream,
@@ -7863,8 +8143,11 @@ const reducers = {
   Wallpapers,
   SectionsLayout,
   Weather,
+  Stocks,
   ExternalComponents,
   SportsWidget,
+  PrivacyWidget,
+  PictureOfTheDay,
 };
 
 ;// CONCATENATED MODULE: ./content-src/components/TopSites/TopSiteFormInput.jsx
@@ -7947,6 +8230,111 @@ function TopSiteFormInput({
     className: "error-tooltip",
     "data-l10n-id": errorMessageId
   })));
+}
+;// CONCATENATED MODULE: ./content-src/components/TopSites/PinnedAreaOverlay.jsx
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this file,
+ * You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+
+
+// Sort pinned tiles by absolute slot index and group them into rows by top edge,
+// so multi-row pinned groups (wrapping at a breakpoint) work.
+function tilesToRows(tiles) {
+  const entries = tiles.map(el => ({
+    index: parseInt(el.dataset.index, 10),
+    rect: el.getBoundingClientRect()
+  })).sort((a, b) => a.index - b.index);
+  const rows = [];
+  for (const entry of entries) {
+    const row = rows.find(r => Math.abs(r[0].rect.top - entry.rect.top) < entry.rect.height / 2);
+    if (row) {
+      row.push(entry);
+    } else {
+      rows.push([entry]);
+    }
+  }
+  return rows;
+}
+
+// Min/max edges of a row of tile entries.
+function rowBounds(row) {
+  return {
+    top: Math.min(...row.map(e => e.rect.top)),
+    bottom: Math.max(...row.map(e => e.rect.bottom)),
+    left: Math.min(...row.map(e => e.rect.left)),
+    right: Math.max(...row.map(e => e.rect.right))
+  };
+}
+
+/**
+ * Per-row bounding boxes for the pinned group, relative to `containerEl`, for the
+ * drag-time drop overlay. Pinned tiles can wrap, so it's a set of row rects; each
+ * carries `startAbsIdx` (first slot index on that row).
+ */
+function computePinnedRowRects(tiles, containerEl) {
+  if (!tiles.length || !containerEl) {
+    return [];
+  }
+  const containerRect = containerEl.getBoundingClientRect();
+  return tilesToRows(tiles).map(row => {
+    const {
+      top: rowTop,
+      bottom,
+      left,
+      right
+    } = rowBounds(row);
+    return {
+      startAbsIdx: row[0].index,
+      top: rowTop - containerRect.top,
+      left: left - containerRect.left,
+      width: right - left,
+      height: bottom - rowTop
+    };
+  });
+}
+
+// The "Pinned Area" drop-zone box drawn around the pinned region during a drag.
+// Self-measuring: it reads the currently rendered `.pinned-cell` tiles from its
+// parent list, so it tracks the live reorder preview (growing/shrinking as the
+// dragged tile joins or leaves the group) without the drag hook owning any
+// geometry. `revision` changes whenever the previewed order does, to re-measure.
+function PinnedAreaOverlay({
+  active,
+  revision
+}) {
+  const rootRef = (0,external_React_namespaceObject.useRef)(null);
+  const [rowRects, setRowRects] = (0,external_React_namespaceObject.useState)([]);
+  (0,external_React_namespaceObject.useLayoutEffect)(() => {
+    const list = rootRef.current?.parentElement;
+    if (!list) {
+      return;
+    }
+    const cells = [...list.querySelectorAll(".top-site-outer.pinned-cell:not(.drag-ghost)")];
+    setRowRects(computePinnedRowRects(cells, list));
+  }, [active, revision]);
+  if (!active) {
+    return null;
+  }
+  return /*#__PURE__*/external_React_default().createElement("div", {
+    className: "pinned-drag-overlay",
+    ref: rootRef
+  }, rowRects.map((row, rowIdx) => /*#__PURE__*/external_React_default().createElement("div", {
+    key: row.startAbsIdx,
+    className: "pinned-drop-box",
+    style: {
+      top: `${row.top}px`,
+      left: `${row.left}px`,
+      width: `${row.width}px`,
+      height: `${row.height}px`
+    }
+  }, rowIdx === 0 && /*#__PURE__*/external_React_default().createElement("div", {
+    className: "pinned-area-label"
+  }, /*#__PURE__*/external_React_default().createElement("span", {
+    className: "icon icon-pin-small"
+  }), /*#__PURE__*/external_React_default().createElement("span", {
+    "data-l10n-id": "newtab-shortcuts-pinned-area"
+  })))));
 }
 ;// CONCATENATED MODULE: ./content-src/components/TopSites/TopSiteImpressionWrapper.jsx
 /* This Source Code Form is subject to the terms of the Mozilla Public
@@ -8071,341 +8459,6 @@ TopSiteImpressionWrapper.defaultProps = {
   actionType: null,
   tile: null
 };
-;// CONCATENATED MODULE: ./content-src/components/MessageWrapper/MessageWrapper.jsx
-/* This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0. If a copy of the MPL was not distributed with this file,
- * You can obtain one at http://mozilla.org/MPL/2.0/. */
-
-
-
-
-
-
-// Note: MessageWrapper emits events via submitGleanPingForPing() in the OMC messaging-system.
-// If a feature is triggered outside of this flow (e.g., the Mobile Download QR Promo),
-// it should emit New Tab-specific Glean events independently.
-
-function MessageWrapper({
-  children,
-  dispatch,
-  hiddenOverride,
-  onDismiss,
-  wrapperClassName
-}) {
-  const message = (0,external_ReactRedux_namespaceObject.useSelector)(state => state.Messages);
-  const [isIntersecting, setIsIntersecting] = (0,external_React_namespaceObject.useState)(false);
-  const [tabIsVisible, setTabIsVisible] = (0,external_React_namespaceObject.useState)(() => typeof document !== "undefined" && document.visibilityState === "visible");
-  const [hasRun, setHasRun] = (0,external_React_namespaceObject.useState)();
-  const handleIntersection = (0,external_React_namespaceObject.useCallback)(() => {
-    setIsIntersecting(true);
-    // only send impression if messageId is defined and tab is visible
-    if (tabIsVisible && message.messageData.id && !hasRun) {
-      setHasRun(true);
-      dispatch(actionCreators.AlsoToMain({
-        type: actionTypes.MESSAGE_IMPRESSION,
-        data: message.messageData
-      }));
-    }
-  }, [dispatch, message, tabIsVisible, hasRun]);
-  (0,external_React_namespaceObject.useEffect)(() => {
-    // we dont want to dispatch this action unless the current tab is open and visible
-    if (message.isVisible && tabIsVisible) {
-      dispatch(actionCreators.AlsoToMain({
-        type: actionTypes.MESSAGE_NOTIFY_VISIBILITY,
-        data: true
-      }));
-    }
-  }, [message, dispatch, tabIsVisible]);
-  (0,external_React_namespaceObject.useEffect)(() => {
-    const handleVisibilityChange = () => {
-      setTabIsVisible(document.visibilityState === "visible");
-    };
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-    return () => {
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
-    };
-  }, []);
-  const ref = useIntersectionObserver(handleIntersection);
-  const handleClose = (0,external_React_namespaceObject.useCallback)(() => {
-    const action = {
-      type: actionTypes.MESSAGE_TOGGLE_VISIBILITY,
-      data: false //isVisible
-    };
-    if (message.portID) {
-      dispatch(actionCreators.OnlyToOneContent(action, message.portID));
-    } else {
-      dispatch(actionCreators.AlsoToMain(action));
-    }
-    dispatch(actionCreators.AlsoToMain({
-      type: actionTypes.MESSAGE_NOTIFY_VISIBILITY,
-      data: false
-    }));
-    onDismiss?.();
-  }, [dispatch, message, onDismiss]);
-  function handleDismiss() {
-    const {
-      id
-    } = message.messageData;
-    if (id) {
-      dispatch(actionCreators.OnlyToMain({
-        type: actionTypes.MESSAGE_DISMISS,
-        data: {
-          message: message.messageData
-        }
-      }));
-    }
-    handleClose();
-  }
-  function handleBlock() {
-    const {
-      id
-    } = message.messageData;
-    if (id) {
-      dispatch(actionCreators.OnlyToMain({
-        type: actionTypes.MESSAGE_BLOCK,
-        data: id
-      }));
-    }
-  }
-  function handleClick(elementId) {
-    const {
-      id
-    } = message.messageData;
-    if (id) {
-      dispatch(actionCreators.OnlyToMain({
-        type: actionTypes.MESSAGE_CLICK,
-        data: {
-          message: message.messageData,
-          source: elementId || ""
-        }
-      }));
-    }
-  }
-  if (!message || !hiddenOverride && !message.isVisible) {
-    return null;
-  }
-
-  // only display the message if `isVisible` is true
-  return /*#__PURE__*/external_React_default().createElement("div", {
-    ref: el => {
-      ref.current = [el];
-    },
-    className: wrapperClassName ? `message-wrapper ${wrapperClassName}` : "message-wrapper"
-  }, /*#__PURE__*/external_React_default().cloneElement(children, {
-    isIntersecting,
-    handleDismiss,
-    handleClick,
-    handleBlock,
-    handleClose,
-    dispatch
-  }));
-}
-
-;// CONCATENATED MODULE: ./content-src/components/DiscoveryStreamComponents/FeatureHighlight/FeatureHighlight.jsx
-/* This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0. If a copy of the MPL was not distributed with this file,
- * You can obtain one at http://mozilla.org/MPL/2.0/. */
-
-
-
-function FeatureHighlight({
-  message,
-  icon,
-  toggle,
-  arrowPosition = "",
-  position = "top-left",
-  verticalPosition = "",
-  title,
-  ariaLabel,
-  feature = "FEATURE_HIGHLIGHT_DEFAULT",
-  dispatch = () => {},
-  windowObj = __webpack_require__.g,
-  openedOverride = false,
-  showButtonIcon = true,
-  dismissCallback = () => {},
-  outsideClickCallback = () => {},
-  modalClassName = ""
-}) {
-  const [opened, setOpened] = (0,external_React_namespaceObject.useState)(openedOverride);
-  const ref = (0,external_React_namespaceObject.useRef)(null);
-  (0,external_React_namespaceObject.useEffect)(() => {
-    const handleOutsideClick = e => {
-      if (!ref?.current?.contains(e.target)) {
-        setOpened(false);
-        outsideClickCallback();
-      }
-    };
-    const handleKeyDown = e => {
-      if (e.key === "Escape") {
-        outsideClickCallback();
-      }
-    };
-    windowObj.document.addEventListener("click", handleOutsideClick);
-    windowObj.document.addEventListener("keydown", handleKeyDown);
-    return () => {
-      windowObj.document.removeEventListener("click", handleOutsideClick);
-      windowObj.document.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [windowObj, outsideClickCallback]);
-  const onToggleClick = (0,external_React_namespaceObject.useCallback)(() => {
-    if (!opened) {
-      dispatch(actionCreators.DiscoveryStreamUserEvent({
-        event: "CLICK",
-        source: "FEATURE_HIGHLIGHT",
-        value: {
-          feature
-        }
-      }));
-    }
-    setOpened(!opened);
-  }, [dispatch, feature, opened]);
-  const onDismissClick = (0,external_React_namespaceObject.useCallback)(() => {
-    setOpened(false);
-    dismissCallback();
-  }, [dismissCallback]);
-  const hideButtonClass = showButtonIcon ? `` : `isHidden`;
-  const openedClassname = opened ? `opened` : `closed`;
-  return /*#__PURE__*/external_React_default().createElement("div", {
-    ref: ref,
-    className: `feature-highlight ${verticalPosition}`
-  }, /*#__PURE__*/external_React_default().createElement("button", {
-    title: title,
-    "aria-haspopup": "true",
-    "aria-label": ariaLabel,
-    className: `toggle-button ${hideButtonClass}`,
-    onClick: onToggleClick
-  }, toggle), /*#__PURE__*/external_React_default().createElement("div", {
-    className: `feature-highlight-modal ${position} ${arrowPosition} ${modalClassName} ${openedClassname}`
-  }, /*#__PURE__*/external_React_default().createElement("div", {
-    className: "message-icon"
-  }, icon), /*#__PURE__*/external_React_default().createElement("div", {
-    className: "content-wrapper"
-  }, message), /*#__PURE__*/external_React_default().createElement("moz-button", {
-    type: "icon ghost",
-    size: "small",
-    "data-l10n-id": "feature-highlight-dismiss-button",
-    iconsrc: "chrome://global/skin/icons/close.svg",
-    onClick: onDismissClick,
-    onKeyDown: onDismissClick
-  })));
-}
-;// CONCATENATED MODULE: ./content-src/components/DiscoveryStreamComponents/FeatureHighlight/ShortcutFeatureHighlight.jsx
-/* This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0. If a copy of the MPL was not distributed with this file,
- * You can obtain one at http://mozilla.org/MPL/2.0/. */
-
-
-
-function ShortcutFeatureHighlight({
-  dispatch,
-  feature,
-  handleBlock,
-  handleDismiss,
-  messageData,
-  position
-}) {
-  const onDismiss = (0,external_React_namespaceObject.useCallback)(() => {
-    handleDismiss();
-    handleBlock();
-  }, [handleDismiss, handleBlock]);
-  return /*#__PURE__*/external_React_default().createElement("div", {
-    className: `shortcut-feature-highlight ${messageData.content?.darkModeDismiss ? "is-inverted-dark-dismiss-button" : ""}`
-  }, /*#__PURE__*/external_React_default().createElement(FeatureHighlight, {
-    position: position,
-    feature: feature,
-    dispatch: dispatch,
-    message: /*#__PURE__*/external_React_default().createElement("div", {
-      className: "shortcut-feature-highlight-content"
-    }, /*#__PURE__*/external_React_default().createElement("picture", {
-      className: "follow-section-button-highlight-image"
-    }, /*#__PURE__*/external_React_default().createElement("source", {
-      srcSet: messageData.content?.darkModeImageURL || "chrome://newtab/content/data/content/assets/highlights/omc-newtab-shortcuts.svg",
-      media: "(prefers-color-scheme: dark)"
-    }), /*#__PURE__*/external_React_default().createElement("source", {
-      srcSet: messageData.content?.imageURL || "chrome://newtab/content/data/content/assets/highlights/omc-newtab-shortcuts.svg",
-      media: "(prefers-color-scheme: light)"
-    }), /*#__PURE__*/external_React_default().createElement("img", {
-      width: "320",
-      height: "195",
-      alt: ""
-    })), /*#__PURE__*/external_React_default().createElement("div", {
-      className: "shortcut-feature-highlight-copy"
-    }, messageData.content?.cardTitle ? /*#__PURE__*/external_React_default().createElement("p", {
-      className: "title"
-    }, messageData.content.cardTitle) : /*#__PURE__*/external_React_default().createElement("p", {
-      className: "title",
-      "data-l10n-id": "newtab-shortcuts-highlight-title"
-    }), messageData.content?.cardMessage ? /*#__PURE__*/external_React_default().createElement("p", {
-      className: "subtitle"
-    }, messageData.content.cardMessage) : /*#__PURE__*/external_React_default().createElement("p", {
-      className: "subtitle",
-      "data-l10n-id": "newtab-shortcuts-highlight-subtitle"
-    }))),
-    openedOverride: true,
-    showButtonIcon: false,
-    dismissCallback: onDismiss,
-    outsideClickCallback: handleDismiss
-  }));
-}
-;// CONCATENATED MODULE: ./content-src/lib/asrouter-message-utils.mjs
-/* This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0. If a copy of the MPL was not distributed with this file,
- * You can obtain one at http://mozilla.org/MPL/2.0/. */
-
-const ASROUTER_NEWTAB_MESSAGE_POSITIONS = Object.freeze({
-  ABOVE_TOPSITES: "ABOVE_TOPSITES",
-  ABOVE_WIDGETS: "ABOVE_WIDGETS",
-  ABOVE_CONTENT_FEED: "ABOVE_CONTENT_FEED",
-});
-
-/**
- * Returns true if the Messages state has a visible message whose messageType
- * matches componentId.
- *
- * @param {object} messagesProp - The Messages slice of Redux state ({ messageData, isVisible }).
- * @param {string} componentId - The messageType value to match against.
- * @returns {boolean}
- */
-function shouldShowOMCHighlight(messagesProp, componentId) {
-  const messageData = messagesProp?.messageData;
-  const isVisible = messagesProp?.isVisible;
-  if (!messageData || Object.keys(messageData).length === 0 || !isVisible) {
-    return false;
-  }
-  return messageData?.content?.messageType === componentId;
-}
-
-/**
- * Returns true if the Messages state has a visible ASRouterNewTabMessage whose
- * configured position matches currentPosition.  When no position is set on the
- * message, it defaults to ABOVE_TOPSITES.
- *
- * @param {object} messagesProps - The Messages slice of Redux state ({ messageData, isVisible }).
- * @param {string} componentId - The messageType value to match against (e.g. "ASRouterNewTabMessage").
- * @param {string} currentPosition - One of the ASROUTER_NEWTAB_MESSAGE_POSITIONS values.
- * @returns {boolean}
- */
-function shouldShowASRouterNewTabMessage(
-  messagesProps,
-  componentId,
-  currentPosition
-) {
-  const messageData = messagesProps?.messageData;
-  if (!messageData) {
-    return false;
-  }
-
-  const configuredPosition =
-    messageData.content?.position ??
-    ASROUTER_NEWTAB_MESSAGE_POSITIONS.ABOVE_TOPSITES;
-
-  if (configuredPosition === currentPosition) {
-    return shouldShowOMCHighlight(messagesProps, componentId);
-  }
-
-  return false;
-}
-
 ;// CONCATENATED MODULE: ./content-src/components/TopSites/TopSite.jsx
 function TopSite_extends() { return TopSite_extends = Object.assign ? Object.assign.bind() : function (n) { for (var e = 1; e < arguments.length; e++) { var t = arguments[e]; for (var r in t) ({}).hasOwnProperty.call(t, r) && (n[r] = t[r]); } return n; }, TopSite_extends.apply(null, arguments); }
 /* This Source Code Form is subject to the terms of the Mozilla Public
@@ -8423,18 +8476,38 @@ function TopSite_extends() { return TopSite_extends = Object.assign ? Object.ass
 
 
 
-
-
-const SPOC_TYPE = "SPOC";
 const NEWTAB_SOURCE = "newtab";
 
-// For cases if we want to know if this is sponsored by either sponsored_position or type.
-// We have two sources for sponsored topsites, and
-// sponsored_position is set by one sponsored source, and type is set by another.
-// This is not called in all cases, sometimes we want to know if it's one source
-// or the other. This function is only applicable in cases where we only care if it's either.
-function isSponsored(link) {
-  return link?.sponsored_position || link?.type === SPOC_TYPE;
+// Tilt so the lifted drag ghost reads as "picked up" (counter-clockwise).
+const DRAG_GHOST_ROTATION_DEG = -7.5;
+// Cursor relative to the ghost's top edge; negative = cursor sits just above it.
+const DRAG_GHOST_CURSOR_INSET = -12;
+
+/**
+ * Clones the dragged tile, styles it (size + rotation, pin/menu chrome hidden via
+ * `.drag-ghost`), and hands it to native setDragImage so the platform draws and
+ * follows it. Mounted off-screen under the tile's parent to keep the cascade.
+ * Caller MUST call destroy() on dragend.
+ */
+function createDragGhost(e, el) {
+  const restingSize = Math.round(el.getBoundingClientRect().width);
+  const mountPoint = el.parentElement || document.body;
+  const clone = el.cloneNode(true);
+  clone.classList.add("drag-ghost", "active");
+  // Drop any open context menu from the clone so only the tile is lifted.
+  clone.querySelector(".context-menu")?.remove();
+  // Size the ghost to the hover/expanded tile (--col-width, per Figma), falling
+  // back to the resting size where that token isn't defined.
+  clone.style.cssText = `position:fixed;top:-9999px;left:-9999px;width:var(--col-width, ${restingSize}px);height:var(--col-width, ${restingSize}px);margin:0;pointer-events:none;transform:rotate(${DRAG_GHOST_ROTATION_DEG}deg)`;
+  mountPoint.appendChild(clone);
+
+  // offsetWidth is the layout width, unaffected by the rotate transform.
+  e.dataTransfer.setDragImage(clone, clone.offsetWidth / 2, DRAG_GHOST_CURSOR_INSET);
+  return {
+    destroy() {
+      clone.remove();
+    }
+  };
 }
 class TopSiteLink extends (external_React_default()).PureComponent {
   constructor(props) {
@@ -8452,7 +8525,15 @@ class TopSiteLink extends (external_React_default()).PureComponent {
    * or the add shortcut button as their position is fixed.
    */
   _allowDrop(e) {
-    return (this.dragged || !isSponsored(this.props.link) && !this.props.isAddButton) && e.dataTransfer.types.includes("text/topsite-index");
+    if (!e.dataTransfer.types.includes("text/topsite-index")) {
+      return false;
+    }
+    // Grouped reorder is bounded to the pinned block: only pinned tiles are
+    // valid drop targets, so a tile can't be dropped out into the frecent area.
+    if (this.props.groupedPinsEnabled) {
+      return !!this.props.link.isPinned;
+    }
+    return this.dragged || !isSponsored(this.props.link);
   }
   onDragEvent(event) {
     switch (event.type) {
@@ -8471,9 +8552,15 @@ class TopSiteLink extends (external_React_default()).PureComponent {
         this.dragged = true;
         event.dataTransfer.effectAllowed = "move";
         event.dataTransfer.setData("text/topsite-index", this.props.index);
+        if (this.props.groupedPinsEnabled) {
+          // Lift a styled clone (rotated, hover-sized) as the drag image.
+          this._dragGhost = createDragGhost(event, event.currentTarget);
+        }
         this.props.onDragEvent(event, this.props.index, this.props.link, this.props.title);
         break;
       case "dragend":
+        this._dragGhost?.destroy();
+        this._dragGhost = null;
         this.props.onDragEvent(event);
         break;
       case "dragenter":
@@ -8516,7 +8603,7 @@ class TopSiteLink extends (external_React_default()).PureComponent {
     // If we have tabbed to a search shortcut top site, and we click 'enter',
     // we should execute the onClick function. This needs to be added because
     // search top sites are anchor tags without an href. See bug 1483135
-    if (event.key === "Enter" && (this.props.link.searchTopSite || this.props.isAddButton)) {
+    if (event.key === "Enter" && this.props.link.searchTopSite) {
       this.props.onClick(event);
     }
   }
@@ -8612,10 +8699,9 @@ class TopSiteLink extends (external_React_default()).PureComponent {
       link,
       onClick,
       title,
-      isAddButton,
       visibleTopSites
     } = this.props;
-    const topSiteOuterClassName = `top-site-outer${className ? ` ${className}` : ""}${link.isDragged ? " dragged" : ""}${link.searchTopSite ? " search-shortcut" : ""}`;
+    const topSiteOuterClassName = `top-site-outer${className ? ` ${className}` : ""}${link.isDragged ? " dragged" : ""}${link.isCollapsed ? " collapsed" : ""}${link.searchTopSite ? " search-shortcut" : ""}`;
     const [letterFallback] = title;
     const {
       showSmallFavicon,
@@ -8624,12 +8710,6 @@ class TopSiteLink extends (external_React_default()).PureComponent {
       imageClassName,
       selectedColor
     } = this.calculateStyle();
-    const addButtonLabell10n = {
-      "data-l10n-id": "newtab-topsites-add-shortcut-label"
-    };
-    const addButtonTitlel10n = {
-      "data-l10n-id": "newtab-topsites-add-shortcut-title"
-    };
     const addPinnedTitlel10n = {
       "data-l10n-id": "topsite-label-pinned",
       "data-l10n-args": JSON.stringify({
@@ -8701,11 +8781,17 @@ class TopSiteLink extends (external_React_default()).PureComponent {
     }
     return /*#__PURE__*/external_React_default().createElement("li", TopSite_extends({
       className: topSiteOuterClassName,
+      ref: this.props.setRef
+    }, this.props.groupedPinsEnabled && {
+      // The drop-zone overlay measures the pinned block by data-index.
+      "data-index": this.props.index
+    }, !this.props.dropsOnList && {
+      // Per-tile drop targets (classic + grouped reorder). Zero-pin moves
+      // these to the list, since it has a single synthetic target.
       onDrop: this.onDragEvent,
       onDragOver: this.onDragEvent,
       onDragEnter: this.onDragEvent,
-      onDragLeave: this.onDragEvent,
-      ref: this.props.setRef
+      onDragLeave: this.onDragEvent
     }, draggableProps), /*#__PURE__*/external_React_default().createElement("div", {
       className: "top-site-inner"
     }, /*#__PURE__*/external_React_default().createElement("a", TopSite_extends({
@@ -8717,11 +8803,8 @@ class TopSiteLink extends (external_React_default()).PureComponent {
       draggable: true,
       "data-is-sponsored-link": !!link.sponsored_tile_id,
       onFocus: this.props.onFocus,
-      "aria-label": link.isPinned ? undefined : title
-    }, isAddButton && {
-      ...addButtonTitlel10n
-    }, !isAddButton && {
-      title
+      "aria-label": link.isPinned ? undefined : title,
+      title: title
     }, link.isPinned && {
       ...addPinnedTitlel10n
     }, {
@@ -8748,25 +8831,15 @@ class TopSiteLink extends (external_React_default()).PureComponent {
       className: "icon icon-pin-small"
     }), /*#__PURE__*/external_React_default().createElement("div", {
       className: `title${link.isPinned ? " has-icon pinned" : ""}${link.type === SPOC_TYPE || link.show_sponsored_label ? " sponsored" : ""}`
-    }, /*#__PURE__*/external_React_default().createElement("span", TopSite_extends({
+    }, /*#__PURE__*/external_React_default().createElement("span", {
       className: "title-label",
       dir: "auto"
-    }, isAddButton && {
-      ...addButtonLabell10n
-    }), link.searchTopSite && /*#__PURE__*/external_React_default().createElement("div", {
+    }, link.searchTopSite && /*#__PURE__*/external_React_default().createElement("div", {
       className: "top-site-icon search-topsite"
     }), title), /*#__PURE__*/external_React_default().createElement("span", {
       className: "sponsored-label",
       "data-l10n-id": "newtab-topsite-sponsored"
-    }))), isAddButton && shouldShowOMCHighlight(this.props.Messages, "ShortcutHighlight") && /*#__PURE__*/external_React_default().createElement(MessageWrapper, {
-      dispatch: this.props.dispatch,
-      onClick: e => e.stopPropagation()
-    }, /*#__PURE__*/external_React_default().createElement(ShortcutFeatureHighlight, {
-      dispatch: this.props.dispatch,
-      feature: "FEATURE_SHORTCUT_HIGHLIGHT",
-      position: "inset-block-end inset-inline-start",
-      messageData: this.props.Messages?.messageData
-    })), children, impressionStats));
+    }))), children, impressionStats), this.props.addButton);
   }
 }
 TopSiteLink.defaultProps = {
@@ -9004,14 +9077,32 @@ class TopSiteAddButton extends (external_React_default()).PureComponent {
     });
   }
   render() {
-    return /*#__PURE__*/external_React_default().createElement(TopSiteLink, TopSite_extends({}, this.props, {
-      isAddButton: true,
-      className: `add-button ${this.props.className || ""}`,
-      onClick: this.onEditButtonClick,
-      setPref: this.props.setPref,
-      isDraggable: false,
-      tabIndex: this.props.tabIndex
+    // In-grid buttons are large to match the tile icons; the full-row hover
+    // overlay uses the default size. Both variants participate in the shortcuts'
+    // arrow-key navigation.
+    const button = /*#__PURE__*/external_React_default().createElement("moz-button", TopSite_extends({
+      type: "primary",
+      className: "add-button",
+      tabIndex: this.props.tabIndex,
+      onFocus: this.props.onFocus
+    }, this.props.inGrid && {
+      size: "large"
+    }, {
+      iconsrc: "chrome://global/skin/icons/plus.svg",
+      "data-l10n-id": "newtab-topsites-add-shortcut-title",
+      onClick: this.onEditButtonClick
     }));
+    if (this.props.inGrid) {
+      return /*#__PURE__*/external_React_default().createElement("li", {
+        className: `top-site-outer add-button-tile ${this.props.className ? `${this.props.className}` : ""}`
+      }, button);
+    }
+
+    // For a full row, overlay the button on the last tile; reveal on hover or
+    // when the shortcuts row has focus.
+    return /*#__PURE__*/external_React_default().createElement("div", {
+      className: "add-button-hidden"
+    }, button);
   }
 }
 class TopSitePlaceholder extends (external_React_default()).PureComponent {
@@ -9022,175 +9113,56 @@ class TopSitePlaceholder extends (external_React_default()).PureComponent {
     }));
   }
 }
+
+// The classic path renders this mode-agnostically. The grouped-pins path extends
+// it through an explicit, opt-in prop contract (all inert when groupedPinsEnabled
+// is false), kept here intentionally rather than composed via children/render-prop:
+//   - groupedPinsEnabled: turns on the grouped-mode behavior below
+//   - listProps / dropsOnList: zero-pin variant makes the whole <ul> one drop target
+//   - decorations: zero-pin placeholder slot (zeroPinSlot/overZeroPin/setZeroPinRef)
+//   - listRef: hands the <ul> back for the zero-pin drop geometry
+//   - PinnedAreaOverlay (rendered inside the <ul>) self-measures .pinned-cell tiles
+// Longer term these could be composed from the container (children/render-prop)
+// so this list goes back to being fully mode-agnostic.
 class _TopSiteList extends (external_React_default()).PureComponent {
   static get DEFAULT_STATE() {
     return {
       activeIndex: null,
-      draggedIndex: null,
-      draggedSite: null,
-      draggedTitle: null,
-      topSitesPreview: null,
       focusedIndex: 0
     };
   }
   constructor(props) {
     super(props);
     this.state = _TopSiteList.DEFAULT_STATE;
-    this.onDragEvent = this.onDragEvent.bind(this);
     this.onActivate = this.onActivate.bind(this);
     this.onWrapperFocus = this.onWrapperFocus.bind(this);
     this.onTopsiteFocus = this.onTopsiteFocus.bind(this);
     this.onWrapperBlur = this.onWrapperBlur.bind(this);
     this.onKeyDown = this.onKeyDown.bind(this);
+    this.onListDragLeave = this.onListDragLeave.bind(this);
+    this.onListDragOver = this.onListDragOver.bind(this);
   }
   componentDidUpdate(prevProps) {
-    if (this.state.draggedSite) {
-      const prevTopSites = prevProps.TopSites && prevProps.TopSites.rows;
-      const newTopSites = this.props.TopSites && this.props.TopSites.rows;
-      if (prevTopSites && prevTopSites[this.state.draggedIndex] && prevTopSites[this.state.draggedIndex].url === this.state.draggedSite.url && (!newTopSites[this.state.draggedIndex] || newTopSites[this.state.draggedIndex].url !== this.state.draggedSite.url)) {
-        // We got the new order from the redux store via props. We can clear state now.
-        // eslint-disable-next-line react/no-did-update-set-state
-        this.setState(_TopSiteList.DEFAULT_STATE);
-      }
-    }
-  }
-  userEvent(event, index) {
-    this.props.dispatch(actionCreators.UserEvent({
-      event,
-      source: TOP_SITES_SOURCE,
-      action_position: index
-    }));
-  }
-  onDragEvent(event, index, link, title) {
-    switch (event.type) {
-      case "dragstart":
-        this.dropped = false;
-        this.setState({
-          draggedIndex: index,
-          draggedSite: link,
-          draggedTitle: title,
-          activeIndex: null
-        });
-        this.userEvent("DRAG", index);
-        break;
-      case "dragend":
-        if (!this.dropped) {
-          // If there was no drop event, reset the state to the default.
-          this.setState(_TopSiteList.DEFAULT_STATE);
-        }
-        break;
-      case "dragenter":
-        if (index === this.state.draggedIndex) {
-          this.setState({
-            topSitesPreview: null
-          });
-        } else {
-          this.setState({
-            topSitesPreview: this._makeTopSitesPreview(index)
-          });
-        }
-        break;
-      case "drop":
-        if (index !== this.state.draggedIndex) {
-          this.dropped = true;
-          this.props.dispatch(actionCreators.AlsoToMain({
-            type: actionTypes.TOP_SITES_INSERT,
-            data: {
-              site: {
-                url: this.state.draggedSite.url,
-                label: this.state.draggedTitle,
-                customScreenshotURL: this.state.draggedSite.customScreenshotURL,
-                // Only if the search topsites experiment is enabled
-                ...(this.state.draggedSite.searchTopSite && {
-                  searchTopSite: true
-                })
-              },
-              index,
-              draggedFromIndex: this.state.draggedIndex
-            }
-          }));
-          this.userEvent("DROP", index);
-        }
-        break;
-    }
-  }
-  _getTopSites() {
-    // Make a copy of the sites to truncate or extend to desired length
-    let topSites = this.props.TopSites.rows.slice();
-    topSites.length = (this.props.TopSitesRows ?? 0) * (this.props.topSitesMaxSitesPerRow ?? TOP_SITES_MAX_SITES_PER_ROW);
-    // if topSites do not fill an entire row add 'Add shortcut' button to array of topSites
-    // (there should only be one of these)
-    const addButtonIndex = topSites.findIndex(site => site?.isAddButton);
-
-    // Find the position right after the last regular shortcut
-    let targetPosition = topSites.length - 1;
-    for (let i = topSites.length - 1; i >= 0; i--) {
-      if (topSites[i] && !topSites[i].isAddButton) {
-        targetPosition = i + 1;
-        break;
-      }
-    }
-    if (addButtonIndex === -1) {
-      // No add button exists yet, insert it at target position if it's within bounds
-      if (targetPosition < topSites.length) {
-        topSites[targetPosition] = {
-          isAddButton: true
-        };
-      }
-    } else if (addButtonIndex !== targetPosition) {
-      // Add button exists but not at the end, move it
-      const [button] = topSites.splice(addButtonIndex, 1);
-      // Adjust target if we removed something before it
-      const adjustedTarget = addButtonIndex < targetPosition ? targetPosition - 1 : targetPosition;
-      topSites[adjustedTarget] = button;
-    }
-    return topSites;
-  }
-
-  /**
-   * Make a preview of the topsites that will be the result of dropping the currently
-   * dragged site at the specified index.
-   */
-  _makeTopSitesPreview(index) {
-    const topSites = this._getTopSites();
-    topSites[this.state.draggedIndex] = null;
-    const preview = topSites.map(site => site && (site.isPinned || isSponsored(site) || site.isAddButton) ? site : null);
-    const unpinned = topSites.filter(site => site && !site.isPinned && !isSponsored(site) && !site.isAddButton);
-    const siteToInsert = Object.assign({}, this.state.draggedSite, {
-      isPinned: true,
-      isDragged: true
-    });
-    if (!preview[index]) {
-      preview[index] = siteToInsert;
-    } else {
-      // Find the hole to shift the pinned site(s) towards. We shift towards the
-      // hole left by the site being dragged.
-      let holeIndex = index;
-      const indexStep = index > this.state.draggedIndex ? -1 : 1;
-      while (preview[holeIndex]) {
-        holeIndex += indexStep;
-      }
-
-      // Shift towards the hole.
-      const shiftingStep = index > this.state.draggedIndex ? 1 : -1;
-      while (index > this.state.draggedIndex ? holeIndex < index : holeIndex > index) {
-        let nextIndex = holeIndex + shiftingStep;
-        while (preview[nextIndex] && (isSponsored(preview[nextIndex]) || preview[nextIndex].isAddButton)) {
-          nextIndex += shiftingStep;
-        }
-        preview[holeIndex] = preview[nextIndex];
-        holeIndex = nextIndex;
-      }
-      preview[index] = siteToInsert;
+    // Drag state lives in the hook now; mirror the old reset of our own view
+    // state (menu + focus) off the dragged-site signal.
+    const started = !prevProps.draggedSite && this.props.draggedSite;
+    const ended = prevProps.draggedSite && !this.props.draggedSite;
+    if (started || ended) {
+      // eslint-disable-next-line react/no-did-update-set-state
+      this.setState(ended ? _TopSiteList.DEFAULT_STATE : {
+        activeIndex: null
+      });
     }
 
-    // Fill in the remaining holes with unpinned sites.
-    for (let i = 0; i < preview.length; i++) {
-      if (!preview[i]) {
-        preview[i] = unpinned.shift() || null;
-      }
+    // Keyboard focus: the shortcuts share one roving tab stop (focusedIndex). If
+    // the row count shrinks, the focused tile may no longer be rendered, leaving
+    // the row with no tab stop — reset to the first tile to keep the row focusable.
+    if (prevProps.TopSitesRows !== this.props.TopSitesRows) {
+      // eslint-disable-next-line react/no-did-update-set-state
+      this.setState({
+        focusedIndex: 0
+      });
     }
-    return preview;
   }
   onActivate(index) {
     this.setState({
@@ -9201,16 +9173,29 @@ class _TopSiteList extends (external_React_default()).PureComponent {
     if (this.state.activeIndex || this.state.activeIndex === 0) {
       return;
     }
-    if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
-      // Arrow direction should match visual navigation direction in RTL
-      const isRTL = document.dir === "rtl";
-      const navigateToPrevious = isRTL ? e.key === "ArrowRight" : e.key === "ArrowLeft";
-      const targetTopSite = navigateToPrevious ? this.focusedRef?.previousSibling : this.focusedRef?.nextSibling;
-      const targetAnchor = targetTopSite?.querySelector("a");
-      if (targetAnchor) {
-        targetAnchor.tabIndex = 0;
-        targetAnchor.focus();
-      }
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") {
+      return;
+    }
+    // Arrow direction should match visual navigation direction in RTL
+    const isRTL = document.dir === "rtl";
+    const navigateToPrevious = isRTL ? e.key === "ArrowRight" : e.key === "ArrowLeft";
+
+    // Walk a flat, DOM-ordered list of focus targets: each tile's link plus
+    // the add-button.
+    const focusTargets = [...this.focusRef.querySelectorAll("a, .add-button")];
+    const currentIndex = focusTargets.indexOf(e.target);
+    if (currentIndex === -1) {
+      return;
+    }
+    // Wrap around the row: stepping forward past the last target returns to the
+    // first, and vice versa. The extra `+ count` keeps the modulo positive when
+    // wrapping backward from index 0.
+    const count = focusTargets.length;
+    const delta = navigateToPrevious ? -1 : 1;
+    const target = focusTargets[(currentIndex + delta + count) % count];
+    if (target) {
+      target.tabIndex = 0;
+      target.focus();
     }
   }
   onWrapperFocus() {
@@ -9224,16 +9209,70 @@ class _TopSiteList extends (external_React_default()).PureComponent {
       focusedIndex: focusIndex
     }));
   }
+
+  // dragover fires continuously on whatever's under the cursor, so it's the
+  // reliable "current element" signal (dragenter/dragleave order can't be
+  // trusted between adjacent tiles). The reflow should only live while the
+  // cursor is within the pinned drop region (the purple outline), so hit-test
+  // the live overlay boxes: each box spans a whole pinned row, so crossing the
+  // gaps between pins stays inside and doesn't flicker. Classic has no pinned
+  // region, so it keeps its original behavior.
+  onListDragOver(event) {
+    // Preserve any list-level handler (zero-pin grouped drop geometry).
+    this.props.listProps?.onDragOver?.(event);
+    if (!this.props.groupedPinsEnabled) {
+      return;
+    }
+    const boxes = [...event.currentTarget.querySelectorAll(".pinned-drop-box")];
+    if (!boxes.length) {
+      return;
+    }
+    const inside = boxes.some(box => {
+      const r = box.getBoundingClientRect();
+      return event.clientX >= r.left && event.clientX <= r.right && event.clientY >= r.top && event.clientY <= r.bottom;
+    });
+    if (!inside) {
+      this.props.onDragEvent(event);
+    }
+  }
+
+  // Safety net for the grouped pinned-region clear: leaving the grid straight
+  // off an edge tile, where no in-region dragover lands first. Filters out
+  // tile-to-tile crossings via relatedTarget. Grouped-only, so classic keeps its
+  // original "placeholder persists until drop/dragend" behavior.
+  onListDragLeave(event) {
+    // Preserve any list-level handler (e.g. zero-pin grouped drop).
+    this.props.listProps?.onDragLeave?.(event);
+    if (!this.props.groupedPinsEnabled) {
+      return;
+    }
+    if (!event.currentTarget.contains(event.relatedTarget)) {
+      this.props.onDragEvent(event);
+    }
+  }
   render() {
     const {
       props
     } = this;
-    const topSites = this.state.topSitesPreview || this._getTopSites();
+    const topSites = this.props.sites;
+    const maxSitesPerRow = props.topSitesMaxSitesPerRow ?? TOP_SITES_MAX_SITES_PER_ROW;
+    // The array can be sparse (e.g. dismissed tiles leave holes), so count the
+    // tiles that actually render rather than relying on slot indices.
+    const tileCount = topSites.filter(site => site && !site.isAddButton).length;
+    const rowFull = tileCount > 0 && tileCount % maxSitesPerRow === 0;
     const topSitesUI = [];
     const commonProps = {
-      onDragEvent: this.onDragEvent,
-      dispatch: props.dispatch
+      onDragEvent: this.props.onDragEvent,
+      dispatch: props.dispatch,
+      groupedPinsEnabled: this.props.groupedPinsEnabled,
+      // Zero-pin drops on the list (single synthetic target, no per-tile
+      // handlers). The reorder+append path keeps per-tile handlers and adds a
+      // list-level append target, so it passes listProps without this flag.
+      dropsOnList: !!this.props.dropsOnList
     };
+    const {
+      decorations
+    } = this.props;
     // We assign a key to each placeholder slot. We need it to be independent
     // of the slot index (i below) so that the keys used stay the same during
     // drag and drop reordering and the underlying DOM nodes are reused.
@@ -9246,11 +9285,24 @@ class _TopSiteList extends (external_React_default()).PureComponent {
     const maxNarrowVisibleIndex = props.TopSitesRows * 6;
     const maxSmallVisibleIndex = props.TopSitesRows * 8;
     for (let i = 0, l = topSites.length; i < l; i++) {
+      // Zero-pin grouped drag: with no pins there are no slots to reorder, so
+      // open the pin area with one placeholder at the first pinnable slot.
+      if (decorations && i === decorations.zeroPinSlot) {
+        topSitesUI.push(/*#__PURE__*/external_React_default().createElement(TopSitePlaceholder, TopSite_extends({
+          key: "pinned-zero-drop",
+          index: i
+        }, commonProps, {
+          className: `zero-pin-placeholder pinned-cell${decorations.overZeroPin ? " over" : ""}`,
+          setRef: decorations.setZeroPinRef
+        })));
+      }
       const link = topSites[i] && Object.assign({}, topSites[i], {
         iconType: this.props.topSiteIconType(topSites[i])
       });
       const slotProps = {
-        key: link?.url || `hole-${holeIndex++}`,
+        // Stable key so the button isn't remounted (and re-flashed) as its slot
+        // shifts on pin/unpin — it has no url to key off of.
+        key: link?.isAddButton ? "add-button" : link?.url || `hole-${holeIndex++}`,
         index: i
       };
       // @nova-cleanup(remove-conditional): Remove classic path once Nova ships
@@ -9264,6 +9316,11 @@ class _TopSiteList extends (external_React_default()).PureComponent {
         slotProps.className = "hide-for-small";
       } else if (i >= maxNarrowVisibleIndex) {
         slotProps.className = "hide-for-narrow";
+      }
+      // Marker (no styles) the drop-zone overlay measures to size the box. The
+      // preview marks a joining frecent isPinned, so the box grows with it.
+      if (this.props.groupedPinsEnabled && link?.isPinned) {
+        slotProps.className = `${slotProps.className ? `${slotProps.className} ` : ""}pinned-cell`;
       }
       const {
         key: slotKey,
@@ -9279,20 +9336,36 @@ class _TopSiteList extends (external_React_default()).PureComponent {
           }, restSlotProps, commonProps));
         }
       } else if (topSites[i]?.isAddButton) {
-        topSiteLink = /*#__PURE__*/external_React_default().createElement(TopSiteAddButton, TopSite_extends({
-          key: slotKey
-        }, restSlotProps, commonProps, {
-          setRef: i === this.state.focusedIndex ? el => {
-            this.focusedRef = el;
-          } : () => {},
-          tabIndex: i === this.state.focusedIndex ? 0 : -1,
-          onFocus: () => {
-            this.onTopsiteFocus(i);
-          },
-          Messages: this.props.Messages,
-          visibleTopSites: this.props.visibleTopSites
-        }));
+        // Render the add button in-grid when the row isn't full. It carries the
+        // slot's responsive hide class so it drops at the same breakpoints as a
+        // tile in that column would.
+        if (!rowFull) {
+          topSiteLink = /*#__PURE__*/external_React_default().createElement(TopSiteAddButton, {
+            inGrid: true,
+            className: slotProps.className,
+            key: slotKey,
+            index: i,
+            dispatch: props.dispatch,
+            tabIndex: i === this.state.focusedIndex ? 0 : -1,
+            onFocus: () => {
+              this.onTopsiteFocus(i);
+            }
+          });
+        }
       } else {
+        // When this is the last tile of a full row, the add button has no free
+        // cell of its own, so render it as a hover overlay anchored to this tile.
+        let addButton = null;
+        if (topSites[i + 1]?.isAddButton && rowFull) {
+          addButton = /*#__PURE__*/external_React_default().createElement(TopSiteAddButton, {
+            index: i + 1,
+            dispatch: props.dispatch,
+            tabIndex: i + 1 === this.state.focusedIndex ? 0 : -1,
+            onFocus: () => {
+              this.onTopsiteFocus(i + 1);
+            }
+          });
+        }
         topSiteLink = /*#__PURE__*/external_React_default().createElement(TopSite, TopSite_extends({
           key: slotKey,
           link: link,
@@ -9300,14 +9373,12 @@ class _TopSiteList extends (external_React_default()).PureComponent {
           onActivate: this.onActivate
         }, restSlotProps, commonProps, {
           colors: props.colors,
-          setRef: i === this.state.focusedIndex ? el => {
-            this.focusedRef = el;
-          } : () => {},
           tabIndex: i === this.state.focusedIndex ? 0 : -1,
           onFocus: () => {
             this.onTopsiteFocus(i);
           },
-          visibleTopSites: this.props.visibleTopSites
+          visibleTopSites: this.props.visibleTopSites,
+          addButton: addButton
         }));
       }
 
@@ -9318,24 +9389,30 @@ class _TopSiteList extends (external_React_default()).PureComponent {
     }
     return /*#__PURE__*/external_React_default().createElement("div", {
       className: "top-sites-list-wrapper"
-    }, /*#__PURE__*/external_React_default().createElement("ul", {
+    }, /*#__PURE__*/external_React_default().createElement("ul", TopSite_extends({
       role: "group",
       "aria-label": "Shortcuts",
       onFocus: this.onWrapperFocus,
-      onBlur: this.onWrapperBlur,
+      onBlur: this.onWrapperBlur
+    }, this.props.listProps, {
+      onDragOver: this.onListDragOver,
+      onDragLeave: this.onListDragLeave,
       ref: el => {
         this.focusRef = el;
+        this.props.listRef?.(el);
       },
-      className: `top-sites-list${this.state.draggedSite ? " dnd-active" : ""}`,
+      className: `top-sites-list${this.props.draggedSite ? " dnd-active" : ""}`,
       style: {
         "--top-sites-max-per-row": this.props.topSitesMaxSitesPerRow ?? TOP_SITES_MAX_SITES_PER_ROW
       }
-    }, topSitesUI));
+    }), topSitesUI, this.props.groupedPinsEnabled && /*#__PURE__*/external_React_default().createElement(PinnedAreaOverlay, {
+      active: !!this.props.draggedSite,
+      revision: topSites
+    })));
   }
 }
 const TopSiteList = (0,external_ReactRedux_namespaceObject.connect)(state => ({
   App: state.App,
-  Messages: state.Messages,
   Prefs: state.Prefs
 }))(_TopSiteList);
 ;// CONCATENATED MODULE: ./content-src/components/TopSites/TopSiteForm.jsx
@@ -9622,11 +9699,624 @@ TopSiteForm.defaultProps = {
   site: null,
   index: -1
 };
+;// CONCATENATED MODULE: ./content-src/components/TopSites/useTopSitesDnD.jsx
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this file,
+ * You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+
+
+// Classic TopSites drag-and-drop — pure mechanics over a caller-built list.
+// Movability rules, the persisted action, and telemetry are all injected, so
+// nothing domain- or store-shaped lives in here.
+function useTopSitesDnD({
+  baseSites,
+  rows,
+  isMovable,
+  // site flows into the free pool
+  isShiftable,
+  // anchored site that slides to make room
+  onDragStart,
+  onReorder,
+  // ({ site, title, fromIndex, toIndex }) — caller persists it
+  pinInPlace // let a movable tile commit at its own slot (grouped pins only)
+}) {
+  const [draggedIndex, setDraggedIndex] = (0,external_React_namespaceObject.useState)(null);
+  const [draggedSite, setDraggedSite] = (0,external_React_namespaceObject.useState)(null);
+  const [draggedTitle, setDraggedTitle] = (0,external_React_namespaceObject.useState)(null);
+  const [previewSites, setPreviewSites] = (0,external_React_namespaceObject.useState)(null);
+  // Set on drop so the trailing dragend doesn't reset us.
+  const droppedRef = (0,external_React_namespaceObject.useRef)(false);
+  const resetDrag = (0,external_React_namespaceObject.useCallback)(() => {
+    setDraggedIndex(null);
+    setDraggedSite(null);
+    setDraggedTitle(null);
+    setPreviewSites(null);
+  }, []);
+
+  // The list as it'd look after dropping at `index`: anchors hold their spot
+  // (shiftable ones slide to make room), movable tiles refill the holes.
+  const makeTopSitesPreview = (0,external_React_namespaceObject.useCallback)(index => {
+    const sites = baseSites.slice(); // shared — don't mutate in place
+    sites[draggedIndex] = null;
+    const preview = sites.map(site => site && !isMovable(site) ? site : null);
+    const pool = sites.filter(site => site && isMovable(site));
+    const siteToInsert = Object.assign({}, draggedSite, {
+      isPinned: true,
+      isDragged: true
+    });
+    if (!preview[index]) {
+      preview[index] = siteToInsert;
+    } else {
+      // Shift anchors toward the hole the dragged tile left.
+      let holeIndex = index;
+      const indexStep = index > draggedIndex ? -1 : 1;
+      while (preview[holeIndex]) {
+        holeIndex += indexStep;
+      }
+      const shiftingStep = index > draggedIndex ? 1 : -1;
+      while (index > draggedIndex ? holeIndex < index : holeIndex > index) {
+        let nextIndex = holeIndex + shiftingStep;
+        // Skip fixed anchors — they don't move.
+        while (preview[nextIndex] && !isMovable(preview[nextIndex]) && !isShiftable(preview[nextIndex])) {
+          nextIndex += shiftingStep;
+        }
+        preview[holeIndex] = preview[nextIndex];
+        holeIndex = nextIndex;
+      }
+      preview[index] = siteToInsert;
+    }
+    for (let i = 0; i < preview.length; i++) {
+      if (!preview[i]) {
+        preview[i] = pool.shift() || null;
+      }
+    }
+    return preview;
+  }, [baseSites, draggedIndex, draggedSite, isMovable, isShiftable]);
+  const onDragEvent = (0,external_React_namespaceObject.useCallback)((event, index, link, title) => {
+    switch (event.type) {
+      case "dragstart":
+        droppedRef.current = false;
+        setDraggedIndex(index);
+        setDraggedSite(link);
+        setDraggedTitle(title);
+        onDragStart?.(index);
+        break;
+      case "dragend":
+        if (!droppedRef.current) {
+          resetDrag();
+        }
+        break;
+      case "dragenter":
+        // Dropping on the dragged tile's own slot is a no-op when reordering,
+        // but with pinInPlace a movable tile dropped there still gets pinned,
+        // so preview the reflow instead of clearing it.
+        if (index === draggedIndex && !(pinInPlace && isMovable(draggedSite))) {
+          setPreviewSites(null);
+        } else {
+          setPreviewSites(makeTopSitesPreview(index));
+        }
+        break;
+      case "dragover":
+        // List-level signal (no index) that the cursor left the pinned drop
+        // region. Tiles pass their index, so a tile's own dragover is ignored.
+        if (index === undefined) {
+          setPreviewSites(null);
+        }
+        break;
+      case "dragleave":
+        // Safety net for leaving the grid entirely off an edge tile, where no
+        // bare-grid dragover lands first.
+        setPreviewSites(null);
+        break;
+      case "drop":
+        if (index !== draggedIndex || pinInPlace && isMovable(draggedSite)) {
+          droppedRef.current = true;
+          onReorder?.({
+            site: draggedSite,
+            title: draggedTitle,
+            fromIndex: draggedIndex,
+            toIndex: index
+          });
+        }
+        break;
+    }
+  }, [draggedIndex, draggedSite, draggedTitle, isMovable, pinInPlace, makeTopSitesPreview, onDragStart, onReorder, resetDrag]);
+
+  // Clear the drag once the committed order arrives. Usually the dragged url has
+  // left its old slot; a pin-in-place drop commits at the same slot, so also
+  // clear when a drop happened and new rows arrived. Layout effect so the
+  // preview doesn't flash first.
+  const prevRowsRef = (0,external_React_namespaceObject.useRef)(rows);
+  (0,external_React_namespaceObject.useLayoutEffect)(() => {
+    const prevRows = prevRowsRef.current;
+    const movedFromSlot = prevRows?.[draggedIndex]?.url === draggedSite?.url && rows[draggedIndex]?.url !== draggedSite?.url;
+    const committedInPlace = droppedRef.current && prevRows && prevRows !== rows;
+    if (draggedSite && (movedFromSlot || committedInPlace)) {
+      resetDrag();
+    }
+    prevRowsRef.current = rows;
+  }, [rows, draggedSite, draggedIndex, resetDrag]);
+  return {
+    previewSites,
+    onDragEvent,
+    draggedSite
+  };
+}
+;// CONCATENATED MODULE: ./content-src/components/TopSites/TopSiteListContainer.jsx
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this file,
+ * You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+
+
+
+
+
+
+
+
+// Build the displayed list: truncate/extend to the grid and place the Add button.
+function buildTopSitesList(rows, topSitesRows, maxSitesPerRow) {
+  let topSites = rows.slice();
+  topSites.length = (topSitesRows ?? 0) * (maxSitesPerRow ?? TOP_SITES_MAX_SITES_PER_ROW);
+  const addButtonIndex = topSites.findIndex(site => site?.isAddButton);
+
+  // Add button goes right after the last shortcut (front if there are none).
+  let targetPosition = 0;
+  for (let i = topSites.length - 1; i >= 0; i--) {
+    if (topSites[i] && !topSites[i].isAddButton) {
+      targetPosition = i + 1;
+      break;
+    }
+  }
+  if (addButtonIndex === -1) {
+    // Show the add button when there's a free slot, or when the grid is full
+    // but can still grow a row. Hidden once the grid is full at the max rows.
+    if (targetPosition < topSites.length || topSitesRows < Reducers_sys_TOP_SITES_MAX_ROWS) {
+      topSites[targetPosition] = {
+        isAddButton: true
+      };
+    }
+  } else if (addButtonIndex !== targetPosition) {
+    const [button] = topSites.splice(addButtonIndex, 1);
+    const adjustedTarget = addButtonIndex < targetPosition ? targetPosition - 1 : targetPosition;
+    topSites[adjustedTarget] = button;
+  }
+  return topSites;
+}
+
+// Movability rules the DnD hook is told about (so it stays domain-free).
+const isMovable = site => !site.isPinned && !isSponsored(site) && !site.isAddButton;
+const isShiftable = site => !!site.isPinned;
+
+// Owns the DnD concern and feeds it to the presentational TopSiteList. Later this
+// is the one spot a pref swaps classic vs. grouped DnD.
+function TopSiteListContainer(props) {
+  const dispatch = (0,external_ReactRedux_namespaceObject.useDispatch)();
+  const baseSites = (0,external_React_namespaceObject.useMemo)(() => buildTopSitesList(props.TopSites.rows, props.TopSitesRows, props.topSitesMaxSitesPerRow), [props.TopSites.rows, props.TopSitesRows, props.topSitesMaxSitesPerRow]);
+  const onDragStart = (0,external_React_namespaceObject.useCallback)(index => dispatch(actionCreators.UserEvent({
+    event: "DRAG",
+    source: TOP_SITES_SOURCE,
+    action_position: index
+  })), [dispatch]);
+  const onReorder = (0,external_React_namespaceObject.useCallback)(({
+    site,
+    title,
+    fromIndex,
+    toIndex
+  }) => {
+    dispatch(actionCreators.AlsoToMain({
+      type: actionTypes.TOP_SITES_INSERT,
+      data: {
+        site: {
+          url: site.url,
+          label: title,
+          customScreenshotURL: site.customScreenshotURL,
+          ...(site.searchTopSite && {
+            searchTopSite: true
+          })
+        },
+        index: toIndex,
+        draggedFromIndex: fromIndex
+      }
+    }));
+    dispatch(actionCreators.UserEvent({
+      event: "DROP",
+      source: TOP_SITES_SOURCE,
+      action_position: toIndex
+    }));
+  }, [dispatch]);
+  const {
+    previewSites,
+    onDragEvent,
+    draggedSite
+  } = useTopSitesDnD({
+    baseSites,
+    rows: props.TopSites.rows,
+    isMovable,
+    isShiftable,
+    onDragStart,
+    onReorder
+  });
+  return /*#__PURE__*/external_React_default().createElement(TopSiteList, {
+    TopSitesRows: props.TopSitesRows,
+    topSitesMaxSitesPerRow: props.topSitesMaxSitesPerRow,
+    dispatch: props.dispatch,
+    topSiteIconType: props.topSiteIconType,
+    colors: props.colors,
+    visibleTopSites: props.visibleTopSites,
+    sites: previewSites || baseSites,
+    onDragEvent: onDragEvent,
+    draggedSite: draggedSite
+  });
+}
+;// CONCATENATED MODULE: ./content-src/components/TopSites/useAppendPinDrop.jsx
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this file,
+ * You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+
+
+// Append-to-end drop slot for the has-pins case. Dragging a frecent (a new pin,
+// not an existing one) opens one reserved, net-zero placeholder right after the
+// last pin, hidden until the cursor is over it — the same mechanic as
+// useZeroPinDrop, just at the end of an existing group. It layers on top of
+// useTopSitesDnD's insert-anywhere reflow: over a pin you get the reflow, over
+// this slot you append.
+//
+// Placeholders aren't native drop targets in grouped mode (_allowDrop gates on
+// isPinned), so the drop is caught at the list via geometry. The preview and the
+// commit reuse useTopSitesDnD's onDragEvent: a no-index dragover clears the
+// reflow while this slot owns the interaction, and the drop replays at
+// appendIndex so the existing reorder/telemetry path commits it.
+function useAppendPinDrop({
+  baseSites,
+  draggedSite,
+  isMovable,
+  onDragEvent,
+  // shared with useTopSitesDnD
+  previewActive // a reflow preview is showing (cursor is over a pin)
+}) {
+  const [over, setOver] = (0,external_React_namespaceObject.useState)(false);
+  const placeholderElRef = (0,external_React_namespaceObject.useRef)(null);
+  const setRef = (0,external_React_namespaceObject.useCallback)(el => {
+    placeholderElRef.current = el;
+  }, []);
+  const enabled = !!draggedSite && isMovable(draggedSite);
+
+  // First free slot after the contiguous pinned block.
+  const lastPinIndex = baseSites.reduce((last, site, i) => site?.isPinned ? i : last, -1);
+  const appendIndex = lastPinIndex + 1;
+  const isOver = (0,external_React_namespaceObject.useCallback)(event => {
+    const rect = placeholderElRef.current?.getBoundingClientRect();
+    return !!rect && event.clientX >= rect.left && event.clientX <= rect.right && event.clientY >= rect.top && event.clientY <= rect.bottom;
+  }, []);
+  const onDragOver = (0,external_React_namespaceObject.useCallback)(event => {
+    if (!enabled) {
+      return;
+    }
+    const nowOver = isOver(event);
+    if (nowOver) {
+      event.preventDefault();
+      // This slot owns the preview now; drop the insert-anywhere reflow.
+      onDragEvent(event);
+    }
+    if (over !== nowOver) {
+      setOver(nowOver);
+    }
+  }, [enabled, isOver, over, onDragEvent]);
+  const onDrop = (0,external_React_namespaceObject.useCallback)(event => {
+    if (!enabled || !isOver(event)) {
+      return;
+    }
+    event.preventDefault();
+    // Commit through the reorder hook's drop at the append slot.
+    onDragEvent(event, appendIndex);
+  }, [enabled, isOver, onDragEvent, appendIndex]);
+  const onDragLeave = (0,external_React_namespaceObject.useCallback)(event => {
+    if (event.currentTarget.contains(event.relatedTarget)) {
+      return;
+    }
+    if (over) {
+      setOver(false);
+    }
+  }, [over]);
+
+  // Collapse the dragged source out of flow so the reserved slot nets zero cells.
+  const sites = enabled ? baseSites.map(site => site && site.url === draggedSite.url ? {
+    ...site,
+    isCollapsed: true
+  } : site) : baseSites;
+  return {
+    sites,
+    listProps: {
+      onDragOver,
+      onDrop,
+      onDragLeave
+    },
+    decorations: {
+      // Hide the reserved slot while the reflow drives (cursor over a pin), so we
+      // don't add a cell on top of the reflow's own growth.
+      zeroPinSlot: enabled && !previewActive ? appendIndex : -1,
+      overZeroPin: over,
+      setZeroPinRef: setRef
+    }
+  };
+}
+;// CONCATENATED MODULE: ./content-src/components/TopSites/useZeroPinDrop.jsx
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this file,
+ * You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+
+
+// Drag-and-drop for the zero-pin case: with no pins there's nothing to reorder,
+// so this is just "drag one tile onto one target." A single placeholder marks
+// the first pinnable slot; dropping on it pins the tile there. No slots, no
+// geometry, no reorder preview — once there's a group, reordering is the classic
+// useTopSitesDnD hook. Domain bits are injected, as elsewhere.
+function useZeroPinDrop({
+  baseSites,
+  isSponsored,
+  // leading anchors the pin sits behind
+  onDragStart,
+  onReorder // ({ site, title, fromIndex, toIndex }) — caller persists it
+}) {
+  const [draggedIndex, setDraggedIndex] = (0,external_React_namespaceObject.useState)(null);
+  const [draggedSite, setDraggedSite] = (0,external_React_namespaceObject.useState)(null);
+  const [draggedTitle, setDraggedTitle] = (0,external_React_namespaceObject.useState)(null);
+  const [over, setOver] = (0,external_React_namespaceObject.useState)(false);
+  // Set on drop so the trailing dragend doesn't un-collapse the source before
+  // the pin commits (which swaps this container out entirely).
+  const droppedRef = (0,external_React_namespaceObject.useRef)(false);
+  const placeholderElRef = (0,external_React_namespaceObject.useRef)(null);
+  const setZeroPinRef = (0,external_React_namespaceObject.useCallback)(el => {
+    placeholderElRef.current = el;
+  }, []);
+
+  // First pinnable slot (after any leading sponsored); the backend lands it at
+  // group position 0.
+  const slot = baseSites.findIndex(site => site && !isSponsored(site));
+  const insertIndex = slot === -1 ? 0 : slot;
+  const isOver = (0,external_React_namespaceObject.useCallback)(event => {
+    const rect = placeholderElRef.current?.getBoundingClientRect();
+    return !!rect && event.clientX >= rect.left && event.clientX <= rect.right && event.clientY >= rect.top && event.clientY <= rect.bottom;
+  }, []);
+  const resetDrag = (0,external_React_namespaceObject.useCallback)(() => {
+    setDraggedIndex(null);
+    setDraggedSite(null);
+    setDraggedTitle(null);
+    setOver(false);
+  }, []);
+  const onDragEvent = (0,external_React_namespaceObject.useCallback)((event, index, link, title) => {
+    switch (event.type) {
+      case "dragstart":
+        droppedRef.current = false;
+        setDraggedIndex(index);
+        setDraggedSite(link);
+        setDraggedTitle(title);
+        onDragStart?.(index);
+        break;
+      case "dragend":
+        if (!droppedRef.current) {
+          resetDrag();
+        } else {
+          // Keep the source collapsed until the pin commits and this unmounts.
+          setOver(false);
+        }
+        break;
+    }
+  }, [onDragStart, resetDrag]);
+  const onDragOver = (0,external_React_namespaceObject.useCallback)(event => {
+    if (!draggedSite) {
+      return;
+    }
+    const nowOver = isOver(event);
+    if (nowOver) {
+      event.preventDefault();
+    }
+    if (over !== nowOver) {
+      setOver(nowOver);
+    }
+  }, [draggedSite, isOver, over]);
+  const onDrop = (0,external_React_namespaceObject.useCallback)(event => {
+    if (!draggedSite || !isOver(event)) {
+      return;
+    }
+    event.preventDefault();
+    droppedRef.current = true;
+    onReorder?.({
+      site: draggedSite,
+      title: draggedTitle,
+      fromIndex: draggedIndex,
+      toIndex: insertIndex
+    });
+  }, [draggedSite, draggedTitle, draggedIndex, isOver, onReorder, insertIndex]);
+  const onDragLeave = (0,external_React_namespaceObject.useCallback)(event => {
+    if (event.currentTarget.contains(event.relatedTarget)) {
+      return;
+    }
+    if (over) {
+      setOver(false);
+    }
+  }, [over]);
+
+  // The container no longer unmounts on the first pin, so clear our own drag
+  // state once the drop commits (new baseSites arrive after the refresh). Layout
+  // effect so the source doesn't un-collapse for a frame before the pin lands.
+  const prevBaseRef = (0,external_React_namespaceObject.useRef)(baseSites);
+  (0,external_React_namespaceObject.useLayoutEffect)(() => {
+    if (droppedRef.current && prevBaseRef.current !== baseSites) {
+      droppedRef.current = false;
+      resetDrag();
+    }
+    prevBaseRef.current = baseSites;
+  }, [baseSites, resetDrag]);
+
+  // Collapse the dragged source out of flow; the placeholder stands in for it
+  // (net-zero cells, so a full row won't overflow).
+  const sites = draggedSite ? baseSites.map(site => site && site.url === draggedSite.url ? {
+    ...site,
+    isCollapsed: true
+  } : site) : baseSites;
+  return {
+    sites,
+    draggedSite,
+    onDragEvent,
+    listProps: {
+      onDragOver,
+      onDrop,
+      onDragLeave
+    },
+    decorations: {
+      // Only open the drop placeholder while actually dragging; otherwise it
+      // would sit in the grid as an invisible (visibility:hidden) blank slot.
+      zeroPinSlot: draggedSite ? insertIndex : -1,
+      overZeroPin: over,
+      setZeroPinRef
+    }
+  };
+}
+;// CONCATENATED MODULE: ./content-src/components/TopSites/GroupedTopSiteListContainer.jsx
+function GroupedTopSiteListContainer_extends() { return GroupedTopSiteListContainer_extends = Object.assign ? Object.assign.bind() : function (n) { for (var e = 1; e < arguments.length; e++) { var t = arguments[e]; for (var r in t) ({}).hasOwnProperty.call(t, r) && (n[r] = t[r]); } return n; }, GroupedTopSiteListContainer_extends.apply(null, arguments); }
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this file,
+ * You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+
+
+
+
+
+
+
+
+
+
+// Grouped reorder uses the classic DnD hook: `isShiftable = isPinned` already
+// slides the pinned block, and the constant-cell preview already grows the block
+// when a frecent joins — natively, no geometry. Grouping itself (contiguity, the
+// drop-zone box) lives in the feed and PinnedAreaOverlay, not here.
+const GroupedTopSiteListContainer_isMovable = site => !site.isPinned && !isSponsored(site) && !site.isAddButton;
+const GroupedTopSiteListContainer_isShiftable = site => !!site.isPinned;
+
+// The TOP_SITES_INSERT + telemetry dispatch both grouped variants commit on a
+// drop. Identical shape to the classic container's, kept domain-side here.
+function useGroupedInsert() {
+  const dispatch = (0,external_ReactRedux_namespaceObject.useDispatch)();
+  const onDragStart = (0,external_React_namespaceObject.useCallback)(index => dispatch(actionCreators.UserEvent({
+    event: "DRAG",
+    source: TOP_SITES_SOURCE,
+    action_position: index
+  })), [dispatch]);
+  const onReorder = (0,external_React_namespaceObject.useCallback)(({
+    site,
+    title,
+    fromIndex,
+    toIndex
+  }) => {
+    dispatch(actionCreators.AlsoToMain({
+      type: actionTypes.TOP_SITES_INSERT,
+      data: {
+        site: {
+          url: site.url,
+          label: title,
+          customScreenshotURL: site.customScreenshotURL,
+          ...(site.searchTopSite && {
+            searchTopSite: true
+          })
+        },
+        index: toIndex,
+        draggedFromIndex: fromIndex
+      }
+    }));
+    dispatch(actionCreators.UserEvent({
+      event: "DROP",
+      source: TOP_SITES_SOURCE,
+      action_position: toIndex
+    }));
+  }, [dispatch]);
+  return {
+    onDragStart,
+    onReorder
+  };
+}
+function useBaseSites(props) {
+  return (0,external_React_namespaceObject.useMemo)(() => buildTopSitesList(props.TopSites.rows, props.TopSitesRows, props.topSitesMaxSitesPerRow), [props.TopSites.rows, props.TopSitesRows, props.topSitesMaxSitesPerRow]);
+}
+
+// Picks the grouped DnD variant by whether any pin exists: zero pins is a
+// simpler "drag one tile onto one target" interaction with its own hook, while
+// with pins present it's slot reordering, plus an append slot (useAppendPinDrop)
+// layered on the reorder hook for dropping a frecent at the group's end. The
+// hooks all run every render (rules of hooks) and we consume only the active
+// path — that's deliberate: rendering a single TopSiteList across the
+// zero-pin<->has-pin flip keeps the subtree mounted, so sponsored tiles don't
+// remount on the first pin / last unpin and re-fire their ad impressions. While
+// a drag is in flight the hook that owns it (its `draggedSite` is set) stays
+// active regardless of `hasPins`, so a mid-drag pinned-set change can't swap
+// hooks and strand the gesture.
+function GroupedTopSiteListContainer(props) {
+  const baseSites = useBaseSites(props);
+  const {
+    onDragStart,
+    onReorder
+  } = useGroupedInsert();
+  const hasPins = props.TopSites.rows.some(site => site?.isPinned);
+  const reorder = useTopSitesDnD({
+    baseSites,
+    rows: props.TopSites.rows,
+    isMovable: GroupedTopSiteListContainer_isMovable,
+    isShiftable: GroupedTopSiteListContainer_isShiftable,
+    onDragStart,
+    onReorder,
+    pinInPlace: true
+  });
+
+  // With pins present, dragging a frecent (a new pin) opens a reserved append
+  // slot after the last pin; existing-pin drags just reflow. Layered on the
+  // reorder hook: over a pin its reflow drives, over the slot append takes over.
+  const append = useAppendPinDrop({
+    baseSites,
+    draggedSite: reorder.draggedSite,
+    isMovable: GroupedTopSiteListContainer_isMovable,
+    onDragEvent: reorder.onDragEvent,
+    previewActive: !!reorder.previewSites
+  });
+  const zeroPin = useZeroPinDrop({
+    baseSites,
+    isSponsored: isSponsored,
+    onDragStart,
+    onReorder
+  });
+
+  // A live drag's owner (draggedSite set) wins; only when idle do we pick by
+  // hasPins. Keeps one hook authoritative for the whole gesture across a flip.
+  let active;
+  if (reorder.draggedSite) {
+    active = reorder;
+  } else if (zeroPin.draggedSite) {
+    active = zeroPin;
+  } else {
+    active = hasPins ? reorder : zeroPin;
+  }
+  const isZeroPin = active === zeroPin;
+  return /*#__PURE__*/external_React_default().createElement(TopSiteList, GroupedTopSiteListContainer_extends({}, props, {
+    sites: isZeroPin ? zeroPin.sites : reorder.previewSites || append.sites,
+    onDragEvent: active.onDragEvent,
+    draggedSite: active.draggedSite,
+    groupedPinsEnabled: true,
+    listProps: isZeroPin ? zeroPin.listProps : append.listProps,
+    decorations: isZeroPin ? zeroPin.decorations : append.decorations
+  }));
+}
 ;// CONCATENATED MODULE: ./content-src/components/TopSites/TopSites.jsx
 function TopSites_extends() { return TopSites_extends = Object.assign ? Object.assign.bind() : function (n) { for (var e = 1; e < arguments.length; e++) { var t = arguments[e]; for (var r in t) ({}).hasOwnProperty.call(t, r) && (n[r] = t[r]); } return n; }, TopSites_extends.apply(null, arguments); }
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
+
 
 
 
@@ -9759,6 +10449,7 @@ class _TopSites extends (external_React_default()).PureComponent {
     } = props.TopSites;
     let visibleTopSites;
     const colors = props.Prefs.values["newNewtabExperience.colors"];
+    const ListContainer = props.Prefs.values.topSitesGroupedPins ? GroupedTopSiteListContainer : TopSiteListContainer;
 
     // do not run this function when for startup cache
     if (!props.App.isForStartupCache.TopSites) {
@@ -9773,7 +10464,7 @@ class _TopSites extends (external_React_default()).PureComponent {
       "data-section-id": "topsites"
     }, /*#__PURE__*/external_React_default().createElement(ErrorBoundary, {
       className: "section-body-fallback"
-    }, /*#__PURE__*/external_React_default().createElement(TopSiteList, {
+    }, /*#__PURE__*/external_React_default().createElement(ListContainer, {
       TopSites: props.TopSites,
       TopSitesRows: props.TopSitesRows,
       topSitesMaxSitesPerRow: props.TopSitesMaxSitesPerRow,
@@ -10649,6 +11340,65 @@ const selectLayoutRender = ({ state = {}, prefs = {} }) => {
   return { layoutRender };
 };
 
+;// CONCATENATED MODULE: ./content-src/lib/asrouter-message-utils.mjs
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this file,
+ * You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+const ASROUTER_NEWTAB_MESSAGE_POSITIONS = Object.freeze({
+  ABOVE_TOPSITES: "ABOVE_TOPSITES",
+  ABOVE_WIDGETS: "ABOVE_WIDGETS",
+  ABOVE_CONTENT_FEED: "ABOVE_CONTENT_FEED",
+});
+
+/**
+ * Returns true if the Messages state has a visible message whose messageType
+ * matches componentId.
+ *
+ * @param {object} messagesProp - The Messages slice of Redux state ({ messageData, isVisible }).
+ * @param {string} componentId - The messageType value to match against.
+ * @returns {boolean}
+ */
+function shouldShowOMCHighlight(messagesProp, componentId) {
+  const messageData = messagesProp?.messageData;
+  const isVisible = messagesProp?.isVisible;
+  if (!messageData || Object.keys(messageData).length === 0 || !isVisible) {
+    return false;
+  }
+  return messageData?.content?.messageType === componentId;
+}
+
+/**
+ * Returns true if the Messages state has a visible ASRouterNewTabMessage whose
+ * configured position matches currentPosition.  When no position is set on the
+ * message, it defaults to ABOVE_TOPSITES.
+ *
+ * @param {object} messagesProps - The Messages slice of Redux state ({ messageData, isVisible }).
+ * @param {string} componentId - The messageType value to match against (e.g. "ASRouterNewTabMessage").
+ * @param {string} currentPosition - One of the ASROUTER_NEWTAB_MESSAGE_POSITIONS values.
+ * @returns {boolean}
+ */
+function shouldShowASRouterNewTabMessage(
+  messagesProps,
+  componentId,
+  currentPosition
+) {
+  const messageData = messagesProps?.messageData;
+  if (!messageData) {
+    return false;
+  }
+
+  const configuredPosition =
+    messageData.content?.position ??
+    ASROUTER_NEWTAB_MESSAGE_POSITIONS.ABOVE_TOPSITES;
+
+  if (configuredPosition === currentPosition) {
+    return shouldShowOMCHighlight(messagesProps, componentId);
+  }
+
+  return false;
+}
+
 ;// CONCATENATED MODULE: ./content-src/components/DiscoveryStreamComponents/SectionContextMenu/SectionContextMenu.jsx
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -10673,13 +11423,16 @@ function SectionContextMenu({
   sectionKey,
   following,
   sectionPersonalization,
-  sectionPosition
+  sectionPosition,
+  learnMoreUrl
 }) {
   const SECTIONS_CONTEXT_MENU_OPTIONS = [];
   if (following) {
     SECTIONS_CONTEXT_MENU_OPTIONS.push("SectionUnfollow");
   }
   SECTIONS_CONTEXT_MENU_OPTIONS.push("SectionBlock");
+  SECTIONS_CONTEXT_MENU_OPTIONS.push("Separator");
+  SECTIONS_CONTEXT_MENU_OPTIONS.push("SectionLearnMore");
   const [showContextMenu, setShowContextMenu] = (0,external_React_namespaceObject.useState)(false);
   const onClick = e => {
     e.preventDefault();
@@ -10708,7 +11461,8 @@ function SectionContextMenu({
       sectionPersonalization,
       sectionKey,
       sectionPosition,
-      title
+      title,
+      learnMoreUrl
     }
   }));
 }
@@ -11148,6 +11902,94 @@ const PersonalizedCard = ({
     }
   }, messageData.content.linkText))));
 };
+;// CONCATENATED MODULE: ./content-src/components/DiscoveryStreamComponents/FeatureHighlight/FeatureHighlight.jsx
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this file,
+ * You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+
+
+function FeatureHighlight({
+  message,
+  icon,
+  toggle,
+  arrowPosition = "",
+  position = "top-left",
+  verticalPosition = "",
+  title,
+  ariaLabel,
+  feature = "FEATURE_HIGHLIGHT_DEFAULT",
+  dispatch = () => {},
+  windowObj = __webpack_require__.g,
+  openedOverride = false,
+  showButtonIcon = true,
+  dismissCallback = () => {},
+  outsideClickCallback = () => {},
+  modalClassName = ""
+}) {
+  const [opened, setOpened] = (0,external_React_namespaceObject.useState)(openedOverride);
+  const ref = (0,external_React_namespaceObject.useRef)(null);
+  (0,external_React_namespaceObject.useEffect)(() => {
+    const handleOutsideClick = e => {
+      if (!ref?.current?.contains(e.target)) {
+        setOpened(false);
+        outsideClickCallback();
+      }
+    };
+    const handleKeyDown = e => {
+      if (e.key === "Escape") {
+        outsideClickCallback();
+      }
+    };
+    windowObj.document.addEventListener("click", handleOutsideClick);
+    windowObj.document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      windowObj.document.removeEventListener("click", handleOutsideClick);
+      windowObj.document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [windowObj, outsideClickCallback]);
+  const onToggleClick = (0,external_React_namespaceObject.useCallback)(() => {
+    if (!opened) {
+      dispatch(actionCreators.DiscoveryStreamUserEvent({
+        event: "CLICK",
+        source: "FEATURE_HIGHLIGHT",
+        value: {
+          feature
+        }
+      }));
+    }
+    setOpened(!opened);
+  }, [dispatch, feature, opened]);
+  const onDismissClick = (0,external_React_namespaceObject.useCallback)(() => {
+    setOpened(false);
+    dismissCallback();
+  }, [dismissCallback]);
+  const hideButtonClass = showButtonIcon ? `` : `isHidden`;
+  const openedClassname = opened ? `opened` : `closed`;
+  return /*#__PURE__*/external_React_default().createElement("div", {
+    ref: ref,
+    className: `feature-highlight ${verticalPosition}`
+  }, /*#__PURE__*/external_React_default().createElement("button", {
+    title: title,
+    "aria-haspopup": "true",
+    "aria-label": ariaLabel,
+    className: `toggle-button ${hideButtonClass}`,
+    onClick: onToggleClick
+  }, toggle), /*#__PURE__*/external_React_default().createElement("div", {
+    className: `feature-highlight-modal ${position} ${arrowPosition} ${modalClassName} ${openedClassname}`
+  }, /*#__PURE__*/external_React_default().createElement("div", {
+    className: "message-icon"
+  }, icon), /*#__PURE__*/external_React_default().createElement("div", {
+    className: "content-wrapper"
+  }, message), /*#__PURE__*/external_React_default().createElement("moz-button", {
+    type: "icon ghost",
+    size: "small",
+    "data-l10n-id": "feature-highlight-dismiss-button",
+    iconsrc: "chrome://global/skin/icons/close.svg",
+    onClick: onDismissClick,
+    onKeyDown: onDismissClick
+  })));
+}
 ;// CONCATENATED MODULE: ./content-src/components/DiscoveryStreamComponents/FeatureHighlight/FollowSectionButtonHighlight.jsx
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
@@ -11210,6 +12052,136 @@ function FollowSectionButtonHighlight({
     outsideClickCallback: handleDismiss
   }));
 }
+;// CONCATENATED MODULE: ./content-src/components/MessageWrapper/MessageWrapper.jsx
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this file,
+ * You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+
+
+
+
+
+// Note: MessageWrapper emits events via submitGleanPingForPing() in the OMC messaging-system.
+// If a feature is triggered outside of this flow (e.g., the Mobile Download QR Promo),
+// it should emit New Tab-specific Glean events independently.
+
+function MessageWrapper({
+  children,
+  dispatch,
+  hiddenOverride,
+  onDismiss,
+  wrapperClassName
+}) {
+  const message = (0,external_ReactRedux_namespaceObject.useSelector)(state => state.Messages);
+  const [isIntersecting, setIsIntersecting] = (0,external_React_namespaceObject.useState)(false);
+  const [tabIsVisible, setTabIsVisible] = (0,external_React_namespaceObject.useState)(() => typeof document !== "undefined" && document.visibilityState === "visible");
+  const [hasRun, setHasRun] = (0,external_React_namespaceObject.useState)();
+  const handleIntersection = (0,external_React_namespaceObject.useCallback)(() => {
+    setIsIntersecting(true);
+    // only send impression if messageId is defined and tab is visible
+    if (tabIsVisible && message.messageData.id && !hasRun) {
+      setHasRun(true);
+      dispatch(actionCreators.AlsoToMain({
+        type: actionTypes.MESSAGE_IMPRESSION,
+        data: message.messageData
+      }));
+    }
+  }, [dispatch, message, tabIsVisible, hasRun]);
+  (0,external_React_namespaceObject.useEffect)(() => {
+    // we dont want to dispatch this action unless the current tab is open and visible
+    if (message.isVisible && tabIsVisible) {
+      dispatch(actionCreators.AlsoToMain({
+        type: actionTypes.MESSAGE_NOTIFY_VISIBILITY,
+        data: true
+      }));
+    }
+  }, [message, dispatch, tabIsVisible]);
+  (0,external_React_namespaceObject.useEffect)(() => {
+    const handleVisibilityChange = () => {
+      setTabIsVisible(document.visibilityState === "visible");
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, []);
+  const ref = useIntersectionObserver(handleIntersection);
+  const handleClose = (0,external_React_namespaceObject.useCallback)(() => {
+    const action = {
+      type: actionTypes.MESSAGE_TOGGLE_VISIBILITY,
+      data: false //isVisible
+    };
+    if (message.portID) {
+      dispatch(actionCreators.OnlyToOneContent(action, message.portID));
+    } else {
+      dispatch(actionCreators.AlsoToMain(action));
+    }
+    dispatch(actionCreators.AlsoToMain({
+      type: actionTypes.MESSAGE_NOTIFY_VISIBILITY,
+      data: false
+    }));
+    onDismiss?.();
+  }, [dispatch, message, onDismiss]);
+  function handleDismiss() {
+    const {
+      id
+    } = message.messageData;
+    if (id) {
+      dispatch(actionCreators.OnlyToMain({
+        type: actionTypes.MESSAGE_DISMISS,
+        data: {
+          message: message.messageData
+        }
+      }));
+    }
+    handleClose();
+  }
+  function handleBlock() {
+    const {
+      id
+    } = message.messageData;
+    if (id) {
+      dispatch(actionCreators.OnlyToMain({
+        type: actionTypes.MESSAGE_BLOCK,
+        data: id
+      }));
+    }
+  }
+  function handleClick(elementId) {
+    const {
+      id
+    } = message.messageData;
+    if (id) {
+      dispatch(actionCreators.OnlyToMain({
+        type: actionTypes.MESSAGE_CLICK,
+        data: {
+          message: message.messageData,
+          source: elementId || ""
+        }
+      }));
+    }
+  }
+  if (!message || !hiddenOverride && !message.isVisible) {
+    return null;
+  }
+
+  // only display the message if `isVisible` is true
+  return /*#__PURE__*/external_React_default().createElement("div", {
+    ref: el => {
+      ref.current = [el];
+    },
+    className: wrapperClassName ? `message-wrapper ${wrapperClassName}` : "message-wrapper"
+  }, /*#__PURE__*/external_React_default().cloneElement(children, {
+    isIntersecting,
+    handleDismiss,
+    handleClick,
+    handleBlock,
+    handleClose,
+    dispatch
+  }));
+}
+
 ;// CONCATENATED MODULE: ./content-src/components/DiscoveryStreamComponents/BriefingCard/BriefingCard.jsx
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
@@ -11431,6 +12403,61 @@ const CURATED_RECOMMENDATIONS_FEED_URL = "https://merino.services.mozilla.com/ap
 
 // Divides evenly by 2, 3, and 4 to avoid orphan cards in any column layout.
 const DEFAULT_MAX_TILES = 12;
+
+// Each card's footprint in grid units, sized so a medium reads as the square it
+// is: a small is half a medium (2x1), a large is two mediums wide (4x2). A grid
+// column is 2 units wide, so a full row spans columnCount * 2 units.
+const CARD_SIZE = {
+  small: {
+    width: 2,
+    height: 1
+  },
+  medium: {
+    width: 2,
+    height: 2
+  },
+  large: {
+    width: 4,
+    height: 2
+  }
+};
+const sizeOf = tile => CARD_SIZE[tile.size] ?? CARD_SIZE.medium;
+
+// Return the tileIndexes that fall into an incomplete final row at this
+// breakpoint. These are the orphan cards to hide.
+function getOrphanTileIndexes(tiles, columnCount) {
+  const rowWidth = columnCount * 2; // a grid column is 2 units wide
+  let currentRow = []; // tile indexes in the row we're filling
+  let filled = 0; // units used in this row, including tall cards from above
+  let carry = 0; // units this row's tall cards reserve in the next row
+
+  // Walks each tile, filling currentRow until the row is filled,
+  // then clears it and goes to the next row.
+  // At the end if currentRow is not empty, we have a remainder.
+  tiles.forEach((tile, index) => {
+    const {
+      width,
+      height
+    } = sizeOf(tile);
+    currentRow.push(index);
+    filled += width;
+    if (height > 1) {
+      carry += width;
+    }
+
+    // This row is complete, we can reset and keep looking.
+    if (filled >= rowWidth) {
+      currentRow = [];
+      filled = carry; // next row starts seeded by tall cards from above
+      carry = 0;
+      // The carry alone filled the whole next row (all-tall row), so reset it.
+      if (filled >= rowWidth) {
+        filled = 0;
+      }
+    }
+  });
+  return new Set(currentRow);
+}
 function getLayoutData(responsiveLayouts, index) {
   let layoutData = {
     classNames: [],
@@ -11439,8 +12466,12 @@ function getLayoutData(responsiveLayouts, index) {
     allowsWidget: false
   };
   responsiveLayouts.forEach(layout => {
+    const orphanTiles = getOrphanTileIndexes(layout.tiles, layout.columnCount);
     layout.tiles.forEach((tile, tileIndex) => {
       if (tile.position === index) {
+        if (orphanTiles.has(tileIndex)) {
+          layoutData.classNames.push(`col-${layout.columnCount}-hidden`);
+        }
         layoutData.classNames.push(`col-${layout.columnCount}-${tile.size}`);
         layoutData.classNames.push(`col-${layout.columnCount}-position-${tileIndex}`);
         layoutData.imageSizes[layout.columnCount] = tile.size;
@@ -11847,7 +12878,8 @@ function CardSection({
     sectionKey: sectionKey,
     title: title,
     type: type,
-    sectionPosition: sectionPosition
+    sectionPosition: sectionPosition,
+    learnMoreUrl: prefs["sectionsLearnMore.url"]
   }));
   return /*#__PURE__*/external_React_default().createElement("section", {
     className: "ds-section",
@@ -11876,7 +12908,8 @@ function CardSection({
     title: title,
     type: type,
     sectionPosition: sectionPosition,
-    buttonType: "ghost"
+    buttonType: "ghost",
+    learnMoreUrl: prefs["sectionsLearnMore.url"]
   }) : sectionContextWrapper)), /*#__PURE__*/external_React_default().createElement("div", {
     ref: gridRef,
     className: `ds-section-grid ds-card-grid`,
@@ -12146,6 +13179,24 @@ const PREF_WIDGETS_CLOCKS_ENABLED = "widgets.clocks.enabled";
 const PREF_CLOCKS_SIZE = "widgets.clocks.size";
 const PREF_WIDGETS_SYSTEM_CLOCKS_ENABLED =
   "widgets.system.clocks.enabled";
+const PREF_WIDGETS_PRIVACY_ENABLED = "widgets.privacy.enabled";
+const PREF_PRIVACY_SIZE = "widgets.privacy.size";
+const PREF_WIDGETS_SYSTEM_PRIVACY_ENABLED =
+  "widgets.system.privacy.enabled";
+const PREF_WIDGETS_CROSSWORD_ENABLED = "widgets.crossword.enabled";
+const PREF_CROSSWORD_SIZE = "widgets.crossword.size";
+const PREF_WIDGETS_SYSTEM_CROSSWORD_ENABLED =
+  "widgets.system.crossword.enabled";
+const PREF_WIDGETS_STOCKS_ENABLED = "widgets.stocks.enabled";
+const PREF_STOCKS_SIZE = "widgets.stocks.size";
+const PREF_WIDGETS_SYSTEM_STOCKS_ENABLED =
+  "widgets.system.stocks.enabled";
+const PREF_CROSSWORD_ENDPOINT = "widgets.crossword.endpoint";
+const PREF_WIDGETS_PICTURE_OF_THE_DAY_ENABLED =
+  "widgets.pictureOfTheDay.enabled";
+const PREF_PICTURE_OF_THE_DAY_SIZE = "widgets.pictureOfTheDay.size";
+const PREF_WIDGETS_SYSTEM_PICTURE_OF_THE_DAY_ENABLED =
+  "widgets.system.pictureOfTheDay.enabled";
 
 /**
  * @typedef {object} WidgetRegistryEntry
@@ -12161,14 +13212,34 @@ const PREF_WIDGETS_SYSTEM_CLOCKS_ENABLED =
  * @property {string} trainhopEnabledKey - Key in trainhopConfig.widgets.* for the enabled override.
  * @property {string|null} trainhopSizeKey - Key in trainhopConfig.widgets.* for the size default suggestion.
  * @property {string|null} trainhopSidebarKey - Key in trainhopConfig.widgets.* for the hasSidebar override.
+ * @property {string} widgetsSettingsVisibleKey - Key in trainhopConfig.widgetsSettings.* that additively reveals this widget's toggle in the settings UIs (does not enable the widget).
+ * @property {string} widgetsSettingsEnabledKey - Key in trainhopConfig.widgetsSettings.* that overrides this widget's default enabled value (written to the pref default branch; an explicit user toggle still wins).
+ * @property {string|null} [trainhopNamespace] - When set, the widget ships its whole config in one dedicated object at trainhopConfig.<namespace>. Its `enabled` overrides the default value of enabledPref on the default branch (user toggle still wins, like widgetsSettings.*Enabled); `visible` reveals the widget (isWidgetAddable) without writing a pref; `size` is read by resolveWidgetSize. Only Picture of the Day uses this today.
  */
 
 /** @type {WidgetRegistryEntry[]} */
 const WIDGET_REGISTRY = [
   {
+    id: "pictureOfTheDay",
+    telemetryName: "picture_of_the_day",
+    order: 0,
+    enabledPref: PREF_WIDGETS_PICTURE_OF_THE_DAY_ENABLED,
+    sizePref: PREF_PICTURE_OF_THE_DAY_SIZE,
+    defaultSize: "medium",
+    validSizes: ["medium", "large"],
+    hasSidebar: false,
+    systemEnabledPref: PREF_WIDGETS_SYSTEM_PICTURE_OF_THE_DAY_ENABLED,
+    trainhopEnabledKey: "pictureOfTheDayEnabled",
+    trainhopSizeKey: "pictureOfTheDaySize",
+    trainhopSidebarKey: null,
+    widgetsSettingsVisibleKey: "pictureOfTheDayVisible",
+    widgetsSettingsEnabledKey: "pictureOfTheDayEnabled",
+    trainhopNamespace: "widgetPictureOfTheDay",
+  },
+  {
     id: "sportsWidget",
     telemetryName: "sports",
-    order: 0,
+    order: 1,
     enabledPref: PREF_WIDGETS_SPORTS_WIDGET_ENABLED,
     sizePref: PREF_SPORTS_WIDGET_SIZE,
     defaultSize: "medium",
@@ -12178,11 +13249,13 @@ const WIDGET_REGISTRY = [
     trainhopEnabledKey: "sportsWidgetEnabled",
     trainhopSizeKey: "sportsWidgetSize",
     trainhopSidebarKey: null,
+    widgetsSettingsVisibleKey: "sportsWidgetVisible",
+    widgetsSettingsEnabledKey: "sportsWidgetEnabled",
   },
   {
     id: "clocks",
     telemetryName: "clocks",
-    order: 1,
+    order: 2,
     enabledPref: PREF_WIDGETS_CLOCKS_ENABLED,
     sizePref: PREF_CLOCKS_SIZE,
     defaultSize: "medium",
@@ -12192,11 +13265,13 @@ const WIDGET_REGISTRY = [
     trainhopEnabledKey: "clocksEnabled",
     trainhopSizeKey: "clocksSize",
     trainhopSidebarKey: null,
+    widgetsSettingsVisibleKey: "clocksVisible",
+    widgetsSettingsEnabledKey: "clocksEnabled",
   },
   {
     id: "lists",
     telemetryName: "lists",
-    order: 2,
+    order: 3,
     enabledPref: PREF_WIDGETS_LISTS_ENABLED,
     sizePref: PREF_LISTS_SIZE,
     defaultSize: "medium",
@@ -12206,11 +13281,13 @@ const WIDGET_REGISTRY = [
     trainhopEnabledKey: "listsEnabled",
     trainhopSizeKey: "listsSize",
     trainhopSidebarKey: null,
+    widgetsSettingsVisibleKey: "listsVisible",
+    widgetsSettingsEnabledKey: "listsEnabled",
   },
   {
     id: "focusTimer",
     telemetryName: "focus_timer",
-    order: 3,
+    order: 4,
     enabledPref: PREF_WIDGETS_TIMER_ENABLED,
     sizePref: PREF_FOCUS_TIMER_SIZE,
     defaultSize: "medium",
@@ -12220,11 +13297,13 @@ const WIDGET_REGISTRY = [
     trainhopEnabledKey: "timerEnabled",
     trainhopSizeKey: "timerSize",
     trainhopSidebarKey: null,
+    widgetsSettingsVisibleKey: "focusTimerVisible",
+    widgetsSettingsEnabledKey: "focusTimerEnabled",
   },
   {
     id: "weather",
     telemetryName: "weather",
-    order: 4,
+    order: 5,
     enabledPref: PREF_WIDGETS_WEATHER_ENABLED,
     sizePref: PREF_WEATHER_SIZE,
     defaultSize: "small",
@@ -12234,6 +13313,56 @@ const WIDGET_REGISTRY = [
     trainhopEnabledKey: "weatherEnabled",
     trainhopSizeKey: "weatherSize",
     trainhopSidebarKey: "weatherSidebar",
+    widgetsSettingsVisibleKey: "weatherVisible",
+    widgetsSettingsEnabledKey: "weatherEnabled",
+  },
+  {
+    id: "privacy",
+    telemetryName: "privacy",
+    order: 6,
+    enabledPref: PREF_WIDGETS_PRIVACY_ENABLED,
+    sizePref: PREF_PRIVACY_SIZE,
+    defaultSize: "medium",
+    validSizes: ["medium", "large"],
+    hasSidebar: false,
+    systemEnabledPref: PREF_WIDGETS_SYSTEM_PRIVACY_ENABLED,
+    trainhopEnabledKey: "privacyEnabled",
+    trainhopSizeKey: "privacySize",
+    trainhopSidebarKey: null,
+    widgetsSettingsVisibleKey: "privacyVisible",
+    widgetsSettingsEnabledKey: "privacyEnabled",
+  },
+  {
+    id: "crossword",
+    telemetryName: "crossword",
+    order: 7,
+    enabledPref: PREF_WIDGETS_CROSSWORD_ENABLED,
+    sizePref: PREF_CROSSWORD_SIZE,
+    defaultSize: "medium",
+    validSizes: ["medium", "large"],
+    hasSidebar: false,
+    systemEnabledPref: PREF_WIDGETS_SYSTEM_CROSSWORD_ENABLED,
+    trainhopEnabledKey: "crosswordEnabled",
+    trainhopSizeKey: "crosswordSize",
+    trainhopSidebarKey: null,
+    widgetsSettingsVisibleKey: "crosswordVisible",
+    widgetsSettingsEnabledKey: "crosswordEnabled",
+  },
+  {
+    id: "stocks",
+    telemetryName: "stocks",
+    order: 8,
+    enabledPref: PREF_WIDGETS_STOCKS_ENABLED,
+    sizePref: PREF_STOCKS_SIZE,
+    defaultSize: "medium",
+    validSizes: ["small", "medium", "large"],
+    hasSidebar: false,
+    systemEnabledPref: PREF_WIDGETS_SYSTEM_STOCKS_ENABLED,
+    trainhopEnabledKey: "stocksEnabled",
+    trainhopSizeKey: "stocksSize",
+    trainhopSidebarKey: null,
+    widgetsSettingsVisibleKey: "stocksVisible",
+    widgetsSettingsEnabledKey: "stocksEnabled",
   },
 ];
 
@@ -12278,8 +13407,10 @@ function resolveWidgetOrder(prefs) {
 
 /**
  * Returns true if the widget is available to the user, based on the
- * trainhop/system gate. Does not consider whether the user has turned the
- * widget on, or whether the widgets container is enabled.
+ * system pref, the trainhopConfig.widgets addable key, or a
+ * widgetsSettings.*Visible override (revealing a toggle also makes the widget
+ * addable so the toggle is functional). Does not consider whether the user has
+ * turned the widget on, or whether the widgets container is enabled.
  *
  * @param {object} widget - a WIDGET_REGISTRY entry
  * @param {object} prefs - current pref values from the Redux store
@@ -12287,8 +13418,48 @@ function resolveWidgetOrder(prefs) {
  */
 function isWidgetAddable(widget, prefs) {
   return Boolean(
+    (widget.trainhopNamespace &&
+      prefs.trainhopConfig?.[widget.trainhopNamespace]?.visible) ||
     prefs.trainhopConfig?.widgets?.[widget.trainhopEnabledKey] ||
+    prefs.trainhopConfig?.widgetsSettings?.[widget.widgetsSettingsVisibleKey] ||
     prefs[widget.systemEnabledPref]
+  );
+}
+
+/**
+ * Returns true if this widget's toggle should be shown in the settings UIs
+ * (about:preferences#home and the Customize menu). A widget is shown when it is
+ * addable (system pref, trainhopConfig.widgets, or widgetsSettings.*Visible) or
+ * when the legacy `widgetsConfig` Nimbus variable enables it. Showing a toggle
+ * does NOT enable the widget — enablement is the widget's own enabled pref,
+ * whose default can be overridden via widgetsSettings.*Enabled.
+ *
+ * @param {object} widget - a WIDGET_REGISTRY entry
+ * @param {object} prefs - current pref values from the Redux store
+ * @returns {boolean}
+ */
+function isWidgetToggleVisible(widget, prefs) {
+  return Boolean(
+    isWidgetAddable(widget, prefs) ||
+    prefs.widgetsConfig?.[widget.trainhopEnabledKey]
+  );
+}
+
+/**
+ * Returns true if the Widgets container/section toggle should be shown.
+ * Additive across the system pref, the legacy `widgetsConfig` variable, the
+ * `trainhopConfig.widgets.enabled` addable key, and the new
+ * `trainhopConfig.widgetsSettings.enabled` override.
+ *
+ * @param {object} prefs - current pref values from the Redux store
+ * @returns {boolean}
+ */
+function isWidgetsContainerVisible(prefs) {
+  return Boolean(
+    prefs["widgets.system.enabled"] ||
+    prefs.widgetsConfig?.enabled ||
+    prefs.trainhopConfig?.widgets?.enabled ||
+    prefs.trainhopConfig?.widgetsSettings?.enabled
   );
 }
 
@@ -12326,10 +13497,13 @@ function resolveWidgetSize(widget, prefs) {
   if (userPref) {
     return userPref;
   }
+  const dedicatedSize = widget.trainhopNamespace
+    ? prefs.trainhopConfig?.[widget.trainhopNamespace]?.size
+    : null;
   const trainhopSize = widget.trainhopSizeKey
     ? prefs.trainhopConfig?.widgets?.[widget.trainhopSizeKey]
     : null;
-  return trainhopSize || widget.defaultSize;
+  return dedicatedSize || trainhopSize || widget.defaultSize;
 }
 
 /**
@@ -12349,6 +13523,22 @@ function resolveWidgetHasSidebar(widget, prefs) {
     }
   }
   return widget.hasSidebar;
+}
+
+/**
+ * Returns the Merino endpoint the Crossword widget iframe should load.
+ * A trainhopConfig.widgets.crosswordEndpoint override wins over the raw pref so
+ * the endpoint can be swapped (e.g. staging to production) without a release.
+ * The raw pref is never read directly by the component.
+ *
+ * @param {object} prefs - current pref values from the Redux store
+ * @returns {string}
+ */
+function resolveCrosswordEndpoint(prefs) {
+  return (
+    prefs.trainhopConfig?.widgets?.crosswordEndpoint ||
+    prefs[PREF_CROSSWORD_ENDPOINT]
+  );
 }
 
 /**
@@ -12390,10 +13580,127 @@ const DEFAULT_GRADIENT_STOPS = [{
   offset: "100%",
   color: "var(--color-pink-40)"
 }];
+const DEFAULT_CONFETTI_COUNT = 42;
+const CONFETTI_SHAPES = [{
+  radius: "1px",
+  clip: "none"
+},
+// rectangle / streamer
+{
+  radius: "50%",
+  clip: "none"
+},
+// circle / oval
+{
+  radius: "0",
+  clip: "polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)"
+},
+// diamond
+{
+  radius: "0",
+  clip: "polygon(50% 0%, 0% 100%, 100% 100%)"
+} // triangle
+];
+const SOCCER_POOL = [{
+  ball: true
+}, {
+  ball: true
+}, {
+  ball: true
+}, {
+  ball: true
+}, ...CONFETTI_SHAPES];
+
+// Stable within a celebration run, varied between runs.
+const celebrationRandom = seed => {
+  const value = Math.sin(seed) * 10000;
+  return value - Math.floor(value);
+};
+const buildConfettiPieces = (run, colors, count, shapeMode) => {
+  const pool = shapeMode === "soccer" ? SOCCER_POOL : CONFETTI_SHAPES;
+  const spread = shapeMode === "soccer";
+  return Array.from({
+    length: count
+  }, (_, i) => {
+    const base = (run + 1) * 100 + i;
+    const color = colors[i % colors.length];
+    const shape = pool[Math.floor(celebrationRandom(base + 6) * pool.length)];
+    const isBall = !!shape.ball;
+    const width = isBall ? Math.round(12 + celebrationRandom(base + 0.5) * 5) : Math.round(6 + celebrationRandom(base + 0.5) * 4);
+    const height = isBall ? width : Math.round(width * (1.4 + celebrationRandom(base + 5) * 0.8));
+    const left = spread ? `${Math.min((i + celebrationRandom(base + 7)) / count * 100, 98).toFixed(2)}%` : `${(celebrationRandom(base) * 100).toFixed(2)}%`;
+    const delay = spread ? `${Math.round(celebrationRandom(base + 1) * 1100)}ms` : `${Math.round(celebrationRandom(base + 1) * 350)}ms`;
+    const duration = spread ? `${Math.round(2600 + celebrationRandom(base + 2) * 800)}ms` : `${Math.round(3000 + celebrationRandom(base + 2) * 1200)}ms`;
+    const rotate = spread ? `${Math.round(celebrationRandom(base + 3) * 400 - 200)}deg` : `${Math.round(celebrationRandom(base + 3) * 720 - 360)}deg`;
+    const drift = spread ? `${Math.round(celebrationRandom(base + 4) * 90 - 45)}px` : `${Math.round(celebrationRandom(base + 4) * 80 - 40)}px`;
+    return {
+      id: i,
+      ball: isBall,
+      color,
+      left,
+      delay,
+      duration,
+      rotate,
+      drift,
+      width: `${width}px`,
+      height: `${height}px`,
+      radius: isBall ? "50%" : shape.radius ?? "50%",
+      clip: isBall ? "none" : shape.clip ?? "none"
+    };
+  });
+};
+const FIREWORK_SPARKS = 16;
+const buildFireworks = (run, colors, count) => Array.from({
+  length: count
+}, (_burst, b) => {
+  const base = (run + 1) * 1000 + b * 37;
+  const color = colors[b % colors.length];
+  const left = `${(10 + celebrationRandom(base) * 80).toFixed(1)}%`;
+  const topPct = `${(8 + celebrationRandom(base + 1) * 38).toFixed(1)}%`;
+  const burstDelay = Math.round(celebrationRandom(base + 2) * 2200);
+  const sizeScale = 0.7 + celebrationRandom(base + 4);
+  const radius = (24 + celebrationRandom(base + 3) * 14) * sizeScale;
+  const sparks = Array.from({
+    length: FIREWORK_SPARKS
+  }, (_spark, s) => {
+    const angle = s / FIREWORK_SPARKS * 2 * Math.PI + celebrationRandom(base + s) * 0.5;
+    const dist = radius * (0.7 + celebrationRandom(base + s + 0.5) * 0.6);
+    return {
+      id: s,
+      dx: `${Math.round(Math.cos(angle) * dist)}px`,
+      dy: `${Math.round(Math.sin(angle) * dist)}px`,
+      delay: `${burstDelay + Math.round(celebrationRandom(base + s + 0.7) * 40)}ms`
+    };
+  });
+  return {
+    id: b,
+    left,
+    top: topPct,
+    color,
+    scale: sizeScale,
+    sparks
+  };
+});
+const confettiPieceStyle = piece => ({
+  "--confetti-x": piece.left,
+  "--confetti-w": piece.width,
+  "--confetti-h": piece.height,
+  "--confetti-color": piece.color,
+  "--confetti-delay": piece.delay,
+  "--confetti-duration": piece.duration,
+  "--confetti-rotate": piece.rotate,
+  "--confetti-drift": piece.drift,
+  "--confetti-radius": piece.radius,
+  "--confetti-clip": piece.clip
+});
 const WidgetCelebration = ({
   classNamePrefix = "widget-celebration",
   celebrationFrame,
   celebrationId,
+  confettiColors,
+  confettiCount = DEFAULT_CONFETTI_COUNT,
+  confettiShape = "mixed",
+  fireworkBursts = 0,
   gradientStops = DEFAULT_GRADIENT_STOPS,
   headlineL10nId,
   illustrationSrc,
@@ -12401,6 +13708,11 @@ const WidgetCelebration = ({
   subheadL10nId
 }) => {
   const className = suffix => suffix ? `${classNamePrefix}-${suffix}` : classNamePrefix;
+  // Copy-less celebrations are purely decorative.
+  const hasCopy = !!(headlineL10nId || subheadL10nId);
+  const confettiPieces = confettiColors?.length ? buildConfettiPieces(celebrationId, confettiColors, confettiCount, confettiShape) : [];
+  const fireworks = fireworkBursts && confettiColors?.length ? buildFireworks(celebrationId, confettiColors, fireworkBursts) : [];
+  const ballSymbolId = `${classNamePrefix}-ball-${celebrationId}`;
   const resolvedIllustrationSrc = illustrationSrc?.endsWith(".svg") ? `${illustrationSrc}?run=${celebrationId}` : illustrationSrc;
   const strokeSize = celebrationFrame.strokeInset * 2;
   const strokeWidth = celebrationFrame.width - strokeSize;
@@ -12408,8 +13720,8 @@ const WidgetCelebration = ({
   return /*#__PURE__*/external_React_default().createElement("div", {
     className: className(),
     key: celebrationId,
-    role: "status",
-    "aria-live": "polite",
+    role: hasCopy ? "status" : undefined,
+    "aria-live": hasCopy ? "polite" : undefined,
     onAnimationEnd: event => {
       if (event.target === event.currentTarget && event.animationName === "widget-celebration-lifecycle") {
         onComplete?.();
@@ -12462,7 +13774,71 @@ const WidgetCelebration = ({
     rx: celebrationFrame.radius,
     ry: celebrationFrame.radius,
     pathLength: "100"
-  }))), /*#__PURE__*/external_React_default().createElement("div", {
+  }))), confettiPieces.length ? /*#__PURE__*/external_React_default().createElement("div", {
+    className: className("confetti"),
+    "aria-hidden": "true"
+  }, /*#__PURE__*/external_React_default().createElement("svg", {
+    className: className("confetti-defs"),
+    "aria-hidden": "true"
+  }, /*#__PURE__*/external_React_default().createElement("symbol", {
+    id: ballSymbolId,
+    viewBox: "0 0 24 24"
+  }, /*#__PURE__*/external_React_default().createElement("circle", {
+    cx: "12",
+    cy: "12",
+    r: "11",
+    fill: "currentColor",
+    stroke: "#1c1c1c",
+    strokeWidth: "1.4"
+  }), /*#__PURE__*/external_React_default().createElement("path", {
+    d: "M12 8.6 16 11.4 14.4 15.4 9.6 15.4 8 11.4Z",
+    fill: "#1c1c1c"
+  }), /*#__PURE__*/external_React_default().createElement("g", {
+    stroke: "#1c1c1c",
+    strokeWidth: "1.1",
+    fill: "none"
+  }, /*#__PURE__*/external_React_default().createElement("path", {
+    d: "M12 8.6V1.2"
+  }), /*#__PURE__*/external_React_default().createElement("path", {
+    d: "M16 11.4 22.6 8.6"
+  }), /*#__PURE__*/external_React_default().createElement("path", {
+    d: "M14.4 15.4 18.8 21"
+  }), /*#__PURE__*/external_React_default().createElement("path", {
+    d: "M9.6 15.4 5.2 21"
+  }), /*#__PURE__*/external_React_default().createElement("path", {
+    d: "M8 11.4 1.4 8.6"
+  })))), confettiPieces.map(piece => piece.ball ? /*#__PURE__*/external_React_default().createElement("svg", {
+    key: piece.id,
+    className: className("confetti-piece"),
+    viewBox: "0 0 24 24",
+    style: confettiPieceStyle(piece)
+  }, /*#__PURE__*/external_React_default().createElement("use", {
+    href: `#${ballSymbolId}`
+  })) : /*#__PURE__*/external_React_default().createElement("i", {
+    key: piece.id,
+    className: className("confetti-piece"),
+    style: confettiPieceStyle(piece)
+  }))) : null, fireworks.length ? /*#__PURE__*/external_React_default().createElement("div", {
+    className: className("fireworks"),
+    "aria-hidden": "true"
+  }, fireworks.map(burst => /*#__PURE__*/external_React_default().createElement("div", {
+    key: burst.id,
+    className: className("firework"),
+    style: {
+      "--fw-left": burst.left,
+      "--fw-top": burst.top,
+      "--fw-scale": burst.scale,
+      color: burst.color
+    }
+  }, burst.sparks.map(spark => /*#__PURE__*/external_React_default().createElement("i", {
+    key: spark.id,
+    className: className("firework-spark"),
+    style: {
+      "--fw-dx": spark.dx,
+      "--fw-dy": spark.dy,
+      "--fw-delay": spark.delay
+    }
+  }))))) : null, hasCopy ? /*#__PURE__*/external_React_default().createElement("div", {
     className: className("copy")
   }, /*#__PURE__*/external_React_default().createElement("span", {
     className: className("headline"),
@@ -12470,7 +13846,7 @@ const WidgetCelebration = ({
   }), /*#__PURE__*/external_React_default().createElement("span", {
     className: className("subhead"),
     "data-l10n-id": subheadL10nId
-  })), resolvedIllustrationSrc && /*#__PURE__*/external_React_default().createElement("img", {
+  })) : null, resolvedIllustrationSrc && /*#__PURE__*/external_React_default().createElement("img", {
     alt: "",
     "aria-hidden": "true",
     className: className("illustration"),
@@ -12556,6 +13932,39 @@ const useWidgetCelebration = widgetRef => {
     isCelebrating,
     triggerCelebration
   };
+};
+;// CONCATENATED MODULE: ./content-src/components/Widgets/SizeSubmenu.jsx
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this file,
+ * You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+
+
+
+// Shared "Change size" submenu (sibling to MoveSubmenu). Each widget passes the
+// sizes it supports and its current size; gating stays at the call site.
+const SizeSubmenu = ({
+  submenuId,
+  sizes,
+  checkedSize,
+  onChangeSize
+}) => {
+  const sizeSubmenuRef = useSizeSubmenu(onChangeSize);
+  return /*#__PURE__*/external_React_default().createElement("panel-item", {
+    submenu: submenuId
+  }, /*#__PURE__*/external_React_default().createElement("span", {
+    "data-l10n-id": "newtab-widget-menu-change-size"
+  }), /*#__PURE__*/external_React_default().createElement("panel-list", {
+    ref: sizeSubmenuRef,
+    slot: "submenu",
+    id: submenuId
+  }, sizes.map(size => /*#__PURE__*/external_React_default().createElement("panel-item", {
+    key: size,
+    type: "checkbox",
+    checked: checkedSize === size || undefined,
+    "data-size": size,
+    "data-l10n-id": `newtab-widget-size-${size}`
+  }))));
 };
 ;// CONCATENATED MODULE: ./content-src/components/Widgets/MoveSubmenu.jsx
 function MoveSubmenu_extends() { return MoveSubmenu_extends = Object.assign ? Object.assign.bind() : function (n) { for (var e = 1; e < arguments.length; e++) { var t = arguments[e]; for (var r in t) ({}).hasOwnProperty.call(t, r) && (n[r] = t[r]); } return n; }, MoveSubmenu_extends.apply(null, arguments); }
@@ -12660,11 +14069,311 @@ function MoveSubmenu({
     disabled: true
   }))));
 }
+;// CONCATENATED MODULE: ./content-src/components/Widgets/WidgetMenuFooter.jsx
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this file,
+ * You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+
+
+
+
+const LEARN_MORE_URL = "https://support.mozilla.org/kb/firefox-new-tab-widgets";
+
+// Shared trailing block for the widget menus that use it, in a fixed order:
+// divider, Change size, Move, Hide widget, Learn more. Size submenu is passed in.
+const WidgetMenuFooter = ({
+  dispatch,
+  // widgetId is the registry id used by Move (e.g. "focusTimer"); widgetName is
+  // the telemetry name (e.g. "focus_timer").
+  widgetId,
+  widgetEnabledMap,
+  widgetName,
+  enabledPref,
+  widgetSize,
+  learnMoreL10nId,
+  sizeSubmenu,
+  onAfterHide,
+  onLearnMore,
+  // Suppress the divider when the widget has no items above the footer, so it
+  // doesn't render as a stray leading separator.
+  showDivider = true
+}) => {
+  const handleHide = () => {
+    (0,external_ReactRedux_namespaceObject.batch)(() => {
+      dispatch(actionCreators.OnlyToMain({
+        type: actionTypes.SET_PREF,
+        data: {
+          name: enabledPref,
+          value: false
+        }
+      }));
+      dispatch(actionCreators.OnlyToMain({
+        type: actionTypes.WIDGETS_ENABLED,
+        data: {
+          widget_name: widgetName,
+          widget_source: "context_menu",
+          enabled: false,
+          widget_size: widgetSize
+        }
+      }));
+      onAfterHide?.();
+    });
+  };
+  const handleLearnMore = () => {
+    (0,external_ReactRedux_namespaceObject.batch)(() => {
+      dispatch(actionCreators.OnlyToMain({
+        type: actionTypes.OPEN_LINK,
+        data: {
+          url: LEARN_MORE_URL,
+          where: "tab"
+        }
+      }));
+      onLearnMore?.();
+    });
+  };
+  return /*#__PURE__*/external_React_default().createElement((external_React_default()).Fragment, null, showDivider && /*#__PURE__*/external_React_default().createElement("hr", null), sizeSubmenu, /*#__PURE__*/external_React_default().createElement(MoveSubmenu, {
+    widgetId: widgetId,
+    widgetEnabledMap: widgetEnabledMap
+  }), /*#__PURE__*/external_React_default().createElement("panel-item", {
+    "data-l10n-id": "newtab-widget-menu-hide",
+    onClick: handleHide
+  }), /*#__PURE__*/external_React_default().createElement("panel-item", {
+    "data-l10n-id": learnMoreL10nId,
+    onClick: handleLearnMore
+  }));
+};
+;// CONCATENATED MODULE: ./content-src/components/Widgets/useWidgetTelemetry.jsx
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
+
+
+
+
+const IMPRESSION_THRESHOLD = 0.3;
+
+/**
+ * Shared telemetry hook for function-component widgets. Returns recorders
+ * for the four widget telemetry actions (impression, user event, enabled,
+ * error) so call sites don't hand-build payloads. `widget` is a
+ * WIDGET_REGISTRY entry; `widget.telemetryName` becomes `widget_name`.
+ *
+ *   const {
+ *     impressionRef,
+ *     recordImpression,
+ *     recordUserAction,
+ *     recordEnabled,
+ *     recordError,
+ *   } = useWidgetTelemetry({ dispatch, widget, widgetSize });
+ *
+ *   <article ref={impressionRef}>...</article>
+ *   recordUserAction("learn_more", { source: "context_menu" });
+ *
+ * Per-call options on `recordUserAction`: `value` (action_value), `size`
+ * (overrides widgetSize), `alsoToMain: true` (routes via AlsoToMain), and
+ * `legacy: true` (co-dispatches `legacyUserEventType` with `{ userAction }`).
+ *
+ * `recordImpression()` is a manual one-shot fire that shares the observer's
+ * impressionFired guard; useful when a widget needs to record an impression
+ * outside the IntersectionObserver path.
+ *
+ * Constructor `legacyImpressionTypes` (array) and `legacyUserEventType`
+ * bridge the Bug 2012779 transition: while WIDGETS_TIMER_* / WIDGETS_LISTS_*
+ * legacy events still exist alongside the unified events, FocusTimer and
+ * Lists pass the matching legacy action types so the hook emits both. Both
+ * co-dispatches fire legacy first, unified second.
+ */
+const useWidgetTelemetry = ({
+  dispatch,
+  widget,
+  widgetSize,
+  legacyImpressionTypes,
+  legacyUserEventType
+}) => {
+  const {
+    telemetryName
+  } = widget;
+  const sizeRef = (0,external_React_namespaceObject.useRef)(widgetSize);
+  (0,external_React_namespaceObject.useEffect)(() => {
+    sizeRef.current = widgetSize;
+  }, [widgetSize]);
+
+  // Legacy bridge types are fixed per call site, so capture once at mount;
+  // refs keep them out of the recorder callbacks' dependency arrays.
+  const legacyImpressionTypesRef = (0,external_React_namespaceObject.useRef)(legacyImpressionTypes);
+  const legacyUserEventTypeRef = (0,external_React_namespaceObject.useRef)(legacyUserEventType);
+  const buildPayload = (0,external_React_namespaceObject.useCallback)(({
+    size,
+    rest
+  } = {}) => ({
+    widget_name: telemetryName,
+    widget_size: size ?? sizeRef.current,
+    ...rest
+  }), [telemetryName]);
+  const impressionFired = (0,external_React_namespaceObject.useRef)(false);
+  const fireImpression = (0,external_React_namespaceObject.useCallback)(size => {
+    if (impressionFired.current) {
+      return;
+    }
+    impressionFired.current = true;
+    const data = buildPayload({
+      size
+    });
+    const legacyTypes = legacyImpressionTypesRef.current;
+    if (legacyTypes && legacyTypes.length) {
+      (0,external_ReactRedux_namespaceObject.batch)(() => {
+        // Legacy first, then unified, matching the pre-hook dispatch order
+        // in FocusTimer / Lists so existing tests don't need to flip.
+        for (const type of legacyTypes) {
+          dispatch(actionCreators.AlsoToMain({
+            type
+          }));
+        }
+        dispatch(actionCreators.AlsoToMain({
+          type: actionTypes.WIDGETS_IMPRESSION,
+          data
+        }));
+      });
+    } else {
+      dispatch(actionCreators.AlsoToMain({
+        type: actionTypes.WIDGETS_IMPRESSION,
+        data
+      }));
+    }
+  }, [dispatch, buildPayload]);
+
+  // The observer owns observation directly so the callback ref can attach to
+  // elements that mount after the initial render (e.g. widgets that gate
+  // rendering on a Redux pref or async data).
+  const observerRef = (0,external_React_namespaceObject.useRef)(null);
+  const observedEl = (0,external_React_namespaceObject.useRef)(null);
+  (0,external_React_namespaceObject.useEffect)(() => {
+    if (typeof IntersectionObserver === "undefined") {
+      return undefined;
+    }
+    const observer = new IntersectionObserver(entries => {
+      // Filter to the currently-observed element so a queued callback for a
+      // previously-unobserved ref target doesn't fire a stale impression.
+      if (entries.some(e => e.isIntersecting && e.target === observedEl.current)) {
+        fireImpression();
+        observer.disconnect();
+      }
+    }, {
+      threshold: IMPRESSION_THRESHOLD
+    });
+    observerRef.current = observer;
+    if (observedEl.current && !impressionFired.current) {
+      observer.observe(observedEl.current);
+    }
+    return () => {
+      observer.disconnect();
+      observerRef.current = null;
+    };
+  }, [fireImpression]);
+  const impressionRef = (0,external_React_namespaceObject.useCallback)(el => {
+    if (observedEl.current === el) {
+      return;
+    }
+    const observer = observerRef.current;
+    if (observedEl.current && observer) {
+      observer.unobserve(observedEl.current);
+    }
+    observedEl.current = el;
+    if (el && observer && !impressionFired.current) {
+      observer.observe(el);
+    }
+  }, []);
+  const recordImpression = (0,external_React_namespaceObject.useCallback)(({
+    size
+  } = {}) => {
+    fireImpression(size);
+  }, [fireImpression]);
+  const recordUserAction = (0,external_React_namespaceObject.useCallback)((userAction, {
+    source,
+    value,
+    size,
+    alsoToMain,
+    legacy
+  } = {}) => {
+    const route = alsoToMain ? actionCreators.AlsoToMain : actionCreators.OnlyToMain;
+    const rest = {
+      widget_source: source,
+      user_action: userAction
+    };
+    if (value !== undefined) {
+      rest.action_value = value;
+    }
+    const data = buildPayload({
+      size,
+      rest
+    });
+    const main = route({
+      type: actionTypes.WIDGETS_USER_EVENT,
+      data
+    });
+    const legacyType = legacy ? legacyUserEventTypeRef.current : null;
+    if (legacyType) {
+      // Legacy first, then unified, matching the pre-hook dispatch order
+      // in FocusTimer / Lists so existing tests don't need to flip.
+      const legacyAction = route({
+        type: legacyType,
+        data: {
+          userAction
+        }
+      });
+      (0,external_ReactRedux_namespaceObject.batch)(() => {
+        dispatch(legacyAction);
+        dispatch(main);
+      });
+    } else {
+      dispatch(main);
+    }
+  }, [dispatch, buildPayload]);
+  const recordEnabled = (0,external_React_namespaceObject.useCallback)((enabled, {
+    source,
+    size
+  } = {}) => {
+    const data = buildPayload({
+      size,
+      rest: {
+        widget_source: source,
+        enabled
+      }
+    });
+    dispatch(actionCreators.OnlyToMain({
+      type: actionTypes.WIDGETS_ENABLED,
+      data
+    }));
+  }, [dispatch, buildPayload]);
+  const recordError = (0,external_React_namespaceObject.useCallback)((errorType, {
+    size
+  } = {}) => {
+    const data = buildPayload({
+      size,
+      rest: {
+        error_type: errorType
+      }
+    });
+    dispatch(actionCreators.AlsoToMain({
+      type: actionTypes.WIDGETS_ERROR,
+      data
+    }));
+  }, [dispatch, buildPayload]);
+  return {
+    impressionRef,
+    recordImpression,
+    recordUserAction,
+    recordEnabled,
+    recordError
+  };
+};
 ;// CONCATENATED MODULE: ./content-src/components/Widgets/Lists/Lists.jsx
 function Lists_extends() { return Lists_extends = Object.assign ? Object.assign.bind() : function (n) { for (var e = 1; e < arguments.length; e++) { var t = arguments[e]; for (var r in t) ({}).hasOwnProperty.call(t, r) && (n[r] = t[r]); } return n; }, Lists_extends.apply(null, arguments); }
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
+
 
 
 
@@ -12810,7 +14519,6 @@ function Lists({
   const inputRef = (0,external_React_namespaceObject.useRef)(null);
   const reorderListRef = (0,external_React_namespaceObject.useRef)(null);
   const widgetRef = (0,external_React_namespaceObject.useRef)(null);
-  const impressionFired = (0,external_React_namespaceObject.useRef)(false);
   const {
     celebrationFrame,
     celebrationId,
@@ -12818,6 +14526,20 @@ function Lists({
     isCelebrating,
     triggerCelebration
   } = useWidgetCelebration(widgetRef);
+
+  // Pre-hook code reported widget_size as "medium" when the widgets row is
+  // not maximizable, regardless of the resolved widgetSize. Preserve that.
+  const telemetrySize = widgetsMayBeMaximized ? widgetSize : "medium";
+  const {
+    impressionRef,
+    recordUserAction
+  } = useWidgetTelemetry({
+    dispatch,
+    widget: listsWidget,
+    widgetSize: telemetrySize,
+    legacyImpressionTypes: [actionTypes.WIDGETS_LISTS_USER_IMPRESSION],
+    legacyUserEventType: actionTypes.WIDGETS_LISTS_USER_EVENT
+  });
   const handleListInteraction = (0,external_React_namespaceObject.useCallback)(() => handleUserInteraction("lists"), [handleUserInteraction]);
   const handleSelectList = (0,external_React_namespaceObject.useCallback)(listId => {
     setIsEditing(false);
@@ -12829,28 +14551,8 @@ function Lists({
     handleListInteraction();
   }, [dispatch, handleListInteraction]);
 
-  // store selectedList with useMemo so it isnt re-calculated on every re-render
+  // store selectedList with useMemo so it isn't re-calculated on every re-render
   const isValidUrl = (0,external_React_namespaceObject.useCallback)(str => URL.canParse(str), []);
-  const handleIntersection = (0,external_React_namespaceObject.useCallback)(() => {
-    if (impressionFired.current) {
-      return;
-    }
-    impressionFired.current = true;
-    (0,external_ReactRedux_namespaceObject.batch)(() => {
-      dispatch(actionCreators.AlsoToMain({
-        type: actionTypes.WIDGETS_LISTS_USER_IMPRESSION
-      }));
-      const telemetryData = {
-        widget_name: "lists",
-        widget_size: widgetsMayBeMaximized ? widgetSize : "medium"
-      };
-      dispatch(actionCreators.AlsoToMain({
-        type: actionTypes.WIDGETS_IMPRESSION,
-        data: telemetryData
-      }));
-    });
-  }, [dispatch, widgetsMayBeMaximized, widgetSize]);
-  const listsRef = useIntersectionObserver(handleIntersection);
   const reorderLists = (0,external_React_namespaceObject.useCallback)((draggedElement, targetElement, before = false) => {
     const draggedIndex = selectedList.tasks.findIndex(({
       id
@@ -12951,22 +14653,10 @@ function Lists({
             lists: updatedLists
           }
         }));
-        dispatch(actionCreators.OnlyToMain({
-          type: actionTypes.WIDGETS_LISTS_USER_EVENT,
-          data: {
-            userAction: USER_ACTION_TYPES.TASK_CREATE
-          }
-        }));
-        const telemetryData = {
-          widget_name: "lists",
-          widget_source: "widget",
-          user_action: USER_ACTION_TYPES.TASK_CREATE,
-          widget_size: widgetsMayBeMaximized ? widgetSize : "medium"
-        };
-        dispatch(actionCreators.OnlyToMain({
-          type: actionTypes.WIDGETS_USER_EVENT,
-          data: telemetryData
-        }));
+        recordUserAction(USER_ACTION_TYPES.TASK_CREATE, {
+          source: "widget",
+          legacy: true
+        });
       });
       setNewTask("");
     }
@@ -13025,22 +14715,11 @@ function Lists({
         }
       }));
       if (userAction) {
-        dispatch(actionCreators.AlsoToMain({
-          type: actionTypes.WIDGETS_LISTS_USER_EVENT,
-          data: {
-            userAction
-          }
-        }));
-        const telemetryData = {
-          widget_name: "lists",
-          widget_source: "widget",
-          user_action: userAction,
-          widget_size: widgetsMayBeMaximized ? widgetSize : "medium"
-        };
-        dispatch(actionCreators.AlsoToMain({
-          type: actionTypes.WIDGETS_USER_EVENT,
-          data: telemetryData
-        }));
+        recordUserAction(userAction, {
+          source: "widget",
+          legacy: true,
+          alsoToMain: true
+        });
       }
     });
     handleListInteraction();
@@ -13064,22 +14743,10 @@ function Lists({
           lists: updatedLists
         }
       }));
-      dispatch(actionCreators.OnlyToMain({
-        type: actionTypes.WIDGETS_LISTS_USER_EVENT,
-        data: {
-          userAction: USER_ACTION_TYPES.TASK_DELETE
-        }
-      }));
-      const telemetryData = {
-        widget_name: "lists",
-        widget_source: "widget",
-        user_action: USER_ACTION_TYPES.TASK_DELETE,
-        widget_size: widgetsMayBeMaximized ? widgetSize : "medium"
-      };
-      dispatch(actionCreators.OnlyToMain({
-        type: actionTypes.WIDGETS_USER_EVENT,
-        data: telemetryData
-      }));
+      recordUserAction(USER_ACTION_TYPES.TASK_DELETE, {
+        source: "widget",
+        legacy: true
+      });
     });
     handleListInteraction();
   }
@@ -13124,22 +14791,10 @@ function Lists({
           type: actionTypes.WIDGETS_LISTS_CHANGE_SELECTED,
           data: id
         }));
-        dispatch(actionCreators.OnlyToMain({
-          type: actionTypes.WIDGETS_LISTS_USER_EVENT,
-          data: {
-            userAction: USER_ACTION_TYPES.LIST_CREATE
-          }
-        }));
-        const telemetryData = {
-          widget_name: "lists",
-          widget_source: "widget",
-          user_action: USER_ACTION_TYPES.LIST_CREATE,
-          widget_size: widgetsMayBeMaximized ? widgetSize : "medium"
-        };
-        dispatch(actionCreators.OnlyToMain({
-          type: actionTypes.WIDGETS_USER_EVENT,
-          data: telemetryData
-        }));
+        recordUserAction(USER_ACTION_TYPES.LIST_CREATE, {
+          source: "widget",
+          legacy: true
+        });
       });
       handleListInteraction();
       return;
@@ -13159,22 +14814,10 @@ function Lists({
             lists: updatedLists
           }
         }));
-        dispatch(actionCreators.OnlyToMain({
-          type: actionTypes.WIDGETS_LISTS_USER_EVENT,
-          data: {
-            userAction: USER_ACTION_TYPES.LIST_EDIT
-          }
-        }));
-        const telemetryData = {
-          widget_name: "lists",
-          widget_source: "widget",
-          user_action: USER_ACTION_TYPES.LIST_EDIT,
-          widget_size: widgetsMayBeMaximized ? widgetSize : "medium"
-        };
-        dispatch(actionCreators.OnlyToMain({
-          type: actionTypes.WIDGETS_USER_EVENT,
-          data: telemetryData
-        }));
+        recordUserAction(USER_ACTION_TYPES.LIST_EDIT, {
+          source: "widget",
+          legacy: true
+        });
       });
       setIsEditing(false);
       handleListInteraction();
@@ -13221,46 +14864,13 @@ function Lists({
           type: actionTypes.WIDGETS_LISTS_CHANGE_SELECTED,
           data: key
         }));
-        dispatch(actionCreators.OnlyToMain({
-          type: actionTypes.WIDGETS_LISTS_USER_EVENT,
-          data: {
-            userAction: USER_ACTION_TYPES.LIST_DELETE
-          }
-        }));
-        const telemetryData = {
-          widget_name: "lists",
-          widget_source: "widget",
-          user_action: USER_ACTION_TYPES.LIST_DELETE,
-          widget_size: widgetsMayBeMaximized ? widgetSize : "medium"
-        };
-        dispatch(actionCreators.OnlyToMain({
-          type: actionTypes.WIDGETS_USER_EVENT,
-          data: telemetryData
-        }));
+        recordUserAction(USER_ACTION_TYPES.LIST_DELETE, {
+          source: "widget",
+          legacy: true
+        });
       });
     }
     handleListInteraction();
-  }
-  function handleHideLists() {
-    (0,external_ReactRedux_namespaceObject.batch)(() => {
-      dispatch(actionCreators.OnlyToMain({
-        type: actionTypes.SET_PREF,
-        data: {
-          name: "widgets.lists.enabled",
-          value: false
-        }
-      }));
-      const telemetryData = {
-        widget_name: "lists",
-        widget_source: "context_menu",
-        enabled: false,
-        widget_size: widgetsMayBeMaximized ? widgetSize : "medium"
-      };
-      dispatch(actionCreators.OnlyToMain({
-        type: actionTypes.WIDGETS_ENABLED,
-        data: telemetryData
-      }));
-    });
   }
   function handleCopyListToClipboard() {
     const currentList = lists[selected];
@@ -13282,34 +14892,10 @@ function Lists({
     } catch (err) {
       console.error("Copy failed", err);
     }
-    (0,external_ReactRedux_namespaceObject.batch)(() => {
-      dispatch(actionCreators.OnlyToMain({
-        type: actionTypes.WIDGETS_LISTS_USER_EVENT,
-        data: {
-          userAction: USER_ACTION_TYPES.LIST_COPY
-        }
-      }));
-      const telemetryData = {
-        widget_name: "lists",
-        widget_source: "widget",
-        user_action: USER_ACTION_TYPES.LIST_COPY,
-        widget_size: widgetsMayBeMaximized ? widgetSize : "medium"
-      };
-      dispatch(actionCreators.OnlyToMain({
-        type: actionTypes.WIDGETS_USER_EVENT,
-        data: telemetryData
-      }));
+    recordUserAction(USER_ACTION_TYPES.LIST_COPY, {
+      source: "widget",
+      legacy: true
     });
-    handleListInteraction();
-  }
-  function handleLearnMore() {
-    dispatch(actionCreators.OnlyToMain({
-      type: actionTypes.OPEN_LINK,
-      data: {
-        url: "https://support.mozilla.org/kb/firefox-new-tab-widgets",
-        where: "tab"
-      }
-    }));
     handleListInteraction();
   }
   const handleChangeSize = (0,external_React_namespaceObject.useCallback)(size => {
@@ -13321,19 +14907,13 @@ function Lists({
           value: size
         }
       }));
-      dispatch(actionCreators.OnlyToMain({
-        type: actionTypes.WIDGETS_USER_EVENT,
-        data: {
-          widget_name: "lists",
-          widget_source: "context_menu",
-          user_action: USER_ACTION_TYPES.CHANGE_SIZE,
-          action_value: size,
-          widget_size: size
-        }
-      }));
+      recordUserAction(USER_ACTION_TYPES.CHANGE_SIZE, {
+        source: "context_menu",
+        value: size,
+        size
+      });
     });
-  }, [dispatch]);
-  const sizeSubmenuRef = useSizeSubmenu(handleChangeSize);
+  }, [dispatch, recordUserAction]);
   (0,external_React_namespaceObject.useEffect)(() => {
     setIsAddingTask(false);
   }, [selected]);
@@ -13403,7 +14983,7 @@ function Lists({
     className: `lists widget ${novaEnabled ? "col-4" : ""} ${listsSizeClass} ${isMaximized ? "is-maximized" : ""}${showEmptyState ? " is-empty" : ""}${hasVisibleTasks ? " has-visible-tasks" : ""}${isAddingTask ? " is-adding-task" : ""}${isCelebrating ? " is-celebrating" : ""}`,
     ref: el => {
       widgetRef.current = el;
-      listsRef.current = [el];
+      impressionRef(el);
     }
   }, isCelebrating && celebrationFrame ? /*#__PURE__*/external_React_default().createElement(WidgetCelebration, {
     classNamePrefix: "lists-celebration",
@@ -13459,7 +15039,7 @@ function Lists({
     })
   })), /*#__PURE__*/external_React_default().createElement("moz-button", {
     className: "lists-panel-button",
-    "data-l10n-id": "newtab-menu-section-tooltip",
+    "data-l10n-id": "newtab-widget-lists-menu-button",
     iconSrc: "chrome://global/skin/icons/more.svg",
     menuId: "lists-panel",
     type: "ghost"
@@ -13477,33 +15057,24 @@ function Lists({
   })), /*#__PURE__*/external_React_default().createElement("panel-item", {
     "data-l10n-id": "newtab-widget-lists-menu-delete",
     onClick: () => handleDeleteList()
-  }), /*#__PURE__*/external_React_default().createElement("hr", null), /*#__PURE__*/external_React_default().createElement("panel-item", {
+  }), /*#__PURE__*/external_React_default().createElement("panel-item", {
     "data-l10n-id": "newtab-widget-lists-menu-copy",
     onClick: () => handleCopyListToClipboard()
-  }), novaEnabled && widgetsMayBeMaximized && /*#__PURE__*/external_React_default().createElement("panel-item", {
-    submenu: "lists-size-submenu"
-  }, /*#__PURE__*/external_React_default().createElement("span", {
-    "data-l10n-id": "newtab-widget-menu-change-size"
-  }), /*#__PURE__*/external_React_default().createElement("panel-list", {
-    ref: sizeSubmenuRef,
-    slot: "submenu",
-    id: "lists-size-submenu"
-  }, ["medium", "large"].map(size => /*#__PURE__*/external_React_default().createElement("panel-item", {
-    key: size,
-    type: "checkbox",
-    checked: widgetSize === size || undefined,
-    "data-size": size,
-    "data-l10n-id": `newtab-widget-size-${size}`
-  })))), /*#__PURE__*/external_React_default().createElement(MoveSubmenu, {
+  }), /*#__PURE__*/external_React_default().createElement(WidgetMenuFooter, {
+    dispatch: dispatch,
     widgetId: "lists",
-    widgetEnabledMap: widgetEnabledMap
-  }), /*#__PURE__*/external_React_default().createElement("panel-item", {
-    "data-l10n-id": "newtab-widget-menu-hide",
-    onClick: () => handleHideLists()
-  }), /*#__PURE__*/external_React_default().createElement("panel-item", {
-    className: "learn-more",
-    "data-l10n-id": "newtab-widget-lists-menu-learn-more",
-    onClick: handleLearnMore
+    widgetEnabledMap: widgetEnabledMap,
+    widgetName: "lists",
+    enabledPref: "widgets.lists.enabled",
+    widgetSize: widgetsMayBeMaximized ? widgetSize : "medium",
+    learnMoreL10nId: "newtab-widget-lists-menu-learn-more",
+    onLearnMore: handleListInteraction,
+    sizeSubmenu: novaEnabled && widgetsMayBeMaximized && /*#__PURE__*/external_React_default().createElement(SizeSubmenu, {
+      submenuId: "lists-size-submenu",
+      sizes: ["medium", "large"],
+      checkedSize: widgetSize,
+      onChangeSize: handleChangeSize
+    })
   }))), (showInlineAddButton || isAddingTask) && /*#__PURE__*/external_React_default().createElement("div", {
     className: "lists-add-action"
   }, showInlineAddButton && renderAddTaskButton(), /*#__PURE__*/external_React_default().createElement("div", {
@@ -13818,6 +15389,7 @@ function FocusTimer_extends() { return FocusTimer_extends = Object.assign ? Obje
 
 
 
+
 const FOCUS_TIMER_CELEBRATION_GRADIENT_STOPS = [{
   offset: "0%",
   color: "var(--timer-celebration-leading)"
@@ -14016,6 +15588,10 @@ const FocusTimer = ({
   } = useWidgetCelebration(widgetCelebrationRef);
   // Guards against a double-fire that would re-toggle SET_TYPE.
   const celebrationCompletedRef = (0,external_React_namespaceObject.useRef)(false);
+  // The timer is shared across open newtab/home pages, but each page fires its
+  // own end-of-session switch. Set the next type directly rather than toggling
+  // the shared value, so two pages don't toggle it and cancel out.
+  const completingTypeRef = (0,external_React_namespaceObject.useRef)(timerType);
   (0,external_React_namespaceObject.useEffect)(() => {
     if (isCelebrating) {
       celebrationCompletedRef.current = false;
@@ -14035,14 +15611,16 @@ const FocusTimer = ({
     }
     celebrationCompletedRef.current = true;
     resetProgressCircle();
+    const completedType = completingTypeRef.current;
+    const nextType = completedType === "focus" ? "break" : "focus";
+    const userAction = completedType === "focus" ? FocusTimer_USER_ACTION_TYPES.TIMER_TOGGLE_BREAK : FocusTimer_USER_ACTION_TYPES.TIMER_TOGGLE_FOCUS;
     (0,external_ReactRedux_namespaceObject.batch)(() => {
       dispatch(actionCreators.AlsoToMain({
         type: actionTypes.WIDGETS_TIMER_SET_TYPE,
         data: {
-          timerType: timerType === "focus" ? "break" : "focus"
+          timerType: nextType
         }
       }));
-      const userAction = timerType === "focus" ? FocusTimer_USER_ACTION_TYPES.TIMER_TOGGLE_BREAK : FocusTimer_USER_ACTION_TYPES.TIMER_TOGGLE_FOCUS;
       dispatch(actionCreators.OnlyToMain({
         type: actionTypes.WIDGETS_TIMER_USER_EVENT,
         data: {
@@ -14060,7 +15638,7 @@ const FocusTimer = ({
       }));
     });
     completeCelebration();
-  }, [completeCelebration, dispatch, resetProgressCircle, timerType, widgetSize]);
+  }, [completeCelebration, dispatch, resetProgressCircle, widgetSize]);
   const showSystemNotifications = prefs["widgets.focusTimer.showSystemNotifications"];
 
   // Held in a ref so the ticker effect below doesn't re-arm whenever
@@ -14093,6 +15671,7 @@ const FocusTimer = ({
         }
       }));
     });
+    completingTypeRef.current = timerType;
     celebrationCompletedRef.current = false;
 
     // animate the progress circle to turn solid green
@@ -14444,15 +16023,6 @@ const FocusTimer = ({
       sel.addRange(range);
     }
   };
-  function handleLearnMore() {
-    dispatch(actionCreators.OnlyToMain({
-      type: actionTypes.OPEN_LINK,
-      data: {
-        url: "https://support.mozilla.org/kb/firefox-new-tab-widgets"
-      }
-    }));
-    handleTimerInteraction();
-  }
   function handlePrefUpdate(prefName, prefValue) {
     dispatch(actionCreators.OnlyToMain({
       type: actionTypes.SET_PREF,
@@ -14626,7 +16196,6 @@ const FocusTimer = ({
     e.preventDefault();
     toggleType(timerType === "focus" ? "break" : "focus");
   };
-  const sizeSubmenuRef = useSizeSubmenu(handleChangeSize);
 
   // Keep the running-state body layout through the celebration so the ring
   // doesn't shift to a third position during the animation.
@@ -14659,7 +16228,8 @@ const FocusTimer = ({
     className: "focus-timer-context-menu-button",
     iconSrc: "chrome://global/skin/icons/more.svg",
     menuId: "focus-timer-context-menu",
-    type: "ghost"
+    type: "ghost",
+    "data-l10n-id": "newtab-widget-timer-menu-button"
   }), /*#__PURE__*/external_React_default().createElement("panel-list", {
     id: "focus-timer-context-menu"
   }, /*#__PURE__*/external_React_default().createElement("panel-item", {
@@ -14667,57 +16237,23 @@ const FocusTimer = ({
     onClick: () => {
       handlePrefUpdate("widgets.focusTimer.showSystemNotifications", !showSystemNotifications);
     }
-  }), /*#__PURE__*/external_React_default().createElement("panel-item", {
-    // @nova-cleanup(remove-conditional): Drop the ternary and keep
-    // newtab-widget-timer-menu-hide once Nova ships.
-    "data-l10n-id": novaEnabled ? "newtab-widget-timer-menu-hide" : "newtab-widget-menu-hide",
-    onClick: () => {
-      (0,external_ReactRedux_namespaceObject.batch)(() => {
-        dispatch(actionCreators.OnlyToMain({
-          type: actionTypes.SET_PREF,
-          data: {
-            name: "widgets.focusTimer.enabled",
-            value: false
-          }
-        }));
-        const telemetryData = {
-          widget_name: "focus_timer",
-          widget_source: "context_menu",
-          enabled: false,
-          widget_size: widgetSize
-        };
-        dispatch(actionCreators.OnlyToMain({
-          type: actionTypes.WIDGETS_ENABLED,
-          data: telemetryData
-        }));
-      });
-    }
-  }),
-  // @nova-cleanup(remove-conditional): Remove the `novaEnabled &&` check; keep widgetsMayBeMaximized
-  novaEnabled && widgetsMayBeMaximized && /*#__PURE__*/external_React_default().createElement("panel-item", {
-    submenu: "focus-timer-size-submenu"
-  }, /*#__PURE__*/external_React_default().createElement("span", {
-    "data-l10n-id": "newtab-widget-menu-change-size"
-  }), /*#__PURE__*/external_React_default().createElement("panel-list", {
-    ref: sizeSubmenuRef,
-    slot: "submenu",
-    id: "focus-timer-size-submenu"
-  }, ["small", "medium", "large"].map(size => /*#__PURE__*/external_React_default().createElement("panel-item", FocusTimer_extends({
-    key: size,
-    type: "checkbox",
-    checked: widgetSize === size || undefined,
-    "data-size": size,
-    "data-l10n-id": `newtab-widget-size-${size}`
-  }, size === "small" ? {
-    disabled: true
-  } : {}))))), /*#__PURE__*/external_React_default().createElement(MoveSubmenu, {
+  }), /*#__PURE__*/external_React_default().createElement(WidgetMenuFooter, {
+    dispatch: dispatch,
     widgetId: "focusTimer",
-    widgetEnabledMap: widgetEnabledMap
-  }),
-  // @nova-cleanup(remove-conditional): Remove the `novaEnabled &&` check; always render the divider.
-  novaEnabled && /*#__PURE__*/external_React_default().createElement("hr", null), /*#__PURE__*/external_React_default().createElement("panel-item", {
-    "data-l10n-id": "newtab-widget-timer-menu-learn-more",
-    onClick: handleLearnMore
+    widgetEnabledMap: widgetEnabledMap,
+    widgetName: "focus_timer",
+    enabledPref: "widgets.focusTimer.enabled",
+    widgetSize: widgetSize,
+    learnMoreL10nId: "newtab-widget-timer-menu-learn-more",
+    onLearnMore: handleTimerInteraction,
+    sizeSubmenu:
+    // @nova-cleanup(remove-conditional): Remove the `novaEnabled &&` check; keep widgetsMayBeMaximized
+    novaEnabled && widgetsMayBeMaximized && /*#__PURE__*/external_React_default().createElement(SizeSubmenu, {
+      submenuId: "focus-timer-size-submenu",
+      sizes: ["medium", "large"],
+      checkedSize: widgetSize,
+      onChangeSize: handleChangeSize
+    })
   })))),
   // @nova-cleanup(remove-conditional): Remove this branch and the legacy block below; keep only the Nova body
   novaEnabled ? /*#__PURE__*/external_React_default().createElement((external_React_default()).Fragment, null, /*#__PURE__*/external_React_default().createElement("div", {
@@ -15481,6 +17017,7 @@ function WeatherForecast({
 
 
 
+
 const Weather_USER_ACTION_TYPES = {
   CHANGE_LOCATION: "change_location",
   DETECT_LOCATION: "detect_location",
@@ -15526,7 +17063,6 @@ function Weather_Weather({
       }));
     });
   }, [dispatch]);
-  const sizeSubmenuRef = useSizeSubmenu(handleChangeSize);
   const handleIntersection = (0,external_React_namespaceObject.useCallback)(() => {
     if (impressionFired.current) {
       return;
@@ -15642,44 +17178,16 @@ function Weather_Weather({
       }));
     });
   }
-  function handleHideWeather() {
-    (0,external_ReactRedux_namespaceObject.batch)(() => {
-      dispatch(actionCreators.OnlyToMain({
-        type: actionTypes.SET_PREF,
-        data: {
-          name: "widgets.weather.enabled",
-          value: false
-        }
-      }));
-      dispatch(actionCreators.OnlyToMain({
-        type: actionTypes.WIDGETS_ENABLED,
-        data: {
-          widget_name: "weather",
-          widget_source: "context_menu",
-          enabled: false,
-          widget_size: size
-        }
-      }));
-    });
-  }
   function handleLearnMore() {
-    (0,external_ReactRedux_namespaceObject.batch)(() => {
-      dispatch(actionCreators.OnlyToMain({
-        type: actionTypes.OPEN_LINK,
-        data: {
-          url: "https://support.mozilla.org/kb/firefox-new-tab-widgets"
-        }
-      }));
-      dispatch(actionCreators.OnlyToMain({
-        type: actionTypes.WIDGETS_USER_EVENT,
-        data: {
-          widget_name: "weather",
-          widget_source: "context_menu",
-          user_action: Weather_USER_ACTION_TYPES.LEARN_MORE,
-          widget_size: size
-        }
-      }));
-    });
+    dispatch(actionCreators.OnlyToMain({
+      type: actionTypes.WIDGETS_USER_EVENT,
+      data: {
+        widget_name: "weather",
+        widget_source: "context_menu",
+        user_action: Weather_USER_ACTION_TYPES.LEARN_MORE,
+        widget_size: size
+      }
+    }));
   }
   function handleProviderLinkClick() {
     dispatch(actionCreators.OnlyToMain({
@@ -15747,7 +17255,7 @@ function Weather_Weather({
       size: "small"
     }), /*#__PURE__*/external_React_default().createElement("panel-list", {
       id: "weather-widget-context-menu"
-    }, !showOptInState && !isOptInEnabled && (prefs["weather.temperatureUnits"] === "f" ? /*#__PURE__*/external_React_default().createElement("panel-item", {
+    }, !showOptInState && (prefs["weather.temperatureUnits"] === "f" ? /*#__PURE__*/external_React_default().createElement("panel-item", {
       "data-l10n-id": "newtab-weather-menu-change-temperature-units-celsius",
       onClick: () => handleChangeTempUnit("c")
     }) : /*#__PURE__*/external_React_default().createElement("panel-item", {
@@ -15759,29 +17267,27 @@ function Weather_Weather({
     }), !showOptInState && isOptInEnabled && /*#__PURE__*/external_React_default().createElement("panel-item", {
       "data-l10n-id": "newtab-weather-menu-detect-my-location",
       onClick: handleDetectLocation
-    }), widgetsSystemEnabled && widgetsEnabled && widgetsMayBeMaximized && /*#__PURE__*/external_React_default().createElement("panel-item", {
-      submenu: "weather-size-submenu"
-    }, /*#__PURE__*/external_React_default().createElement("span", {
-      "data-l10n-id": "newtab-widget-menu-change-size"
-    }), /*#__PURE__*/external_React_default().createElement("panel-list", {
-      ref: sizeSubmenuRef,
-      slot: "submenu",
-      id: "weather-size-submenu"
-    }, ["small", "medium", "large"].map(s => /*#__PURE__*/external_React_default().createElement("panel-item", {
-      key: s,
-      type: "checkbox",
-      checked: currentWeatherSize === s || undefined,
-      "data-size": s,
-      "data-l10n-id": `newtab-widget-size-${s}`
-    })))), /*#__PURE__*/external_React_default().createElement(MoveSubmenu, {
+    }), /*#__PURE__*/external_React_default().createElement(WidgetMenuFooter, {
+      dispatch: dispatch,
       widgetId: "weather",
-      widgetEnabledMap: widgetEnabledMap
-    }), /*#__PURE__*/external_React_default().createElement("panel-item", {
-      "data-l10n-id": "newtab-widget-menu-hide",
-      onClick: handleHideWeather
-    }), /*#__PURE__*/external_React_default().createElement("panel-item", {
-      "data-l10n-id": "newtab-weather-menu-learn-more",
-      onClick: handleLearnMore
+      widgetEnabledMap: widgetEnabledMap,
+      widgetName: "weather",
+      enabledPref: "widgets.weather.enabled",
+      widgetSize: size,
+      learnMoreL10nId: "newtab-weather-menu-learn-more",
+      onLearnMore: handleLearnMore,
+      showDivider: !showOptInState,
+      sizeSubmenu:
+      /* Only show size options when both system and user prefs are enabled;
+         medium/large sizes require the widgets row, which only renders when both are true.
+         trainhopConfig.widgets.enabled overrides either system or user pref so
+         an experiment payload can drive the submenu without flipping local prefs. */
+      widgetsSystemEnabled && widgetsEnabled && widgetsMayBeMaximized && /*#__PURE__*/external_React_default().createElement(SizeSubmenu, {
+        submenuId: "weather-size-submenu",
+        sizes: ["small", "medium", "large"],
+        checkedSize: currentWeatherSize,
+        onChangeSize: handleChangeSize
+      })
     })));
   }
   function getArticleClassNames() {
@@ -16145,6 +17651,41 @@ const OMC_HIGHLIGHT_REGISTRY = Object.freeze({
     },
     dismiss: DISMISS_MODES.BLOCK,
   },
+  // Survey callouts; the CTA opens content.surveyUrl set by the OMC message.
+  WorldCupSurveyCallout: {
+    slot: SLOTS.WIDGETS_ROW,
+    shell: SHELLS.POPOVER,
+    chrome: {
+      position: "inset-block-start inset-inline-center",
+      modalClassName: "widgets-callout widgets-survey-callout",
+    },
+    body: {
+      image: {
+        src: "chrome://newtab/content/data/content/assets/highlights/widget-survey.webp",
+      },
+      title: { l10nId: "newtab-sports-widget-message-survey-title" },
+      subtitle: { l10nId: "newtab-sports-widget-message-survey-body" },
+      cta: { l10nId: "newtab-sports-widget-message-survey-cta" },
+    },
+    dismiss: DISMISS_MODES.BLOCK,
+  },
+  WorldCupWidgetSurveyCallout: {
+    slot: SLOTS.WIDGETS_ROW,
+    shell: SHELLS.POPOVER,
+    chrome: {
+      position: "inset-block-start inset-inline-center",
+      modalClassName: "widgets-callout widgets-survey-callout",
+    },
+    body: {
+      image: {
+        src: "chrome://newtab/content/data/content/assets/highlights/widget-survey.webp",
+      },
+      title: { l10nId: "newtab-sports-widget-message-survey-widget-title" },
+      subtitle: { l10nId: "newtab-sports-widget-message-survey-widget-body" },
+      cta: { l10nId: "newtab-sports-widget-message-survey-cta" },
+    },
+    dismiss: DISMISS_MODES.BLOCK,
+  },
 });
 
 const getRegistryEntry = messageType => {
@@ -16191,7 +17732,8 @@ const resolveImage = ({ content, defaults }) => {
 
 const HighlightPopoverBody = ({
   body,
-  content
+  content,
+  onCtaClick
 }) => {
   const image = resolveImage({
     content,
@@ -16209,6 +17751,12 @@ const HighlightPopoverBody = ({
     l10nKey: "subtitle",
     defaultL10nId: body?.subtitle?.l10nId
   });
+  const cta = resolveText({
+    content,
+    rawKey: "cardCta",
+    l10nKey: "cta",
+    defaultL10nId: body?.cta?.l10nId
+  });
   return /*#__PURE__*/external_React_default().createElement("div", {
     className: "highlight-popover-body"
   }, /*#__PURE__*/external_React_default().createElement(HighlightImage, {
@@ -16222,7 +17770,17 @@ const HighlightPopoverBody = ({
     as: "p",
     className: "subtitle",
     value: subtitle
-  }));
+  }), cta && onCtaClick && /*#__PURE__*/external_React_default().createElement("span", {
+    className: "button-wrapper"
+  }, cta.raw ? /*#__PURE__*/external_React_default().createElement("moz-button", {
+    type: "primary",
+    label: cta.raw,
+    onClick: onCtaClick
+  }) : /*#__PURE__*/external_React_default().createElement("moz-button", {
+    type: "primary",
+    "data-l10n-id": cta.l10nId,
+    onClick: onCtaClick
+  })));
 };
 ;// CONCATENATED MODULE: ./content-src/components/DiscoveryStreamComponents/FeatureHighlight/OMCHighlightSlot.jsx
 /* This Source Code Form is subject to the terms of the Mozilla Public
@@ -16235,11 +17793,18 @@ const HighlightPopoverBody = ({
 
 
 
+
+
+// MESSAGE_CLICK telemetry source label for the callout's CTA button.
+const CTA_CLICK_SOURCE = "cta";
 const PopoverShell = ({
   entry,
   content,
   handleDismiss,
-  handleBlock
+  handleBlock,
+  handleClick,
+  handleClose,
+  dispatch
 }) => {
   const dismissCallback = (0,external_React_namespaceObject.useCallback)(() => {
     handleDismiss?.();
@@ -16247,6 +17812,27 @@ const PopoverShell = ({
       handleBlock?.();
     }
   }, [entry.dismiss, handleDismiss, handleBlock]);
+
+  // The CTA opens content.surveyUrl in a new tab and records the click. Taking
+  // the survey is a conversion, not a dismissal, so we block (to keep the
+  // callout from reappearing) and close the popover, but leave MESSAGE_DISMISS
+  // to the X button and outside clicks. Only wired up when a surveyUrl is
+  // present so we never render a "Take survey" button that just closes.
+  const surveyUrl = content?.surveyUrl;
+  const onCtaClick = (0,external_React_namespaceObject.useCallback)(() => {
+    dispatch(actionCreators.OnlyToMain({
+      type: actionTypes.OPEN_LINK,
+      data: {
+        url: surveyUrl,
+        where: "tab"
+      }
+    }));
+    handleClick?.(CTA_CLICK_SOURCE);
+    if (entry.dismiss === DISMISS_MODES.BLOCK) {
+      handleBlock?.();
+    }
+    handleClose?.();
+  }, [surveyUrl, entry.dismiss, dispatch, handleClick, handleBlock, handleClose]);
   return /*#__PURE__*/external_React_default().createElement(FeatureHighlight, {
     position: entry.chrome.position,
     arrowPosition: entry.chrome.arrowPosition,
@@ -16255,7 +17841,8 @@ const PopoverShell = ({
     showButtonIcon: false,
     message: /*#__PURE__*/external_React_default().createElement(HighlightPopoverBody, {
       body: entry.body,
-      content: content
+      content: content,
+      onCtaClick: surveyUrl ? onCtaClick : undefined
     }),
     dismissCallback: dismissCallback,
     outsideClickCallback: handleDismiss
@@ -16301,18 +17888,53 @@ const SportsMatchRow_USER_ACTION_TYPES = {
 // Visible placeholder shown in place of a team's country code when the
 // match-up isn't decided yet.
 const TBD_PLACEHOLDER = "--";
-const STATUS_L10N_MAP = {
+
+// The /matches API has been observed sending the American spelling
+// "canceled" alongside the British "cancelled" we localise to. Map both keys
+// to the same Fluent IDs (see UPCOMING_STATUS_ARIA_L10N_MAP below) so the
+// badge and aria-label render either way without a data-team-side fix.
+const UPCOMING_STATUS_L10N_MAP = {
   delayed: "newtab-sports-widget-delayed",
   postponed: "newtab-sports-widget-postponed",
   suspended: "newtab-sports-widget-suspended",
-  cancelled: "newtab-sports-widget-cancelled"
+  cancelled: "newtab-sports-widget-cancelled",
+  canceled: "newtab-sports-widget-cancelled"
+};
+const RESULTS_STATUS_L10N_MAP = {
+  final: "newtab-sports-widget-match-full-time"
 };
 const UPCOMING_STATUS_ARIA_L10N_MAP = {
   delayed: "newtab-sports-widget-match-aria-label-upcoming-delayed",
   postponed: "newtab-sports-widget-match-aria-label-upcoming-postponed",
   suspended: "newtab-sports-widget-match-aria-label-upcoming-suspended",
-  cancelled: "newtab-sports-widget-match-aria-label-upcoming-cancelled"
+  cancelled: "newtab-sports-widget-match-aria-label-upcoming-cancelled",
+  canceled: "newtab-sports-widget-match-aria-label-upcoming-cancelled"
 };
+
+// status_type is always "live" on the /wcs/live endpoint, so the actual
+// sub-state has to be read from `period` and `status`. Matching rules mirror
+// Fenix's MatchesResponseMapper.kt. Returns null when no rule matches.
+function liveStatusL10nId({
+  period,
+  status: matchStatus,
+  home_penalty,
+  away_penalty
+}) {
+  const normalisedPeriod = (period || "").toLowerCase().replace(/\s+/g, "");
+  const inShootout = normalisedPeriod === "pen" || normalisedPeriod === "penaltyshootout" || home_penalty !== null && home_penalty !== undefined || away_penalty !== null && away_penalty !== undefined;
+  const isExtraTime = /et/i.test(period || "") || /extra/i.test(period || "");
+  const isHalftime = matchStatus?.toLowerCase() === "break";
+  if (inShootout) {
+    return "newtab-sports-widget-match-penalties";
+  }
+  if (isExtraTime) {
+    return "newtab-sports-widget-match-extra-time";
+  }
+  if (isHalftime) {
+    return "newtab-sports-widget-match-halftime";
+  }
+  return null;
+}
 function ScorePill({
   homeScore,
   awayScore,
@@ -16339,7 +17961,8 @@ function ScorePill({
 // when the team is not yet decided.
 function MatchTeam({
   team,
-  isFollowed
+  isFollowed,
+  localizedName
 }) {
   if (!team) {
     return /*#__PURE__*/external_React_default().createElement("div", {
@@ -16353,6 +17976,10 @@ function MatchTeam({
       className: "sports-match-code"
     }, TBD_PLACEHOLDER));
   }
+  const displayName = localizedName ?? team.name;
+  // Display the ISO region to match other platforms; team.key stays the
+  // internal identity key. Fall back to key when region is absent.
+  const displayCode = team.region ?? team.key;
   return /*#__PURE__*/external_React_default().createElement("div", {
     className: "sports-match-team"
   }, /*#__PURE__*/external_React_default().createElement("span", {
@@ -16360,14 +17987,14 @@ function MatchTeam({
   }, /*#__PURE__*/external_React_default().createElement("img", {
     className: "sports-match-flag",
     src: team.icon_url,
-    alt: team.name,
-    title: team.name
+    alt: displayName,
+    title: displayName
   }), isFollowed && /*#__PURE__*/external_React_default().createElement("span", {
     className: "sports-match-flag-check",
     "aria-hidden": "true"
   })), /*#__PURE__*/external_React_default().createElement("span", {
     className: "sports-match-code"
-  }, isFollowed ? /*#__PURE__*/external_React_default().createElement("strong", null, team.key) : team.key));
+  }, isFollowed ? /*#__PURE__*/external_React_default().createElement("strong", null, displayCode) : displayCode));
 }
 
 // Fallback shown in the Upcoming tab if the backend returns no matches.
@@ -16401,7 +18028,8 @@ function SportsMatchRow({
   size = "large",
   handleInteraction,
   followedTeams,
-  tbdTeamName = ""
+  tbdTeamName = "",
+  localizedNames
 }) {
   const dispatch = (0,external_ReactRedux_namespaceObject.useDispatch)();
   // Read the widget size pref (not `size`, which can be "list" when the
@@ -16413,22 +18041,21 @@ function SportsMatchRow({
     away_team,
     date,
     status_type,
+    period,
+    status: matchStatus,
     home_score,
     away_score,
-    home_extra,
-    away_extra,
     home_penalty,
     away_penalty,
     query
   } = match;
   const isHomeFollowed = !!(home_team && followedTeams?.has(home_team.key));
   const isAwayFollowed = !!(away_team && followedTeams?.has(away_team.key));
-  const homeTeamName = home_team ? home_team.name : tbdTeamName;
-  const awayTeamName = away_team ? away_team.name : tbdTeamName;
+  const homeTeamName = home_team ? localizedNames?.[home_team.key] ?? home_team.name : tbdTeamName;
+  const awayTeamName = away_team ? localizedNames?.[away_team.key] ?? away_team.name : tbdTeamName;
   const dateTimestamp = new Date(date).getTime();
-  // (developer note): Assumes home_score/away_score exclude extra time goals
-  const displayHomeScore = home_score + (home_extra || 0);
-  const displayAwayScore = away_score + (away_extra || 0);
+  const displayHomeScore = home_score || 0;
+  const displayAwayScore = away_score || 0;
   // A match went to a shootout only when both penalty scores are present.
   // Checking both guards against asymmetric/corrupt data where one side is
   // null — which would otherwise pass a `null` into the aria-label args.
@@ -16478,7 +18105,7 @@ function SportsMatchRow({
     }
     // Upcoming. Non-scheduled statuses use a per-status Fluent ID; the
     // default ("scheduled") announces kickoff time/date.
-    const upcomingId = UPCOMING_STATUS_ARIA_L10N_MAP[status_type] || "newtab-sports-widget-match-aria-label-upcoming";
+    const upcomingId = UPCOMING_STATUS_ARIA_L10N_MAP[status_type?.toLowerCase()] || "newtab-sports-widget-match-aria-label-upcoming";
     return {
       id: upcomingId,
       args: {
@@ -16491,13 +18118,48 @@ function SportsMatchRow({
   function renderMiddle() {
     switch (variant) {
       case "now":
-        return /*#__PURE__*/external_React_default().createElement(ScorePill, {
-          homeScore: displayHomeScore,
-          awayScore: displayAwayScore,
-          variant: "now"
-        });
+        {
+          const liveL10nId = liveStatusL10nId({
+            period,
+            status: matchStatus,
+            home_penalty,
+            away_penalty
+          });
+          // The Now tab's live status footer is only shown in the large widget.
+          if (!liveL10nId || size !== "large") {
+            return /*#__PURE__*/external_React_default().createElement(ScorePill, {
+              homeScore: displayHomeScore,
+              awayScore: displayAwayScore,
+              homePenalty: home_penalty,
+              awayPenalty: away_penalty,
+              variant: "now"
+            });
+          }
+          return /*#__PURE__*/external_React_default().createElement("div", {
+            className: "sports-match-live"
+          }, /*#__PURE__*/external_React_default().createElement(ScorePill, {
+            homeScore: displayHomeScore,
+            awayScore: displayAwayScore,
+            homePenalty: home_penalty,
+            awayPenalty: away_penalty,
+            variant: "now"
+          }), /*#__PURE__*/external_React_default().createElement("div", {
+            className: "sports-match-live-footer"
+          }, /*#__PURE__*/external_React_default().createElement("span", {
+            "data-l10n-id": liveL10nId
+          })));
+        }
       case "results":
         {
+          // Per Figma the Results footer is always "Full time" (optionally
+          // "• Penalties"); default to it for unmapped status_types so any
+          // stale live-state value that leaks into this bucket doesn't render
+          // raw API text in the UI.
+          const resultsStatusL10nId = RESULTS_STATUS_L10N_MAP[status_type?.toLowerCase()] || "newtab-sports-widget-match-full-time";
+          // The medium widget lacks room for "Full time • Penalties", so for a
+          // penalty shootout it shows "Penalties" alone instead. Large keeps
+          // both; list shows only the status (as in the "view all" view).
+          const mediumPenaltiesOnly = hasPenalties && size === "medium";
           return /*#__PURE__*/external_React_default().createElement("div", {
             className: "sports-match-result"
           }, /*#__PURE__*/external_React_default().createElement(ScorePill, {
@@ -16509,8 +18171,8 @@ function SportsMatchRow({
           }), /*#__PURE__*/external_React_default().createElement("div", {
             className: "sports-match-result-footer"
           }, /*#__PURE__*/external_React_default().createElement("span", {
-            "data-l10n-id": "newtab-sports-widget-match-full-time"
-          }), hasPenalties && /*#__PURE__*/external_React_default().createElement((external_React_default()).Fragment, null, /*#__PURE__*/external_React_default().createElement("span", {
+            "data-l10n-id": mediumPenaltiesOnly ? "newtab-sports-widget-match-penalties" : resultsStatusL10nId
+          }), hasPenalties && size === "large" && /*#__PURE__*/external_React_default().createElement((external_React_default()).Fragment, null, /*#__PURE__*/external_React_default().createElement("span", {
             "aria-hidden": "true"
           }, "\u2022"), /*#__PURE__*/external_React_default().createElement("span", {
             "data-l10n-id": "newtab-sports-widget-match-penalties"
@@ -16519,7 +18181,7 @@ function SportsMatchRow({
       // Default is the upcoming variant
       default:
         {
-          const statusL10nId = STATUS_L10N_MAP[status_type];
+          const statusL10nId = UPCOMING_STATUS_L10N_MAP[status_type?.toLowerCase()];
           const dateArgs = JSON.stringify({
             date: dateTimestamp
           });
@@ -16595,10 +18257,12 @@ function SportsMatchRow({
     onKeyDown
   }), /*#__PURE__*/external_React_default().createElement(MatchTeam, {
     team: home_team,
-    isFollowed: isHomeFollowed
+    isFollowed: isHomeFollowed,
+    localizedName: localizedNames?.[home_team?.key]
   }), renderMiddle(), /*#__PURE__*/external_React_default().createElement(MatchTeam, {
     team: away_team,
-    isFollowed: isAwayFollowed
+    isFollowed: isAwayFollowed,
+    localizedName: localizedNames?.[away_team?.key]
   }));
 }
 
@@ -16691,6 +18355,15 @@ function LivePagination({
 
 
 
+// Stream URLs come from an untrusted backend, so only allow http(s) through to
+// the href; anything else (e.g. javascript:) renders as a non-navigating link.
+function safeStreamUrl(url) {
+  try {
+    return ["http:", "https:"].includes(new URL(url).protocol) ? url : "";
+  } catch (e) {
+    return "";
+  }
+}
 
 // Map known backend entitlement strings to localized tag IDs. Anything not in
 // this map falls back to the raw string from `stream.entitlement`.
@@ -16728,10 +18401,12 @@ function StreamRow({
   };
   return /*#__PURE__*/external_React_default().createElement("li", {
     className: "watch-live-modal-row"
-  }, /*#__PURE__*/external_React_default().createElement(SafeAnchor, {
+  }, /*#__PURE__*/external_React_default().createElement("a", {
     className: "watch-live-modal-row-link",
-    url: stream.url,
-    onLinkClick: handleClick
+    href: safeStreamUrl(stream.url),
+    target: "_blank",
+    rel: "noopener noreferrer",
+    onClick: handleClick
   }, /*#__PURE__*/external_React_default().createElement("span", {
     className: "watch-live-modal-row-text"
   }, /*#__PURE__*/external_React_default().createElement("span", {
@@ -16871,10 +18546,15 @@ function WatchLiveModal({
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-// FIFA team code to ISO 3166-1 alpha-2 region code accepted by
+// Team code to ISO 3166-1 alpha-2 region code accepted by
 // Intl.DisplayNames. Covers the 43 qualified 2026 World Cup teams not
 // in FLUENT_OVERRIDE_KEYS (see useLocalizedTeamNames.jsx). Teams Merino
 // sends that are in neither map fall back to team.name.
+//
+// Production Merino sends a mix of FIFA codes and ISO 3166-1 alpha-3
+// codes (and a couple of non-standard ones like CVI for Cabo Verde),
+// so for teams where the two differ we list both keys mapping to the
+// same alpha-2 — that way the lookup hits whichever the API delivers.
 const TEAM_REGION_CODES = {
   ALG: "DZ",
   ARG: "AR",
@@ -16883,10 +18563,12 @@ const TEAM_REGION_CODES = {
   BEL: "BE",
   BRA: "BR",
   CAN: "CA",
+  CHE: "CH",
   COL: "CO",
   CPV: "CV",
   CRO: "HR",
   CUW: "CW",
+  CVI: "CV",
   CZE: "CZ",
   ECU: "EC",
   EGY: "EG",
@@ -16895,6 +18577,7 @@ const TEAM_REGION_CODES = {
   GER: "DE",
   GHA: "GH",
   HAI: "HT",
+  HRV: "HR",
   IRN: "IR",
   IRQ: "IQ",
   JOR: "JO",
@@ -16904,11 +18587,13 @@ const TEAM_REGION_CODES = {
   MAR: "MA",
   MEX: "MX",
   NED: "NL",
+  NLD: "NL",
   NOR: "NO",
   NZL: "NZ",
   PAN: "PA",
   PAR: "PY",
   POR: "PT",
+  PRT: "PT",
   QAT: "QA",
   RSA: "ZA",
   SEN: "SN",
@@ -16917,6 +18602,7 @@ const TEAM_REGION_CODES = {
   TUN: "TN",
   TUR: "TR",
   URU: "UY",
+  URY: "UY",
   USA: "US",
   UZB: "UZ",
 };
@@ -16929,11 +18615,18 @@ const TEAM_REGION_CODES = {
 
 
 
-// FIFA team codes whose localized names must come from Fluent because
+// Team codes whose localized names must come from Fluent because
 // Intl.DisplayNames cannot produce a usable result: England and Scotland
 // have no ISO 3166-1 code, and Bosnia and Herzegovina / Ivory Coast /
 // DR Congo differ in wording from what UX wants to show.
-const FLUENT_OVERRIDE_KEYS = new Set(["BIH", "CIV", "COD", "ENG", "SCO"]);
+//
+// CDR is the non-standard key the production Merino API uses for
+// DR Congo; it aliases to COD's Fluent string via FLUENT_OVERRIDE_ALIASES
+// so we don't ship a duplicate string.
+const FLUENT_OVERRIDE_KEYS = new Set(["BIH", "CDR", "CIV", "COD", "ENG", "SCO"]);
+const FLUENT_OVERRIDE_ALIASES = {
+  CDR: "COD"
+};
 
 /**
  * Resolves localized country names for `teams`. Returns `null` until
@@ -16954,9 +18647,9 @@ function useLocalizedTeamNames(teams) {
       // The override strings ship as attribute-only Fluent messages
       // (`.label = ...`), so we use formatMessages and read the label
       // attribute rather than formatValues (which would return null).
-      const messages = overrideKeys.length ? await document.l10n.formatMessages(overrideKeys.map(key => ({
-        id: `newtab-sports-widget-team-name-label-${key.toLowerCase()}`
-      }))) : [];
+      const messages = overrideKeys.length && (await document.l10n?.formatMessages?.(overrideKeys.map(key => ({
+        id: `newtab-sports-widget-team-name-label-${(FLUENT_OVERRIDE_ALIASES[key] || key).toLowerCase()}`
+      })))) || [];
       if (cancelled) {
         return;
       }
@@ -17011,15 +18704,16 @@ function useTbdTeamName() {
 // group phase; any other value signals a knockout stage.
 const GROUP_STAGE_LABEL = "Group Stage";
 
-// Map from the literal `match.stage` string Merino sends for each
-// knockout phase to the corresponding Fluent message ID. Expected
-// spellings, not yet observed in production (tournament hasn't reached
-// knockouts at time of writing).
+// Map from the literal `match.stage` string Merino sends for each knockout
+// phase to the corresponding Fluent message ID. The third-place match is sent
+// as "3rd Place"; "Bronze Final" is kept as a defensive alias for the same
+// label.
 const KNOCKOUT_STAGE_L10N_IDS = {
   "Round of 32": "newtab-sports-widget-round-32",
   "Round of 16": "newtab-sports-widget-round-16",
   "Quarter-finals": "newtab-sports-widget-quarter-finals",
   "Semi-finals": "newtab-sports-widget-semi-finals",
+  "3rd Place": "newtab-sports-widget-bronze-finals",
   "Bronze Final": "newtab-sports-widget-bronze-finals",
   Final: "newtab-sports-widget-final",
 };
@@ -17089,6 +18783,229 @@ function groupMatchesBySection(matches) {
   return sections;
 }
 
+;// CONCATENATED MODULE: ./content-src/components/Widgets/SportsWidget/matchResult.mjs
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
+
+// Resolves the winning team's `key` for a finished match, or null for a draw.
+// home_score/away_score already include extra-time goals; a penalty shootout
+// decides it when the score is level.
+const getMatchWinnerKey = match => {
+  if (!match) {
+    return null;
+  }
+  const homeScore = match.home_score || 0;
+  const awayScore = match.away_score || 0;
+  if (homeScore > awayScore) {
+    return match.home_team.key;
+  }
+  if (awayScore > homeScore) {
+    return match.away_team.key;
+  }
+  // Level aggregate: a shootout decides it only when both penalty scores are
+  // present (mirrors the SportsMatchRow `hasPenalties` guard).
+  const hasPenalties =
+    match.home_penalty !== null &&
+    match.home_penalty !== undefined &&
+    match.away_penalty !== null &&
+    match.away_penalty !== undefined;
+  if (hasPenalties && match.home_penalty !== match.away_penalty) {
+    return match.home_penalty > match.away_penalty
+      ? match.home_team.key
+      : match.away_team.key;
+  }
+  return null;
+};
+
+// Accept both observed names for the third-place match.
+const FINAL_STAGES = new Set(["final"]);
+const BRONZE_FINAL_STAGES = new Set(["3rd place", "bronze final"]);
+
+const isFinalStage = stage => FINAL_STAGES.has(stage?.toLowerCase());
+
+const isBronzeFinalStage = stage =>
+  BRONZE_FINAL_STAGES.has(stage?.toLowerCase());
+
+// "past" is expected; the aliases keep just-ended current-bucket matches safe.
+const FINISHED_STATUS_TYPES = new Set(["past", "final", "ended"]);
+
+const resolveWinnerLoser = match => {
+  const winnerKey = getMatchWinnerKey(match);
+  if (!winnerKey) {
+    return null;
+  }
+  const homeWon = winnerKey === match.home_team.key;
+  return {
+    winner: homeWon ? match.home_team : match.away_team,
+    loser: homeWon ? match.away_team : match.home_team,
+  };
+};
+
+const getTournamentPlacements = matches => {
+  const placements = { champion: null, runnerUp: null, third: null };
+  if (!matches?.length) {
+    return placements;
+  }
+  const finalMatch = matches.find(match => isFinalStage(match?.stage));
+  const finalResult = resolveWinnerLoser(finalMatch);
+  if (finalResult) {
+    placements.champion = { team: finalResult.winner, match: finalMatch };
+    placements.runnerUp = { team: finalResult.loser, match: finalMatch };
+  }
+  const bronzeMatch = matches.find(match => isBronzeFinalStage(match?.stage));
+  const bronzeResult = resolveWinnerLoser(bronzeMatch);
+  if (bronzeResult) {
+    placements.third = { team: bronzeResult.winner, match: bronzeMatch };
+  }
+  return placements;
+};
+
+// Include finished current-bucket matches; the backend may not resync them to
+// `previous` immediately.
+const getFinishedTournamentMatches = (rawMatches = {}) => {
+  const previous = rawMatches?.previous ?? [];
+  const current = rawMatches?.current ?? [];
+  return [
+    ...previous,
+    ...current.filter(match =>
+      FINISHED_STATUS_TYPES.has(match?.status_type?.toLowerCase())
+    ),
+  ];
+};
+
+;// CONCATENATED MODULE: ./content-src/components/Widgets/SportsWidget/SportsResultCelebration.jsx
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
+
+
+
+
+// Alpha-channel WebM mascots (full-widget-frame, fox pre-composited) with a
+// static first-frame poster so kit is in place before playback starts.
+const CHAMPION_MASCOT = "chrome://newtab/content/data/content/assets/kit-champion.webm";
+const CHAMPION_MASCOT_POSTER = "chrome://newtab/content/data/content/assets/kit-champion.png";
+const DEFAULT_MASCOT = "chrome://newtab/content/data/content/assets/kit-default.webm";
+const DEFAULT_MASCOT_POSTER = "chrome://newtab/content/data/content/assets/kit-default.png";
+const SINGLE_PLACEMENT_LABELS = {
+  champion: {
+    large: "newtab-sports-widget-world-cup-champions",
+    medium: "newtab-sports-widget-world-cup-champions-short"
+  },
+  runnerUp: {
+    large: "newtab-sports-widget-runner-up",
+    medium: "newtab-sports-widget-runner-up"
+  },
+  third: {
+    large: "newtab-sports-widget-third-place",
+    medium: "newtab-sports-widget-third-place"
+  }
+};
+const PODIUM_LABELS = {
+  champion: "newtab-sports-widget-champions",
+  runnerUp: "newtab-sports-widget-runner-up",
+  third: "newtab-sports-widget-third-place"
+};
+const ResultTeam = ({
+  team,
+  teamName,
+  labelL10nId,
+  variant
+}) => /*#__PURE__*/external_React_default().createElement("div", {
+  className: `sports-result-team sports-result-team-${variant}`
+}, /*#__PURE__*/external_React_default().createElement("span", {
+  className: "sports-result-flag-wrapper"
+}, /*#__PURE__*/external_React_default().createElement("img", {
+  className: "sports-result-flag",
+  src: team.icon_url,
+  alt: teamName,
+  title: teamName
+})), /*#__PURE__*/external_React_default().createElement("span", {
+  className: "sports-result-text"
+}, /*#__PURE__*/external_React_default().createElement("span", {
+  className: "sports-result-name"
+}, teamName), /*#__PURE__*/external_React_default().createElement("span", {
+  className: "sports-result-placement",
+  "data-l10n-id": labelL10nId
+})));
+const displayName = (team, localizedNames) => localizedNames?.[team.key] ?? team.name;
+const SportsResultCard = ({
+  team,
+  type = "champion",
+  size = "large",
+  finalMatch = null,
+  finalMatchVariant = "upcoming",
+  tbdTeamName = "",
+  localizedNames = null
+}) => {
+  const labels = SINGLE_PLACEMENT_LABELS[type] ?? SINGLE_PLACEMENT_LABELS.champion;
+  return /*#__PURE__*/external_React_default().createElement("div", {
+    className: `sports-result-card sports-result-card-${type} sports-result-card-${size}`
+  }, /*#__PURE__*/external_React_default().createElement("div", {
+    className: "sports-result-surface"
+  }, /*#__PURE__*/external_React_default().createElement(ResultTeam, {
+    team: team,
+    teamName: displayName(team, localizedNames),
+    variant: type,
+    labelL10nId: labels[size] ?? labels.large
+  }), finalMatch ? /*#__PURE__*/external_React_default().createElement("div", {
+    className: "sports-result-final"
+  }, /*#__PURE__*/external_React_default().createElement("p", {
+    className: "sports-result-final-label",
+    "data-l10n-id": "newtab-sports-widget-final"
+  }), /*#__PURE__*/external_React_default().createElement(SportsMatchRow, {
+    match: finalMatch,
+    variant: finalMatchVariant,
+    size: size,
+    tbdTeamName: tbdTeamName
+  })) : null));
+};
+const SportsPodium = ({
+  placements,
+  localizedNames = null
+}) => /*#__PURE__*/external_React_default().createElement("div", {
+  className: "sports-podium"
+}, /*#__PURE__*/external_React_default().createElement("div", {
+  className: "sports-result-surface sports-podium-surface"
+}, /*#__PURE__*/external_React_default().createElement(ResultTeam, {
+  team: placements.champion.team,
+  teamName: displayName(placements.champion.team, localizedNames),
+  variant: "podium-champion",
+  labelL10nId: PODIUM_LABELS.champion
+}), /*#__PURE__*/external_React_default().createElement(ResultTeam, {
+  team: placements.runnerUp.team,
+  teamName: displayName(placements.runnerUp.team, localizedNames),
+  variant: "podium-runner-up",
+  labelL10nId: PODIUM_LABELS.runnerUp
+}), /*#__PURE__*/external_React_default().createElement(ResultTeam, {
+  team: placements.third.team,
+  teamName: displayName(placements.third.team, localizedNames),
+  variant: "podium-third",
+  labelL10nId: PODIUM_LABELS.third
+})));
+const SportsResultMascot = ({
+  animationId = 0,
+  view
+}) => {
+  const isChampion = view === "champion";
+  const src = isChampion ? CHAMPION_MASCOT : DEFAULT_MASCOT;
+  const poster = isChampion ? CHAMPION_MASCOT_POSTER : DEFAULT_MASCOT_POSTER;
+  // Remount per celebration (key) so playback restarts from the first frame.
+  return /*#__PURE__*/external_React_default().createElement("video", {
+    key: animationId,
+    className: `sports-result-mascot sports-result-mascot-${view}`,
+    src: src,
+    poster: poster,
+    autoPlay: true,
+    loop: true,
+    muted: true,
+    playsInline: true,
+    preload: "auto",
+    "aria-hidden": "true",
+    tabIndex: -1
+  });
+};
 ;// CONCATENATED MODULE: ./content-src/components/Widgets/SportsWidget/SportsWidget.jsx
 function SportsWidget_extends() { return SportsWidget_extends = Object.assign ? Object.assign.bind() : function (n) { for (var e = 1; e < arguments.length; e++) { var t = arguments[e]; for (var r in t) ({}).hasOwnProperty.call(t, r) && (n[r] = t[r]); } return n; }, SportsWidget_extends.apply(null, arguments); }
 /* This Source Code Form is subject to the terms of the Mozilla Public
@@ -17096,6 +19013,11 @@ function SportsWidget_extends() { return SportsWidget_extends = Object.assign ? 
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 // eslint-disable-next-line no-unused-vars
+
+
+
+
+
 
 
 
@@ -17118,6 +19040,8 @@ const MATCHES_TABS = {
   NOW: "now",
   UPCOMING: "upcoming"
 };
+const SPORTS_CELEBRATION_ILLUSTRATION = "chrome://newtab/content/data/content/assets/firefox-motion-head-pop-up-no-bg.svg";
+const SPORTS_RESULT_CONFETTI_COLORS = ["var(--color-orange-30)", "var(--color-pink-30)", "var(--color-purple-30)", "var(--color-yellow-30)", "var(--color-green-30)", "var(--color-cyan-30)"];
 function getVisibleMatchesTabs(hasLiveGames, hasPreviousResults) {
   return Object.values(MATCHES_TABS)
   // Only show the Now tab when there are live games.
@@ -17137,12 +19061,26 @@ const SportsWidget_USER_ACTION_TYPES = {
   CHANGE_SIZE: "change_size",
   CHANGE_TAB: "change_tab",
   LEARN_MORE: "learn_more",
-  TOGGLE_FOLLOWED_ONLY: "toggle_followed_only"
+  TOGGLE_FOLLOWED_ONLY: "toggle_followed_only",
+  REFRESH_LIVE: "refresh_live"
 };
+
+// UI-side cooldown between successive clicks of the live refresh button. Must
+// match (or exceed) the MIN_MANUAL_REFRESH_MS floor enforced by SportsFeed —
+// the feed silently drops faster requests, so a shorter button cooldown would
+// surface as a no-op click.
+const LIVE_REFRESH_COOLDOWN_MS = 15000;
+
+// Minimum time the refresh icon spins after a click, so even an instant /live
+// response still reads as "something happened" rather than a flicker.
+const LIVE_REFRESH_MIN_SPIN_MS = 2000;
 const SportsWidget_PREF_NOVA_ENABLED = "nova.enabled";
 const SportsWidget_PREF_SPORTS_WIDGET_SIZE = "widgets.sportsWidget.size";
 const PREF_SPORTS_WIDGET_LIVE_ENABLED = "widgets.sportsWidget.live.enabled";
 const PREF_FORCE_LIVE_DATA_TRUSTABLE = "widgets.sports.forceLiveDataTrustable";
+const PREF_SPORTS_CELEBRATIONS_ENABLED = "widgets.sportsWidget.celebrations.enabled";
+const PREF_SPORTS_CELEBRATIONS_WINDOW_MS = "widgets.sportsWidget.celebrations.windowMs";
+const DEFAULT_CELEBRATION_WINDOW_MS = 86400000; // 24 hours
 
 // World Cup 2026 kickoff: June 11, 2026 at 19:00 UTC. Used as a temporary
 // guard to ignore /live data while the endpoint still serves mock matches
@@ -17168,6 +19106,61 @@ function sortFollowedFirst(matches, selectedTeamsSet) {
     }
     return a.index - b.index;
   }).map(entry => entry.match);
+}
+
+// The match that most recently ended and is still eligible to celebrate:
+// within the window and not yet celebrated. Keyed off the feed's `endedAt`
+// stamp rather than the display order, so the celebration targets the match
+// that actually ended even when it isn't the top result. Searches finished
+// (previous) and current matches, since a just-ended match can briefly remain
+// in `current` before the backend moves it to `previous`.
+function findCelebrationMatch(matches, celebrations, windowMs) {
+  const endedAt = celebrations?.endedAt;
+  if (!endedAt) {
+    return null;
+  }
+  const celebrated = new Set(celebrations?.celebrated ?? []);
+  const now = Date.now();
+  let best = null;
+  for (const match of matches) {
+    const id = match?.global_event_id;
+    const ts = id === null || id === undefined ? undefined : endedAt[id];
+    if (!ts || now - ts >= windowMs || celebrated.has(id)) {
+      continue;
+    }
+    if (!best || ts > endedAt[best.global_event_id]) {
+      best = match;
+    }
+  }
+  return best;
+}
+
+// Live matches keep priority because the result view hides the tab bar.
+function shouldShowResultView({
+  celebrationsEnabled,
+  resultViewReady,
+  hasLiveGames,
+  isMatchesState,
+  isResultsTab,
+  showResultsList
+}) {
+  return celebrationsEnabled && resultViewReady && !hasLiveGames && isMatchesState && isResultsTab && !showResultsList;
+}
+
+// Moves the match with `id` to the front of `matches` (used to surface the
+// just-ended match as the Results highlight). No-op when it isn't present.
+function bubbleMatchToFront(matches, id) {
+  if (id === null || id === undefined) {
+    return matches;
+  }
+  const index = matches.findIndex(match => match.global_event_id === id);
+  if (index <= 0) {
+    return matches;
+  }
+  const next = [...matches];
+  const [match] = next.splice(index, 1);
+  next.unshift(match);
+  return next;
 }
 
 // Returns the match shown in the highlight view for the active tab, or null
@@ -17247,11 +19240,18 @@ function SportsWidget_SportsWidget({
   // WIDGETS_SPORTS_LIVE_VISIBLE.
   const liveEnabled = prefs[PREF_SPORTS_WIDGET_LIVE_ENABLED] || prefs.trainhopConfig?.widgets?.sportsWidgetLiveEnabled || prefs.trainhopConfig?.sports?.liveEnabled;
   const widgetsMayBeMaximized = prefs["widgets.system.maximized"];
+  const widgetsMaximized = prefs["widgets.maximized"];
   // /live currently serves mock data pre-kickoff, so ignore its contents
   // until the kickoff timestamp. Drop this guard once the backend returns
   // empty pre-kickoff.
   const liveDataTrustable = Date.now() >= WORLD_CUP_KICKOFF_MS || prefs[PREF_FORCE_LIVE_DATA_TRUSTABLE];
   const hasLiveGames = liveDataTrustable && sportsWidgetData?.data?.live?.length > 0;
+  // The watch-links endpoint only lists broadcasters for supported countries.
+  // The backend hoists the user's own country into `your_region`, so a
+  // non-empty `your_region` means the user's region is supported and the
+  // "Watch live" entry point should be shown; an empty one (e.g. Turkey) hides
+  // it.
+  const canWatchLive = sportsWidgetData?.watchLive?.data?.your_region?.length > 0;
   const hasPreviousResults = sportsWidgetData?.data?.matches?.previous?.length > 0;
   // Upcoming matches alone don't mean the tournament has started — the backend
   // surfaces them within a +/-21 day window around kickoff, so they appear
@@ -17268,11 +19268,17 @@ function SportsWidget_SportsWidget({
   const rawLive = liveDataTrustable ? sportsWidgetData?.data?.live : null;
   const selectedTeams = (0,external_React_namespaceObject.useMemo)(() => rawSelectedTeams || [], [rawSelectedTeams]);
   const teams = (0,external_React_namespaceObject.useMemo)(() => rawTeams ?? [], [rawTeams]);
+  const localizedNames = useLocalizedTeamNames(teams);
   const {
     matchesTab
   } = sportsWidgetData;
   const hasUserSelectedTab = (0,external_React_namespaceObject.useRef)(false);
-  const activeTab = hasLiveGames && !hasUserSelectedTab.current ? MATCHES_TABS.NOW : matchesTab;
+  // When the Now tab disappears (live games ended), the persisted `matchesTab`
+  // may still be "now". That would hide every panel and leave the widget
+  // blank with no tab visibly selected. Fall back to "Upcoming" so the next
+  // matches show by default.
+  const resolvedMatchesTab = matchesTab === MATCHES_TABS.NOW && !hasLiveGames ? MATCHES_TABS.UPCOMING : matchesTab;
+  const activeTab = hasLiveGames && !hasUserSelectedTab.current ? MATCHES_TABS.NOW : resolvedMatchesTab;
 
   // Defensive clamp on the persisted live-pager index. The feed re-clamps
   // after every fetch, but the restored cached index may briefly exceed the
@@ -17308,8 +19314,27 @@ function SportsWidget_SportsWidget({
     return map;
   }, [teams]);
 
+  // Celebration window (trainhop > pref > default) and the match that just
+  // ended, keyed off the feed's `endedAt` stamp rather than the display order.
+  // It's surfaced as the Results highlight (below) and consumed by the
+  // celebration trigger, so the celebration targets the match that actually
+  // ended even when it isn't the top result.
+  const {
+    celebrations
+  } = sportsWidgetData;
+  const celebrationWindowMs = prefs.trainhopConfig?.sportsCelebrations?.windowMs ?? prefs.trainhopConfig?.widgets?.sportsWidgetCelebrationsWindowMs ?? prefs.trainhopConfig?.sports?.celebrationsWindowMs ?? prefs[PREF_SPORTS_CELEBRATIONS_WINDOW_MS] ?? DEFAULT_CELEBRATION_WINDOW_MS;
+  const celebrationMatch = (0,external_React_namespaceObject.useMemo)(() => findCelebrationMatch([...(rawMatches?.previous ?? []), ...(rawMatches?.current ?? [])], celebrations, celebrationWindowMs), [rawMatches, celebrations, celebrationWindowMs]);
+  const placements = (0,external_React_namespaceObject.useMemo)(() => getTournamentPlacements(getFinishedTournamentMatches(rawMatches)), [rawMatches]);
+  const tournamentDecided = !!placements.champion;
+  const finalMatch = (0,external_React_namespaceObject.useMemo)(() => {
+    const all = [...(rawMatches?.next ?? []), ...(rawMatches?.current ?? []), ...(rawMatches?.previous ?? [])];
+    return all.find(match => isFinalStage(match?.stage)) ?? null;
+  }, [rawMatches]);
+
   // Bubble followed teams to the front for the highlight view and list view
   // when the followed-only toggle is on; with it off, matches stay chronological.
+  // The just-ended celebration match always bubbles to the very front so the
+  // celebration plays over its result.
   const resultsFollowedOnly = sportsWidgetData.followedOnly?.results ?? true;
   const upcomingFollowedOnly = sportsWidgetData.followedOnly?.upcoming ?? true;
   const {
@@ -17320,11 +19345,11 @@ function SportsWidget_SportsWidget({
     const previous = rawMatches?.previous ?? [];
     const next = rawMatches?.next ?? [];
     return {
-      sortedPrevious: resultsFollowedOnly ? sortFollowedFirst(previous, selectedTeamsSet) : previous,
+      sortedPrevious: bubbleMatchToFront(resultsFollowedOnly ? sortFollowedFirst(previous, selectedTeamsSet) : previous, celebrationMatch?.global_event_id),
       sortedCurrent: sortFollowedFirst(rawLive ?? [], selectedTeamsSet),
       sortedNext: upcomingFollowedOnly ? sortFollowedFirst(next, selectedTeamsSet) : next
     };
-  }, [rawMatches, rawLive, selectedTeamsSet, resultsFollowedOnly, upcomingFollowedOnly]);
+  }, [rawMatches, rawLive, selectedTeamsSet, resultsFollowedOnly, upcomingFollowedOnly, celebrationMatch]);
 
   // List-view toggle states for the Results and Upcoming tabs are lifted up
   // here so we can tell whether a highlight match is currently visible (for
@@ -17332,6 +19357,16 @@ function SportsWidget_SportsWidget({
   // can force the widget into the large size while the list view is open.
   const [showResultsList, setShowResultsList] = (0,external_React_namespaceObject.useState)(false);
   const [showUpcomingList, setShowUpcomingList] = (0,external_React_namespaceObject.useState)(false);
+
+  // Close any open "View All" when the user minimizes the widgets section,
+  // so the Sports widget size also changes from Large to Medium. The Follow
+  // teams flow stays open — closing it would discard in-progress selections.
+  (0,external_React_namespaceObject.useEffect)(() => {
+    if (!widgetsMaximized) {
+      setShowResultsList(false);
+      setShowUpcomingList(false);
+    }
+  }, [widgetsMaximized]);
 
   // Expand the widget to the large size when the user opens the match list
   // view ("View all") on either the Results or Upcoming tab, and restore the
@@ -17398,6 +19433,161 @@ function SportsWidget_SportsWidget({
   // gate flips and the article appears for the first time). widgetRef is a
   // stable useRef and can't drive re-runs on its own.
   const [liveEl, setLiveEl] = (0,external_React_namespaceObject.useState)(null);
+
+  // End-of-match celebration.
+  const celebrationRef = (0,external_React_namespaceObject.useRef)(null);
+  const {
+    celebrationFrame,
+    celebrationId,
+    completeCelebration,
+    isCelebrating,
+    triggerCelebration
+  } = useWidgetCelebration(celebrationRef);
+  const [celebrationColors, setCelebrationColors] = (0,external_React_namespaceObject.useState)(null);
+  const {
+    celebrationFrame: resultFrame,
+    celebrationId: resultCelebrationId,
+    completeCelebration: completeResultCelebration,
+    isCelebrating: isResultCelebrating,
+    triggerCelebration: triggerResultCelebration
+  } = useWidgetCelebration(celebrationRef);
+  // Seam consumed by the detection layer (Patch 2): a followed-team win passes
+  // that team's colors; any other ended match passes none (generic). Celebrations
+  // are off by default and opt-in via the pref OR trainhopConfig, so they ship
+  // dark and can be enabled remotely without risking the rest of the widget.
+  // Canonical trainhop key is the dedicated trainhopConfig.sportsCelebrations
+  // namespace; the widgets/sports reads remain as fallbacks.
+  /**
+   * @backward-compat { version 153 }
+   * The trainhopConfig namespace migrated from the nested sports.* keys to the
+   * flat widgets.sportsWidget* keys (D303931). This celebration ships via the
+   * newtab XPI (train-hop), so it can run on a Firefox serving either
+   * namespace — read both. Remove the legacy
+   * trainhopConfig.sports.celebrationsEnabled read once 153 reaches Release.
+   */
+  const celebrationsEnabled = prefs[PREF_SPORTS_CELEBRATIONS_ENABLED] || prefs.trainhopConfig?.sportsCelebrations?.enabled || prefs.trainhopConfig?.widgets?.sportsWidgetCelebrationsEnabled || prefs.trainhopConfig?.sports?.celebrationsEnabled;
+  const celebrate = (0,external_React_namespaceObject.useCallback)((kind, colors = null) => {
+    if (!celebrationsEnabled) {
+      return;
+    }
+    setCelebrationColors(kind === "followed" ? colors : null);
+    triggerCelebration();
+  }, [triggerCelebration, celebrationsEnabled]);
+
+  // Celebration trigger: fire once for the match that just ended (the freshest
+  // endedAt within the window, surfaced as the Results highlight above) when
+  // the user is viewing the Results tab with the widget on-screen. Followed
+  // team won/tied -> team colors; no followed team -> generic; followed loss ->
+  // nothing. celebratedRef guards against re-firing within this session;
+  // `celebrations.celebrated` (persisted by the feed) guards across reloads.
+  const celebratedRef = (0,external_React_namespaceObject.useRef)(new Set());
+  const [isPageVisible, setIsPageVisible] = (0,external_React_namespaceObject.useState)(typeof document === "undefined" || document.visibilityState === "visible");
+  (0,external_React_namespaceObject.useEffect)(() => {
+    const onVisibility = () => setIsPageVisible(document.visibilityState === "visible");
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, []);
+  // Whether the widget itself is scrolled into view. Gating consumption on this
+  // (in addition to isPageVisible) prevents an off-screen widget from spending
+  // the one-shot celebration before the user can see it. Starts false so a
+  // never-observed widget can't fire; the observer reports the real state on
+  // attach. (isPageVisible is still needed: a backgrounded tab keeps reporting
+  // the element as intersecting.)
+  const [isWidgetVisible, setIsWidgetVisible] = (0,external_React_namespaceObject.useState)(false);
+  (0,external_React_namespaceObject.useEffect)(() => {
+    if (!celebrationsEnabled || !liveEl) {
+      return undefined;
+    }
+    const observer = new IntersectionObserver(([entry]) => setIsWidgetVisible(entry.isIntersecting), {
+      threshold: 0.3
+    });
+    observer.observe(liveEl);
+    return () => observer.disconnect();
+  }, [celebrationsEnabled, liveEl]);
+  (0,external_React_namespaceObject.useEffect)(() => {
+    if (!celebrationsEnabled || !isPageVisible || !isWidgetVisible || widgetState !== WIDGET_STATES.MATCHES || activeTab !== MATCHES_TABS.RESULTS || showResultsList) {
+      return;
+    }
+    const match = celebrationMatch;
+    if (!match || celebratedRef.current.has(match.global_event_id)) {
+      return;
+    }
+    // The result view handles Final and Bronze Final celebrations.
+    if (isFinalStage(match.stage) || isBronzeFinalStage(match.stage)) {
+      return;
+    }
+    const id = match.global_event_id;
+    const winnerKey = getMatchWinnerKey(match);
+    const homeKey = match.home_team.key;
+    const awayKey = match.away_team.key;
+    // Ownership uses the raw saved selections, not selectedTeamsSet (which
+    // drops eliminated teams). A followed team's knockout loss eliminates it,
+    // so selectedTeamsSet would make it look unfollowed and fire the generic
+    // celebration instead of suppressing it.
+    const homeFollowed = selectedTeams.includes(homeKey);
+    const awayFollowed = selectedTeams.includes(awayKey);
+    let followedKey = null;
+    if (homeFollowed && awayFollowed) {
+      // Both followed: celebrate the winner (home on a draw).
+      followedKey = winnerKey || homeKey;
+    } else if (homeFollowed) {
+      followedKey = homeKey;
+    } else if (awayFollowed) {
+      followedKey = awayKey;
+    }
+    // Consume the event up front so it never re-fires (and a suppressed
+    // followed loss can't replay as a generic celebration after an unfollow).
+    celebratedRef.current.add(id);
+    dispatch(actionCreators.AlsoToMain({
+      type: actionTypes.WIDGETS_SPORTS_MARK_CELEBRATED,
+      data: id
+    }));
+    // A followed team that lost gets no animation (ties count as a win).
+    if (followedKey && winnerKey && winnerKey !== followedKey) {
+      return;
+    }
+    if (followedKey) {
+      celebrate("followed", teamColorsByKey.get(followedKey));
+    } else {
+      celebrate("generic");
+    }
+  }, [celebrationsEnabled, isPageVisible, isWidgetVisible, widgetState, activeTab, showResultsList, celebrationMatch, selectedTeams, teamColorsByKey, celebrate, dispatch]);
+  const resultViewReady = tournamentDecided || !!placements.third;
+  let resultTriggerId = null;
+  if (tournamentDecided) {
+    const {
+      match,
+      team
+    } = placements.champion;
+    resultTriggerId = `final:${match.global_event_id}:${team.key}`;
+  } else if (placements.third) {
+    const {
+      match,
+      team
+    } = placements.third;
+    resultTriggerId = `third:${match.global_event_id}:${team.key}`;
+  }
+  const showResultView = shouldShowResultView({
+    celebrationsEnabled,
+    resultViewReady,
+    hasLiveGames,
+    isMatchesState: widgetState === WIDGET_STATES.MATCHES,
+    isResultsTab: activeTab === MATCHES_TABS.RESULTS,
+    showResultsList
+  });
+  // The result mascot is an animated WebP that can't be paused, so don't render
+  // it for reduced-motion users (the confetti/fireworks overlay is suppressed
+  // the same way in useWidgetCelebration). The static result card still shows.
+  const prefersReducedMotion = globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+  // Visibility-gated so an off-screen widget can't spend the one-shot animation.
+  const resultCelebratedRef = (0,external_React_namespaceObject.useRef)(null);
+  (0,external_React_namespaceObject.useEffect)(() => {
+    if (!showResultView || !resultTriggerId || !isPageVisible || !isWidgetVisible || resultCelebratedRef.current === resultTriggerId) {
+      return;
+    }
+    resultCelebratedRef.current = resultTriggerId;
+    triggerResultCelebration();
+  }, [showResultView, resultTriggerId, isPageVisible, isWidgetVisible, triggerResultCelebration]);
 
   // Live polling visibility gate. Separate from the one-shot impression
   // observer above (which unobserves after the first intersect) — this one
@@ -17535,26 +19725,6 @@ function SportsWidget_SportsWidget({
     });
     handleInteraction();
   }
-  function handleSportsWidgetHide() {
-    (0,external_ReactRedux_namespaceObject.batch)(() => {
-      dispatch(actionCreators.OnlyToMain({
-        type: actionTypes.SET_PREF,
-        data: {
-          name: "widgets.sportsWidget.enabled",
-          value: false
-        }
-      }));
-      dispatch(actionCreators.OnlyToMain({
-        type: actionTypes.WIDGETS_ENABLED,
-        data: {
-          widget_name: "sports",
-          widget_source: "context_menu",
-          enabled: false,
-          widget_size: widgetSize
-        }
-      }));
-    });
-  }
   const handleChangeSize = (0,external_React_namespaceObject.useCallback)(size => {
     (0,external_ReactRedux_namespaceObject.batch)(() => {
       dispatch(actionCreators.OnlyToMain({
@@ -17576,7 +19746,6 @@ function SportsWidget_SportsWidget({
       }));
     });
   }, [dispatch]);
-  const sizeSubmenuRef = useSizeSubmenu(handleChangeSize);
   function handleViewMatches(widgetSource) {
     (0,external_ReactRedux_namespaceObject.batch)(() => {
       dispatch(actionCreators.OnlyToMain({
@@ -17596,24 +19765,15 @@ function SportsWidget_SportsWidget({
     handleInteraction();
   }
   function handleLearnMore() {
-    (0,external_ReactRedux_namespaceObject.batch)(() => {
-      dispatch(actionCreators.OnlyToMain({
-        type: actionTypes.OPEN_LINK,
-        data: {
-          url: "https://support.mozilla.org/kb/firefox-new-tab-widgets"
-        }
-      }));
-      const telemetryData = {
+    dispatch(actionCreators.OnlyToMain({
+      type: actionTypes.WIDGETS_USER_EVENT,
+      data: {
         widget_name: "sports",
         widget_source: "context_menu",
         user_action: SportsWidget_USER_ACTION_TYPES.LEARN_MORE,
         widget_size: widgetSize
-      };
-      dispatch(actionCreators.OnlyToMain({
-        type: actionTypes.WIDGETS_USER_EVENT,
-        data: telemetryData
-      }));
-    });
+      }
+    }));
     handleInteraction();
   }
 
@@ -17666,19 +19826,88 @@ function SportsWidget_SportsWidget({
         data: tab
       }));
     });
-  }, [dispatch, widgetSize, activeTab]);
+    handleInteraction();
+  }, [dispatch, widgetSize, activeTab, handleInteraction]);
 
   // @nova-cleanup(remove-gate): Remove this guard and PREF_NOVA_ENABLED after Nova ships
   if (!prefs[SportsWidget_PREF_NOVA_ENABLED]) {
     return null;
   }
-  return /*#__PURE__*/external_React_default().createElement("article", SportsWidget_extends({
-    className: `sports widget col-4 ${displaySize}-widget ${widgetState}${followedGradient ? " is-followed-highlight" : ""}`,
-    style: followedGradient ? {
+
+  // A followed-team celebration (team colors passed) gets a 2px linear-gradient
+  // border in the followed team's colors instead of the generic animated
+  // stroke. The gradient feeds --sports-celebration-border-gradient.
+  const isFollowedCelebration = isCelebrating && !!celebrationColors?.length;
+  // `to right` keeps the gradient's midpoint centered (green left -> white
+  // center -> red right), matching the followed-highlight border.
+  const celebrationBorderGradient = celebrationColors?.length ? `linear-gradient(to right, ${celebrationColors.join(", ")})` : null;
+  const widgetStyle = {
+    ...(followedGradient && {
       "--sports-followed-gradient": followedGradient
-    } : undefined,
+    }),
+    ...(celebrationBorderGradient && {
+      "--sports-celebration-border-gradient": celebrationBorderGradient
+    })
+  };
+
+  // Result-view selection:
+  //  - Interim (3rd Place decided, Final not yet played): the third-place card,
+  //    shown to everyone.
+  //  - Final decided: a follower of the runner-up team gets the full podium
+  //    (their team's moment); everyone else gets the champion card. The podium
+  //    only fits the large widget, so it falls back to the champion card at
+  //    medium. `selectedTeams` (not the eliminated-filtered set) is used so the
+  //    runner-up — eliminated by losing the Final — still counts as followed.
+  const pickResultView = () => {
+    if (!placements.champion) {
+      return placements.third ? "third" : null;
+    }
+    const followsRunnerUp = !!placements.runnerUp && selectedTeams.includes(placements.runnerUp.team.key);
+    if (followsRunnerUp && placements.third && displaySize === "large") {
+      return "podium";
+    }
+    return "champion";
+  };
+  const resultView = showResultView ? pickResultView() : null;
+  // Confetti/fireworks take the celebrated team's colors: the third-place team
+  // (interim), the runner-up (their podium), otherwise the champion.
+  let resultHeroTeam = placements.champion?.team;
+  if (resultView === "third") {
+    resultHeroTeam = placements.third?.team;
+  } else if (resultView === "podium") {
+    resultHeroTeam = placements.runnerUp?.team;
+  }
+  const resultConfettiColors = resultHeroTeam && teamColorsByKey.get(resultHeroTeam.key) || SPORTS_RESULT_CONFETTI_COLORS;
+  let resultBody = null;
+  if (resultView === "podium") {
+    resultBody = /*#__PURE__*/external_React_default().createElement(SportsPodium, {
+      placements: placements,
+      localizedNames: localizedNames
+    });
+  } else if (resultView === "champion" && placements.champion) {
+    resultBody = /*#__PURE__*/external_React_default().createElement(SportsResultCard, {
+      team: placements.champion.team,
+      type: "champion",
+      size: displaySize,
+      localizedNames: localizedNames
+    });
+  } else if (resultView === "third" && placements.third) {
+    resultBody = /*#__PURE__*/external_React_default().createElement(SportsResultCard, {
+      team: placements.third.team,
+      type: "third",
+      size: displaySize,
+      finalMatch: displaySize === "large" ? finalMatch : null,
+      finalMatchVariant: "upcoming",
+      tbdTeamName: tbdTeamName,
+      localizedNames: localizedNames
+    });
+  }
+  return /*#__PURE__*/external_React_default().createElement("article", SportsWidget_extends({
+    className: `sports widget col-4 ${displaySize}-widget ${widgetState}${followedGradient ? " is-followed-highlight" : ""}${isCelebrating ? " is-celebrating" : ""}${isFollowedCelebration ? " is-followed-celebration" : ""}${resultBody ? " is-result-view" : ""}`,
+    style: widgetStyle,
     ref: el => {
       widgetRef.current = [el];
+      celebrationRef.current = el;
       setLiveEl(el);
       // Only attach the error observer when there's something to report —
       // otherwise the first intersect with no fetchError adds the target to
@@ -17691,7 +19920,27 @@ function SportsWidget_SportsWidget({
         playIntroVideo();
       }
     }
-  }, getCarouselArticleAttrs(activeTab === MATCHES_TABS.NOW && (rawLive?.length ?? 0) >= 2)), widgetState === WIDGET_STATES.INTRO && /*#__PURE__*/external_React_default().createElement("video", {
+  }, getCarouselArticleAttrs(activeTab === MATCHES_TABS.NOW && (rawLive?.length ?? 0) >= 2)), isCelebrating && celebrationFrame ? /*#__PURE__*/external_React_default().createElement(WidgetCelebration, {
+    classNamePrefix: "sports-celebration",
+    celebrationFrame: celebrationFrame,
+    celebrationId: celebrationId,
+    confettiColors: celebrationColors ?? undefined,
+    confettiShape: "soccer",
+    illustrationSrc: SPORTS_CELEBRATION_ILLUSTRATION,
+    onComplete: completeCelebration
+  }) : null, isResultCelebrating && resultFrame ? /*#__PURE__*/external_React_default().createElement(WidgetCelebration, {
+    classNamePrefix: "sports-celebration",
+    celebrationFrame: resultFrame,
+    celebrationId: resultCelebrationId,
+    confettiColors: resultConfettiColors,
+    confettiShape: "soccer",
+    confettiCount: 84,
+    fireworkBursts: 10,
+    onComplete: completeResultCelebration
+  }) : null, resultBody && resultView && !prefersReducedMotion ? /*#__PURE__*/external_React_default().createElement(SportsResultMascot, {
+    view: resultView,
+    animationId: resultCelebrationId
+  }) : null, widgetState === WIDGET_STATES.INTRO && /*#__PURE__*/external_React_default().createElement("video", {
     ref: introVideoRef,
     className: "sports-intro-video",
     muted: true,
@@ -17721,7 +19970,7 @@ function SportsWidget_SportsWidget({
       visibility: tournamentStarted ? "hidden" : "visible"
     },
     "aria-hidden": tournamentStarted
-  }), widgetState === WIDGET_STATES.MATCHES && /*#__PURE__*/external_React_default().createElement("div", {
+  }), widgetState === WIDGET_STATES.MATCHES && !resultBody && /*#__PURE__*/external_React_default().createElement("div", {
     className: "sports-matches-tabs",
     role: "tablist"
   }, getVisibleMatchesTabs(hasLiveGames, hasPreviousResults).map(({
@@ -17778,36 +20027,29 @@ function SportsWidget_SportsWidget({
     "data-l10n-id": "newtab-sports-widget-menu-view-results",
     onClick: handleViewResults,
     disabled: !hasPreviousResults
-  }), widgetsMayBeMaximized && /*#__PURE__*/external_React_default().createElement("panel-item", {
-    submenu: "sports-size-submenu"
-  }, /*#__PURE__*/external_React_default().createElement("span", {
-    "data-l10n-id": "newtab-widget-menu-change-size"
-  }), /*#__PURE__*/external_React_default().createElement("panel-list", {
-    ref: sizeSubmenuRef,
-    slot: "submenu",
-    id: "sports-size-submenu"
-  }, ["medium", "large"].map(size => /*#__PURE__*/external_React_default().createElement("panel-item", {
-    key: size,
-    type: "checkbox",
-    checked: widgetSize === size || undefined,
-    "data-size": size,
-    "data-l10n-id": `newtab-widget-size-${size}`
-  })))), /*#__PURE__*/external_React_default().createElement(MoveSubmenu, {
+  }), /*#__PURE__*/external_React_default().createElement(WidgetMenuFooter, {
+    dispatch: dispatch,
     widgetId: "sportsWidget",
-    widgetEnabledMap: widgetEnabledMap
-  }), /*#__PURE__*/external_React_default().createElement("panel-item", {
-    "data-l10n-id": "newtab-widget-menu-hide",
-    onClick: handleSportsWidgetHide
-  }), /*#__PURE__*/external_React_default().createElement("panel-item", {
-    "data-l10n-id": "newtab-sports-widget-menu-learn-more",
-    onClick: handleLearnMore
+    widgetEnabledMap: widgetEnabledMap,
+    widgetName: "sports",
+    enabledPref: "widgets.sportsWidget.enabled",
+    widgetSize: widgetSize,
+    learnMoreL10nId: "newtab-sports-widget-menu-learn-more",
+    onLearnMore: handleLearnMore,
+    sizeSubmenu: widgetsMayBeMaximized ? /*#__PURE__*/external_React_default().createElement(SizeSubmenu, {
+      submenuId: "sports-size-submenu",
+      sizes: ["medium", "large"],
+      checkedSize: widgetSize,
+      onChangeSize: handleChangeSize
+    }) : null
   })))), /*#__PURE__*/external_React_default().createElement("div", {
     className: "sports-body"
   }, widgetState === WIDGET_STATES.FOLLOW_TEAMS && /*#__PURE__*/external_React_default().createElement(SportsWidgetFollowTeams, {
     teams: teams,
     initialSelectedTeams: selectedTeams,
-    onSave: handleSaveSelection
-  }), widgetState === WIDGET_STATES.MATCHES && /*#__PURE__*/external_React_default().createElement(SportsMatchesView, {
+    onSave: handleSaveSelection,
+    localizedNames: localizedNames
+  }), widgetState === WIDGET_STATES.MATCHES && resultBody, widgetState === WIDGET_STATES.MATCHES && !resultBody && /*#__PURE__*/external_React_default().createElement(SportsMatchesView, {
     dispatch: dispatch,
     matchesTab: activeTab,
     hasLiveGames: hasLiveGames,
@@ -17818,14 +20060,18 @@ function SportsWidget_SportsWidget({
     current: sortedCurrent,
     next: sortedNext,
     liveIndex: liveIndex,
+    lastLiveUpdated: sportsWidgetData.lastLiveUpdated,
     handleInteraction: handleInteraction,
     selectedTeamsSet: selectedTeamsSet,
     tbdTeamName: tbdTeamName,
+    localizedNames: localizedNames,
     followedOnly: sportsWidgetData.followedOnly,
     showResultsList: showResultsList,
     setShowResultsList: setShowResultsList,
     showUpcomingList: showUpcomingList,
     setShowUpcomingList: setShowUpcomingList,
+    loadMore: sportsWidgetData.loadMore,
+    canWatchLive: canWatchLive,
     onWatchClick: () => setWatchLiveOpen(true)
   }), widgetState === WIDGET_STATES.KEY_DATES && /*#__PURE__*/external_React_default().createElement(SportsWidgetKeyDates, {
     handleViewMatches: handleViewMatches
@@ -17854,11 +20100,11 @@ function SportsWidget_SportsWidget({
 function SportsWidgetFollowTeams({
   teams,
   initialSelectedTeams,
-  onSave
+  onSave,
+  localizedNames
 }) {
   const [selectedTeams, setSelectedTeams] = (0,external_React_namespaceObject.useState)(initialSelectedTeams);
   const [searchQuery, setSearchQuery] = (0,external_React_namespaceObject.useState)("");
-  const localizedNames = useLocalizedTeamNames(teams);
   // Eliminated teams stay in the list (shown disabled with an "(eliminated)"
   // badge) but don't count toward the 3-team cap and aren't persisted on save
   // — otherwise the user could be stuck following a team they can no longer
@@ -17924,6 +20170,25 @@ function SportsWidgetFollowTeams({
     onClick: () => onSave(activeSelectedTeams)
   }));
 }
+
+// Controlled: `isCoolingDown`, `isSpinning` and `onClick` are owned by
+// SportsMatchesView so both the disabled state and the spin persist across the
+// medium and large widget size changes.
+function LiveRefreshButton({
+  isCoolingDown,
+  isSpinning,
+  onClick
+}) {
+  return /*#__PURE__*/external_React_default().createElement("moz-button", {
+    className: `sports-live-refresh-button${isSpinning ? " is-spinning" : ""}`,
+    type: "icon ghost",
+    size: "small",
+    iconSrc: "chrome://browser/skin/sync.svg",
+    "data-l10n-id": "newtab-custom-widget-live-refresh",
+    disabled: isCoolingDown || undefined,
+    onClick: onClick
+  });
+}
 function SportsSectionLabel({
   match,
   withLiveBadge = false
@@ -17947,6 +20212,49 @@ function SportsSectionLabel({
     "data-l10n-id": "newtab-sports-widget-live"
   })));
 }
+
+// Mounts an IntersectionObserver on a bottom-of-list sentinel element.
+// When the sentinel scrolls into the scrollable `.sports-body` ancestor
+// (or within 200px of doing so), the hook dispatches
+// WIDGETS_SPORTS_FETCH_MORE_MATCHES with the given `direction`. The
+// observer is torn down when the list collapses, when load-more is
+// exhausted, or when the sentinel element unmounts.
+//
+// - `active`: whether the list this sentinel belongs to is expanded
+// - `loading`: current in-flight flag for this direction
+// - `exhausted`: end-of-data flag for this direction
+function useLoadMoreSentinel({
+  direction,
+  sentinelRef,
+  active,
+  loading,
+  exhausted,
+  dispatch
+}) {
+  (0,external_React_namespaceObject.useEffect)(() => {
+    if (!active || exhausted || !sentinelRef.current) {
+      return undefined;
+    }
+    const sentinel = sentinelRef.current;
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting && !loading && !exhausted) {
+        dispatch(actionCreators.OnlyToMain({
+          type: actionTypes.WIDGETS_SPORTS_FETCH_MORE_MATCHES,
+          data: {
+            direction
+          }
+        }));
+      }
+    }, {
+      root: sentinel.closest(".sports-body"),
+      // Fire the fetch when the sentinel is within 200px of being
+      // visible, not only once it's actually on screen.
+      rootMargin: "200px 0px"
+    });
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [dispatch, direction, sentinelRef, active, loading, exhausted]);
+}
 function SportsMatchesView({
   dispatch,
   matchesTab,
@@ -17964,18 +20272,34 @@ function SportsMatchesView({
   current,
   next,
   liveIndex,
+  lastLiveUpdated,
   handleInteraction,
   selectedTeamsSet,
   tbdTeamName,
+  localizedNames,
   followedOnly,
   showResultsList,
   setShowResultsList,
   showUpcomingList,
   setShowUpcomingList,
+  loadMore,
+  canWatchLive,
   onWatchClick
 }) {
   const resultsPanelRef = (0,external_React_namespaceObject.useRef)(null);
   const upcomingPanelRef = (0,external_React_namespaceObject.useRef)(null);
+  // Refs to 1px-tall invisible divs rendered at the end of the upcoming /
+  // results lists. IntersectionObserver can only watch real DOM elements,
+  // so we need a concrete element at the bottom of each list to detect
+  // "user scrolled to the end". When a sentinel scrolls into view, the
+  // observer below dispatches WIDGETS_SPORTS_FETCH_MORE_MATCHES for the
+  // corresponding direction.
+  const upcomingSentinelRef = (0,external_React_namespaceObject.useRef)(null);
+  const resultsSentinelRef = (0,external_React_namespaceObject.useRef)(null);
+  const upcomingLoadMoreLoading = !!loadMore?.upcoming?.loading;
+  const upcomingLoadMoreExhausted = !!loadMore?.upcoming?.exhausted;
+  const resultsLoadMoreLoading = !!loadMore?.results?.loading;
+  const resultsLoadMoreExhausted = !!loadMore?.results?.exhausted;
   const hasFollowedTeams = selectedTeamsSet.size > 0;
   // Read the persisted per-tab toggle state from redux. Defaults to true so
   // users with followed teams see the filtered list right away.
@@ -18026,21 +20350,115 @@ function SportsMatchesView({
       upcomingPanelRef.current?.querySelector(".sports-match-row")?.focus();
     }
   }, [showUpcomingList]);
+
+  // Hook up the IntersectionObserver-driven load-more for each list. The
+  // hook dispatches WIDGETS_SPORTS_FETCH_MORE_MATCHES with the matching
+  // direction when its sentinel scrolls into view; it only runs while the
+  // list is expanded and not yet exhausted.
+  useLoadMoreSentinel({
+    direction: "upcoming",
+    sentinelRef: upcomingSentinelRef,
+    active: showUpcomingList,
+    loading: upcomingLoadMoreLoading,
+    exhausted: upcomingLoadMoreExhausted,
+    dispatch
+  });
+  useLoadMoreSentinel({
+    direction: "results",
+    sentinelRef: resultsSentinelRef,
+    active: showResultsList,
+    loading: resultsLoadMoreLoading,
+    exhausted: resultsLoadMoreExhausted,
+    dispatch
+  });
+
+  // Tracks whether the live-refresh button is in its post-click cooldown
+  // window.
+  // Flipped to true when clicked. While true, the button is disabled.
+  // Flips back to false when LIVE_REFRESH_COOLDOWN_MS finishes, and gets re-enabled again.
+  const [liveRefreshCoolingDown, setLiveRefreshCoolingDown] = (0,external_React_namespaceObject.useState)(false);
+  // Spins the refresh icon while a manual fetch is in flight. Set on click,
+  // cleared when fresh /live data lands (`lastLiveUpdated` changes) — but never
+  // before LIVE_REFRESH_MIN_SPIN_MS — or when the cooldown ends as a safety cap
+  // (e.g. the feed dropped the click as too-soon).
+  const [liveRefreshSpinning, setLiveRefreshSpinning] = (0,external_React_namespaceObject.useState)(false);
+  const liveRefreshTimerRef = (0,external_React_namespaceObject.useRef)(null);
+  // Click timestamp, non-null only while a manual refresh's spin is in flight.
+  // Doubles as the guard that makes the stop-on-update effect ignore its mount
+  // run and any automatic-poll updates that happen while no refresh is pending.
+  const liveRefreshSpinStartRef = (0,external_React_namespaceObject.useRef)(null);
+  const liveRefreshStopTimerRef = (0,external_React_namespaceObject.useRef)(null);
+  const stopLiveRefreshSpin = (0,external_React_namespaceObject.useCallback)(() => {
+    if (liveRefreshStopTimerRef.current) {
+      clearTimeout(liveRefreshStopTimerRef.current);
+      liveRefreshStopTimerRef.current = null;
+    }
+    liveRefreshSpinStartRef.current = null;
+    setLiveRefreshSpinning(false);
+  }, []);
+  (0,external_React_namespaceObject.useEffect)(() => () => {
+    if (liveRefreshTimerRef.current) {
+      clearTimeout(liveRefreshTimerRef.current);
+    }
+    if (liveRefreshStopTimerRef.current) {
+      clearTimeout(liveRefreshStopTimerRef.current);
+    }
+  }, []);
+  // Stop the spin once a new /live response arrives, but hold it for at least
+  // LIVE_REFRESH_MIN_SPIN_MS so a fast response still reads as an action. The
+  // start-ref guard skips the mount run and idle auto-poll updates.
+  (0,external_React_namespaceObject.useEffect)(() => {
+    // Ignore the mount run / idle auto-poll updates, and don't reschedule once
+    // a floor-stop is already pending (the floor is anchored to the click).
+    if (liveRefreshSpinStartRef.current === null || liveRefreshStopTimerRef.current) {
+      return;
+    }
+    const remaining = LIVE_REFRESH_MIN_SPIN_MS - (Date.now() - liveRefreshSpinStartRef.current);
+    if (remaining <= 0) {
+      stopLiveRefreshSpin();
+    } else {
+      liveRefreshStopTimerRef.current = setTimeout(stopLiveRefreshSpin, remaining);
+    }
+  }, [lastLiveUpdated, stopLiveRefreshSpin]);
+  const handleLiveRefreshClick = (0,external_React_namespaceObject.useCallback)(() => {
+    if (liveRefreshCoolingDown) {
+      return;
+    }
+    setLiveRefreshCoolingDown(true);
+    setLiveRefreshSpinning(true);
+    liveRefreshSpinStartRef.current = Date.now();
+    liveRefreshTimerRef.current = setTimeout(() => {
+      liveRefreshTimerRef.current = null;
+      setLiveRefreshCoolingDown(false);
+      stopLiveRefreshSpin();
+    }, LIVE_REFRESH_COOLDOWN_MS);
+    (0,external_ReactRedux_namespaceObject.batch)(() => {
+      dispatch(actionCreators.OnlyToMain({
+        type: actionTypes.WIDGETS_USER_EVENT,
+        data: {
+          widget_name: "sports",
+          widget_source: "now",
+          user_action: SportsWidget_USER_ACTION_TYPES.REFRESH_LIVE,
+          widget_size: widgetSize
+        }
+      }));
+      dispatch(actionCreators.OnlyToMain({
+        type: actionTypes.WIDGETS_SPORTS_LIVE_REFRESH
+      }));
+    });
+    handleInteraction?.();
+  }, [dispatch, handleInteraction, liveRefreshCoolingDown, stopLiveRefreshSpin, widgetSize]);
   return /*#__PURE__*/external_React_default().createElement("div", {
     className: "sports-matches-view"
   }, /*#__PURE__*/external_React_default().createElement("div", {
     className: "sports-matches-tab-panel",
     hidden: matchesTab !== MATCHES_TABS.RESULTS,
     ref: resultsPanelRef
-  }, showResultsList ? /*#__PURE__*/external_React_default().createElement((external_React_default()).Fragment, null, hasFollowedTeams &&
-  /*#__PURE__*/
-  /** @backward-compat { version 150 } React 16 (cached page) uses ontoggle; React 19 uses onToggle. Remove onToggle once Firefox 150 reaches Release. */
-  external_React_default().createElement("moz-toggle", {
+  }, showResultsList ? /*#__PURE__*/external_React_default().createElement((external_React_default()).Fragment, null, hasFollowedTeams && /*#__PURE__*/external_React_default().createElement("moz-toggle", {
     className: "sports-followed-only-toggle",
     pressed: resultsFollowedOnly || null,
     "data-l10n-id": "newtab-sports-widget-followed-only-toggle",
-    ontoggle: e => setFollowedOnly("results", !!e.target.pressed),
-    onToggle: e => setFollowedOnly("results", !!e.target.pressed)
+    ontoggle: e => setFollowedOnly("results", !!e.target.pressed)
   }), /*#__PURE__*/external_React_default().createElement("div", {
     className: "sports-matches-list"
   }, groupMatchesBySection(displayedPrevious).map((section, idx) => /*#__PURE__*/external_React_default().createElement("div", {
@@ -18056,8 +20474,18 @@ function SportsMatchesView({
     size: "list",
     handleInteraction: handleInteraction,
     followedTeams: selectedTeamsSet,
-    tbdTeamName: tbdTeamName
-  })))))))) : previous[0] && /*#__PURE__*/external_React_default().createElement((external_React_default()).Fragment, null, size === "large" && /*#__PURE__*/external_React_default().createElement(SportsSectionLabel, {
+    tbdTeamName: tbdTeamName,
+    localizedNames: localizedNames
+  })))))), resultsLoadMoreLoading && /*#__PURE__*/external_React_default().createElement("div", {
+    className: "sports-results-loading-more",
+    role: "status",
+    "aria-live": "polite",
+    "data-l10n-id": "newtab-sports-widget-loading-more"
+  }), !resultsLoadMoreExhausted && /*#__PURE__*/external_React_default().createElement("div", {
+    ref: resultsSentinelRef,
+    className: "sports-results-load-more-sentinel",
+    "aria-hidden": "true"
+  }))) : previous[0] && /*#__PURE__*/external_React_default().createElement((external_React_default()).Fragment, null, size === "large" && /*#__PURE__*/external_React_default().createElement(SportsSectionLabel, {
     match: previous[0]
   }), /*#__PURE__*/external_React_default().createElement("div", {
     className: "match-highlight-view"
@@ -18067,8 +20495,10 @@ function SportsMatchesView({
     size: size,
     handleInteraction: handleInteraction,
     followedTeams: selectedTeamsSet,
-    tbdTeamName: tbdTeamName
+    tbdTeamName: tbdTeamName,
+    localizedNames: localizedNames
   }))), !!previous.length && /*#__PURE__*/external_React_default().createElement("moz-button", {
+    className: "sports-view-all",
     type: "secondary",
     size: size === "medium" ? "small" : undefined,
     "data-l10n-id": showResultsList ? "newtab-sports-widget-show-less" : "newtab-sports-widget-view-all",
@@ -18076,10 +20506,16 @@ function SportsMatchesView({
   })), hasLiveGames && /*#__PURE__*/external_React_default().createElement("div", {
     className: "sports-matches-tab-panel",
     hidden: matchesTab !== MATCHES_TABS.NOW
-  }, current[liveIndex] && /*#__PURE__*/external_React_default().createElement((external_React_default()).Fragment, null, size === "large" && /*#__PURE__*/external_React_default().createElement(SportsSectionLabel, {
+  }, current[liveIndex] && /*#__PURE__*/external_React_default().createElement((external_React_default()).Fragment, null, size === "large" && /*#__PURE__*/external_React_default().createElement("div", {
+    className: "sports-now-header"
+  }, /*#__PURE__*/external_React_default().createElement(SportsSectionLabel, {
     match: current[liveIndex],
     withLiveBadge: true
-  }), /*#__PURE__*/external_React_default().createElement("div", SportsWidget_extends({
+  }), /*#__PURE__*/external_React_default().createElement(LiveRefreshButton, {
+    isCoolingDown: liveRefreshCoolingDown,
+    isSpinning: liveRefreshSpinning,
+    onClick: handleLiveRefreshClick
+  })), /*#__PURE__*/external_React_default().createElement("div", SportsWidget_extends({
     className: "match-highlight-view"
   }, hasLivePagination && {
     "aria-live": "polite",
@@ -18090,14 +20526,19 @@ function SportsMatchesView({
     size: size,
     handleInteraction: handleInteraction,
     followedTeams: selectedTeamsSet,
-    tbdTeamName: tbdTeamName
-  })), /*#__PURE__*/external_React_default().createElement("moz-button", {
+    tbdTeamName: tbdTeamName,
+    localizedNames: localizedNames
+  })), canWatchLive && /*#__PURE__*/external_React_default().createElement("moz-button", {
     className: "sports-watch-live-button",
     type: size === "medium" ? "icon" : "default",
     size: size === "medium" ? "small" : undefined,
     iconSrc: "chrome://browser/skin/device-tv.svg",
     "data-l10n-id": size === "medium" ? "newtab-sports-widget-watch-icon" : "newtab-sports-widget-watch",
     onClick: onWatchClick
+  }), size === "medium" && /*#__PURE__*/external_React_default().createElement(LiveRefreshButton, {
+    isCoolingDown: liveRefreshCoolingDown,
+    isSpinning: liveRefreshSpinning,
+    onClick: handleLiveRefreshClick
   }), current.length >= 2 && /*#__PURE__*/external_React_default().createElement(LivePagination, {
     dispatch: dispatch,
     liveIndex: liveIndex,
@@ -18109,15 +20550,11 @@ function SportsMatchesView({
     className: "sports-matches-tab-panel",
     hidden: matchesTab !== MATCHES_TABS.UPCOMING,
     ref: upcomingPanelRef
-  }, showUpcomingList ? /*#__PURE__*/external_React_default().createElement((external_React_default()).Fragment, null, hasFollowedTeams &&
-  /*#__PURE__*/
-  /** @backward-compat { version 150 } React 16 (cached page) uses ontoggle; React 19 uses onToggle. Remove onToggle once Firefox 150 reaches Release. */
-  external_React_default().createElement("moz-toggle", {
+  }, showUpcomingList ? /*#__PURE__*/external_React_default().createElement((external_React_default()).Fragment, null, hasFollowedTeams && /*#__PURE__*/external_React_default().createElement("moz-toggle", {
     className: "sports-followed-only-toggle",
     pressed: upcomingFollowedOnly || null,
     "data-l10n-id": "newtab-sports-widget-followed-only-toggle",
-    ontoggle: e => setFollowedOnly("upcoming", !!e.target.pressed),
-    onToggle: e => setFollowedOnly("upcoming", !!e.target.pressed)
+    ontoggle: e => setFollowedOnly("upcoming", !!e.target.pressed)
   }), /*#__PURE__*/external_React_default().createElement("div", {
     className: "sports-matches-list"
   }, groupMatchesBySection(displayedNext).map((section, idx) => /*#__PURE__*/external_React_default().createElement("div", {
@@ -18134,8 +20571,18 @@ function SportsMatchesView({
     size: "list",
     handleInteraction: handleInteraction,
     followedTeams: selectedTeamsSet,
-    tbdTeamName: tbdTeamName
-  })))))))) : /*#__PURE__*/external_React_default().createElement((external_React_default()).Fragment, null, next[0] && /*#__PURE__*/external_React_default().createElement((external_React_default()).Fragment, null, size === "large" && /*#__PURE__*/external_React_default().createElement(SportsSectionLabel, {
+    tbdTeamName: tbdTeamName,
+    localizedNames: localizedNames
+  })))))), upcomingLoadMoreLoading && /*#__PURE__*/external_React_default().createElement("div", {
+    className: "sports-upcoming-loading-more",
+    role: "status",
+    "aria-live": "polite",
+    "data-l10n-id": "newtab-sports-widget-loading-more"
+  }), !upcomingLoadMoreExhausted && /*#__PURE__*/external_React_default().createElement("div", {
+    ref: upcomingSentinelRef,
+    className: "sports-upcoming-load-more-sentinel",
+    "aria-hidden": "true"
+  }))) : /*#__PURE__*/external_React_default().createElement((external_React_default()).Fragment, null, next[0] && /*#__PURE__*/external_React_default().createElement((external_React_default()).Fragment, null, size === "large" && /*#__PURE__*/external_React_default().createElement(SportsSectionLabel, {
     match: next[0]
   }), /*#__PURE__*/external_React_default().createElement("div", {
     className: "match-highlight-view"
@@ -18145,44 +20592,50 @@ function SportsMatchesView({
     size: size,
     handleInteraction: handleInteraction,
     followedTeams: selectedTeamsSet,
-    tbdTeamName: tbdTeamName
+    tbdTeamName: tbdTeamName,
+    localizedNames: localizedNames
   }))), !next[0] && /*#__PURE__*/external_React_default().createElement("div", {
     className: "match-highlight-view"
   }, /*#__PURE__*/external_React_default().createElement(UpcomingMatchPlaceholder, {
     size: size
   }))), !!next.length && /*#__PURE__*/external_React_default().createElement("moz-button", {
+    className: "sports-view-all",
     type: "secondary",
     size: size === "medium" ? "small" : undefined,
     "data-l10n-id": showUpcomingList ? "newtab-sports-widget-show-less" : "newtab-sports-widget-view-all",
     onClick: () => setShowUpcomingList(v => !v)
   })));
 }
+
+// Full ISO timestamps with the host (ET) offset so DATETIME projects each
+// kickoff onto the viewer's local calendar day. Bounds are the first and
+// last match kickoffs of each stage, sourced from FIFA's 2026 fixtures.
 const keyDatesList = [{
   stageL10nId: "newtab-sports-widget-group-stage",
-  start: "2026-06-11",
-  end: "2026-06-27"
+  start: "2026-06-11T15:00:00-04:00",
+  end: "2026-06-27T22:00:00-04:00"
 }, {
   stageL10nId: "newtab-sports-widget-round-32",
-  start: "2026-06-28",
-  end: "2026-07-03"
+  start: "2026-06-28T15:00:00-04:00",
+  end: "2026-07-03T21:30:00-04:00"
 }, {
   stageL10nId: "newtab-sports-widget-round-16",
-  start: "2026-07-04",
-  end: "2026-07-07"
+  start: "2026-07-04T13:00:00-04:00",
+  end: "2026-07-07T16:00:00-04:00"
 }, {
   stageL10nId: "newtab-sports-widget-quarter-finals",
-  start: "2026-07-09",
-  end: "2026-07-11"
+  start: "2026-07-09T16:00:00-04:00",
+  end: "2026-07-11T21:00:00-04:00"
 }, {
   stageL10nId: "newtab-sports-widget-semi-finals",
-  start: "2026-07-14",
-  end: "2026-07-15"
+  start: "2026-07-14T15:00:00-04:00",
+  end: "2026-07-15T15:00:00-04:00"
 }, {
   stageL10nId: "newtab-sports-widget-bronze-finals",
-  date: "2026-07-18"
+  date: "2026-07-18T17:00:00-04:00"
 }, {
   stageL10nId: "newtab-sports-widget-final",
-  date: "2026-07-19"
+  date: "2026-07-19T15:00:00-04:00"
 }];
 function SportsWidgetKeyDates({
   handleViewMatches
@@ -19014,43 +21467,54 @@ function EditClocksPanel({
     onClick: onShowAddClock
   })), /*#__PURE__*/external_React_default().createElement("ul", {
     className: "clocks-edit-list"
-  }, clockZones.map((clock, i) => /*#__PURE__*/external_React_default().createElement("li", {
-    className: "clocks-edit-item",
-    key: `${clock.timeZone}-${i}`,
-    tabIndex: 0
-  }, /*#__PURE__*/external_React_default().createElement("div", {
-    className: "clocks-edit-top-row"
-  }, /*#__PURE__*/external_React_default().createElement("span", {
-    className: "clocks-edit-city"
-  }, clock.city || getCityFromTimeZone(clock.timeZone)), /*#__PURE__*/external_React_default().createElement("div", {
-    className: "clocks-edit-item-actions"
-  }, /*#__PURE__*/external_React_default().createElement("moz-button", {
-    className: "clocks-edit-item-button clocks-edit-item-edit-button",
-    type: "icon ghost",
-    size: "small",
-    iconSrc: "chrome://global/skin/icons/edit-outline.svg",
-    "data-l10n-id": "newtab-clock-widget-button-edit-clock",
-    onClick: () => onEditClock(i)
-  }), clockZones.length > 1 && /*#__PURE__*/external_React_default().createElement("moz-button", {
-    className: "clocks-edit-item-button clocks-edit-item-remove-button",
-    type: "icon ghost",
-    size: "small",
-    iconSrc: "chrome://global/skin/icons/delete.svg",
-    "data-l10n-id": "newtab-clock-widget-button-remove-clock",
-    onClick: () => onRemoveClock(i)
-  }))), /*#__PURE__*/external_React_default().createElement("span", {
-    "aria-hidden": !clock.label,
-    className: "clocks-edit-subtitle",
-    "data-l10n-id": clock.label ? "newtab-clock-widget-label-nickname-with-value" : undefined,
-    "data-l10n-args": clock.label ? JSON.stringify({
-      nickname: clock.label
-    }) : undefined
-  }, clock.label ? null : " ")))));
+  }, clockZones.map((clock, i) => {
+    const city = clock.city || getCityFromTimeZone(clock.timeZone);
+    return /*#__PURE__*/external_React_default().createElement("li", {
+      className: "clocks-edit-item",
+      key: `${clock.timeZone}-${i}`,
+      tabIndex: 0,
+      "data-l10n-id": clock.label ? "newtab-clock-widget-edit-item-with-nickname" : "newtab-clock-widget-edit-item",
+      "data-l10n-args": JSON.stringify(clock.label ? {
+        city,
+        nickname: clock.label
+      } : {
+        city
+      })
+    }, /*#__PURE__*/external_React_default().createElement("div", {
+      className: "clocks-edit-top-row"
+    }, /*#__PURE__*/external_React_default().createElement("span", {
+      className: "clocks-edit-city"
+    }, city), /*#__PURE__*/external_React_default().createElement("div", {
+      className: "clocks-edit-item-actions"
+    }, /*#__PURE__*/external_React_default().createElement("moz-button", {
+      className: "clocks-edit-item-button clocks-edit-item-edit-button",
+      type: "icon ghost",
+      size: "small",
+      iconSrc: "chrome://global/skin/icons/edit-outline.svg",
+      "data-l10n-id": "newtab-clock-widget-button-edit-clock",
+      onClick: () => onEditClock(i)
+    }), clockZones.length > 1 && /*#__PURE__*/external_React_default().createElement("moz-button", {
+      className: "clocks-edit-item-button clocks-edit-item-remove-button",
+      type: "icon ghost",
+      size: "small",
+      iconSrc: "chrome://global/skin/icons/delete.svg",
+      "data-l10n-id": "newtab-clock-widget-button-remove-clock",
+      onClick: () => onRemoveClock(i)
+    }))), /*#__PURE__*/external_React_default().createElement("span", {
+      "aria-hidden": "true",
+      className: "clocks-edit-subtitle",
+      "data-l10n-id": clock.label ? "newtab-clock-widget-label-nickname-with-value" : undefined,
+      "data-l10n-args": clock.label ? JSON.stringify({
+        nickname: clock.label
+      }) : undefined
+    }, clock.label ? null : " "));
+  })));
 }
 ;// CONCATENATED MODULE: ./content-src/components/Widgets/Clocks/Clocks.jsx
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
+
 
 
 
@@ -19085,6 +21549,7 @@ const CLOCK_WIDGET_SOURCE = {
   ROW: "row",
   TOOLBAR: "toolbar"
 };
+const CLOCKS_WIDGET = WIDGET_REGISTRY.find(widget => widget.id === "clocks");
 function getClockWidgetDisplayState({
   activePanel,
   hourFormatPref,
@@ -19119,7 +21584,6 @@ function Clocks({
   const clocksZonesPref = (0,external_ReactRedux_namespaceObject.useSelector)(state => state.Prefs.values[PREF_CLOCKS_ZONES]);
   const hourFormatPref = (0,external_ReactRedux_namespaceObject.useSelector)(state => state.Prefs.values[PREF_CLOCKS_HOUR_FORMAT]);
   const [now, setNow] = (0,external_React_namespaceObject.useState)(null);
-  const impressionFired = (0,external_React_namespaceObject.useRef)(false);
   const contextMenuRef = (0,external_React_namespaceObject.useRef)(null);
   const contextMenuButtonRef = (0,external_React_namespaceObject.useRef)(null);
   // Suppress hover-reveal after a menu action; cleared on mouseleave.
@@ -19152,10 +21616,14 @@ function Clocks({
     hourFormatPref,
     size
   });
-  const currentSizeRef = (0,external_React_namespaceObject.useRef)(currentSize);
-  (0,external_React_namespaceObject.useEffect)(() => {
-    currentSizeRef.current = currentSize;
-  }, [currentSize]);
+  const {
+    impressionRef,
+    recordUserAction
+  } = useWidgetTelemetry({
+    dispatch,
+    widget: CLOCKS_WIDGET,
+    widgetSize: currentSize
+  });
 
   // Each tick realigns to the next minute, so paused tabs or device sleep
   // can't compound drift. `now` starts null so the first render stays
@@ -19169,20 +21637,6 @@ function Clocks({
     tick();
     return () => clearTimeout(timeoutId);
   }, []);
-  const handleIntersection = (0,external_React_namespaceObject.useCallback)(() => {
-    if (impressionFired.current) {
-      return;
-    }
-    impressionFired.current = true;
-    dispatch(actionCreators.AlsoToMain({
-      type: actionTypes.WIDGETS_IMPRESSION,
-      data: {
-        widget_name: "clocks",
-        widget_size: currentSizeRef.current
-      }
-    }));
-  }, [dispatch]);
-  const clocksRef = useIntersectionObserver(handleIntersection);
   const handleChangeSize = (0,external_React_namespaceObject.useCallback)(newSize => {
     (0,external_ReactRedux_namespaceObject.batch)(() => {
       dispatch(actionCreators.OnlyToMain({
@@ -19192,20 +21646,14 @@ function Clocks({
           value: newSize
         }
       }));
-      dispatch(actionCreators.OnlyToMain({
-        type: actionTypes.WIDGETS_USER_EVENT,
-        data: {
-          widget_name: "clocks",
-          widget_source: CLOCK_WIDGET_SOURCE.CONTEXT_MENU,
-          user_action: Clocks_USER_ACTION_TYPES.CHANGE_SIZE,
-          action_value: newSize,
-          widget_size: newSize
-        }
-      }));
+      recordUserAction(Clocks_USER_ACTION_TYPES.CHANGE_SIZE, {
+        source: CLOCK_WIDGET_SOURCE.CONTEXT_MENU,
+        value: newSize,
+        size: newSize
+      });
     });
     closeContextMenu();
-  }, [dispatch, closeContextMenu]);
-  const sizeSubmenuRef = useSizeSubmenu(handleChangeSize);
+  }, [dispatch, recordUserAction, closeContextMenu]);
   const handleToggleHourFormat = (0,external_React_namespaceObject.useCallback)(() => {
     const nextFormat = use12HourFormat ? "24" : "12";
     (0,external_ReactRedux_namespaceObject.batch)(() => {
@@ -19216,60 +21664,19 @@ function Clocks({
           value: nextFormat
         }
       }));
-      dispatch(actionCreators.OnlyToMain({
-        type: actionTypes.WIDGETS_USER_EVENT,
-        data: {
-          widget_name: "clocks",
-          widget_source: CLOCK_WIDGET_SOURCE.CONTEXT_MENU,
-          user_action: Clocks_USER_ACTION_TYPES.CHANGE_HOUR_FORMAT,
-          action_value: nextFormat,
-          widget_size: currentSize
-        }
-      }));
+      recordUserAction(Clocks_USER_ACTION_TYPES.CHANGE_HOUR_FORMAT, {
+        source: CLOCK_WIDGET_SOURCE.CONTEXT_MENU,
+        value: nextFormat
+      });
     });
     closeContextMenu();
-  }, [use12HourFormat, dispatch, currentSize, closeContextMenu]);
-  const handleHide = (0,external_React_namespaceObject.useCallback)(() => {
-    (0,external_ReactRedux_namespaceObject.batch)(() => {
-      dispatch(actionCreators.OnlyToMain({
-        type: actionTypes.SET_PREF,
-        data: {
-          name: PREF_WIDGETS_CLOCKS_ENABLED,
-          value: false
-        }
-      }));
-      dispatch(actionCreators.OnlyToMain({
-        type: actionTypes.WIDGETS_ENABLED,
-        data: {
-          widget_name: "clocks",
-          widget_source: CLOCK_WIDGET_SOURCE.CONTEXT_MENU,
-          enabled: false,
-          widget_size: currentSize
-        }
-      }));
-    });
-    closeContextMenu();
-  }, [dispatch, currentSize, closeContextMenu]);
+  }, [use12HourFormat, dispatch, recordUserAction, closeContextMenu]);
   const handleLearnMore = (0,external_React_namespaceObject.useCallback)(() => {
-    (0,external_ReactRedux_namespaceObject.batch)(() => {
-      dispatch(actionCreators.OnlyToMain({
-        type: actionTypes.OPEN_LINK,
-        data: {
-          url: "https://support.mozilla.org/kb/firefox-new-tab-widgets"
-        }
-      }));
-      dispatch(actionCreators.OnlyToMain({
-        type: actionTypes.WIDGETS_USER_EVENT,
-        data: {
-          widget_name: "clocks",
-          widget_source: CLOCK_WIDGET_SOURCE.CONTEXT_MENU,
-          user_action: Clocks_USER_ACTION_TYPES.LEARN_MORE,
-          widget_size: currentSize
-        }
-      }));
+    recordUserAction(Clocks_USER_ACTION_TYPES.LEARN_MORE, {
+      source: CLOCK_WIDGET_SOURCE.CONTEXT_MENU
     });
     closeContextMenu();
-  }, [dispatch, currentSize, closeContextMenu]);
+  }, [recordUserAction, closeContextMenu]);
   const clockZones = (0,external_React_namespaceObject.useMemo)(() => parseClockZonesPref(clocksZonesPref) || buildDefaultZones(), [clocksZonesPref]);
   (0,external_React_namespaceObject.useEffect)(() => {
     if (!clockZones.some(clock => clock.label && !clock.labelColor)) {
@@ -19298,34 +21705,22 @@ function Clocks({
     setActivePanel(CLOCKS_PANEL.EDIT);
     setPanelOpenSource(source);
     setIsDismissed(false);
-    dispatch(actionCreators.OnlyToMain({
-      type: actionTypes.WIDGETS_USER_EVENT,
-      data: {
-        widget_name: "clocks",
-        widget_source: source,
-        user_action: Clocks_USER_ACTION_TYPES.EXPAND,
-        widget_size: currentSize
-      }
-    }));
-  }, [currentSize, dispatch]);
+    recordUserAction(Clocks_USER_ACTION_TYPES.EXPAND, {
+      source
+    });
+  }, [recordUserAction]);
   const handleCloseDisplayPanel = (0,external_React_namespaceObject.useCallback)(() => {
     if (activePanel === CLOCKS_PANEL.EDIT) {
-      dispatch(actionCreators.OnlyToMain({
-        type: actionTypes.WIDGETS_USER_EVENT,
-        data: {
-          widget_name: "clocks",
-          widget_source: panelOpenSource,
-          user_action: Clocks_USER_ACTION_TYPES.COLLAPSE,
-          widget_size: currentSize
-        }
-      }));
+      recordUserAction(Clocks_USER_ACTION_TYPES.COLLAPSE, {
+        source: panelOpenSource
+      });
     }
     setActivePanel(null);
     resetAddClockForm();
     requestAnimationFrame(() => {
       (addButtonRef.current ?? contextMenuButtonRef.current)?.focus();
     });
-  }, [activePanel, panelOpenSource, currentSize, dispatch, resetAddClockForm]);
+  }, [activePanel, panelOpenSource, recordUserAction, resetAddClockForm]);
   const handleCloseClockForm = (0,external_React_namespaceObject.useCallback)(() => {
     if (formSource === CLOCK_WIDGET_SOURCE.MANAGE) {
       setActivePanel(CLOCKS_PANEL.EDIT);
@@ -19350,25 +21745,13 @@ function Clocks({
           value: JSON.stringify(buildNextClockZones(clockZones, editingClockIndex, zone))
         }
       }));
-      dispatch(actionCreators.OnlyToMain({
-        type: actionTypes.WIDGETS_USER_EVENT,
-        data: {
-          widget_name: "clocks",
-          widget_source: formSource,
-          user_action: editingClockIndex !== null ? Clocks_USER_ACTION_TYPES.EDIT_CLOCK : Clocks_USER_ACTION_TYPES.ADD_CLOCK,
-          widget_size: currentSize
-        }
-      }));
+      recordUserAction(editingClockIndex !== null ? Clocks_USER_ACTION_TYPES.EDIT_CLOCK : Clocks_USER_ACTION_TYPES.ADD_CLOCK, {
+        source: formSource
+      });
       if (zone.label && !existingClock?.label) {
-        dispatch(actionCreators.OnlyToMain({
-          type: actionTypes.WIDGETS_USER_EVENT,
-          data: {
-            widget_name: "clocks",
-            widget_source: formSource,
-            user_action: Clocks_USER_ACTION_TYPES.ADD_NICKNAME,
-            widget_size: currentSize
-          }
-        }));
+        recordUserAction(Clocks_USER_ACTION_TYPES.ADD_NICKNAME, {
+          source: formSource
+        });
       }
     });
     if (formSource === CLOCK_WIDGET_SOURCE.MANAGE) {
@@ -19377,7 +21760,7 @@ function Clocks({
       return;
     }
     handleCloseDisplayPanel();
-  }, [clockZones, formSource, currentSize, editingClockIndex, handleCloseDisplayPanel, resetAddClockForm, dispatch]);
+  }, [clockZones, formSource, editingClockIndex, handleCloseDisplayPanel, resetAddClockForm, dispatch, recordUserAction]);
   const handleRemoveClock = (0,external_React_namespaceObject.useCallback)((index, source = CLOCK_WIDGET_SOURCE.ROW) => {
     if (clockZones.length <= 1) {
       return;
@@ -19390,17 +21773,11 @@ function Clocks({
           value: JSON.stringify(removeClockZoneAtIndex(clockZones, index))
         }
       }));
-      dispatch(actionCreators.OnlyToMain({
-        type: actionTypes.WIDGETS_USER_EVENT,
-        data: {
-          widget_name: "clocks",
-          widget_source: source,
-          user_action: Clocks_USER_ACTION_TYPES.REMOVE_CLOCK,
-          widget_size: currentSize
-        }
-      }));
+      recordUserAction(Clocks_USER_ACTION_TYPES.REMOVE_CLOCK, {
+        source
+      });
     });
-  }, [clockZones, currentSize, dispatch]);
+  }, [clockZones, dispatch, recordUserAction]);
   const isClockFormOpen = activePanel === CLOCKS_PANEL.FORM;
   const isEditingClocks = activePanel === CLOCKS_PANEL.EDIT;
   const hasAnyLabel = clockZones.some(c => !!c.label);
@@ -19408,10 +21785,7 @@ function Clocks({
     className: `clocks-widget col-4 ${panelDisplaySize}-widget${clockZones.length === 1 ? " is-hero" : ""}${isDismissed ? " is-dismissed" : ""}${isClockFormOpen ? " is-clock-form-open" : ""}${isEditingClocks ? " is-editing-clocks" : ""}${activePanel ? " is-panel-open" : ""}${hasAnyLabel ? "" : " has-no-labels"}`,
     "data-clock-count": clockZones.length,
     onMouseLeave: () => setIsDismissed(false),
-    ref: el => {
-      // useIntersectionObserver expects ref.current to be an array of targets.
-      clocksRef.current = [el];
-    }
+    ref: impressionRef
   }, /*#__PURE__*/external_React_default().createElement("div", {
     className: "widget-toolbar",
     inert: !!activePanel
@@ -19435,23 +21809,6 @@ function Clocks({
     ref: contextMenuRef,
     id: "clocks-widget-context-menu"
   }, /*#__PURE__*/external_React_default().createElement("panel-item", {
-    submenu: "clocks-size-submenu"
-  }, /*#__PURE__*/external_React_default().createElement("span", {
-    "data-l10n-id": "newtab-widget-menu-change-size"
-  }), /*#__PURE__*/external_React_default().createElement("panel-list", {
-    ref: sizeSubmenuRef,
-    slot: "submenu",
-    id: "clocks-size-submenu"
-  }, ["small", "medium", "large"].map(s => /*#__PURE__*/external_React_default().createElement("panel-item", {
-    key: s,
-    type: "checkbox",
-    checked: currentSize === s,
-    "data-size": s,
-    "data-l10n-id": `newtab-widget-size-${s}`
-  })))), /*#__PURE__*/external_React_default().createElement(MoveSubmenu, {
-    widgetId: "clocks",
-    widgetEnabledMap: widgetEnabledMap
-  }), /*#__PURE__*/external_React_default().createElement("panel-item", {
     "data-l10n-id": "newtab-clock-widget-menu-edit",
     onClick: () => {
       handleShowEditClocks(CLOCK_WIDGET_SOURCE.CONTEXT_MENU);
@@ -19460,12 +21817,22 @@ function Clocks({
   }), /*#__PURE__*/external_React_default().createElement("panel-item", {
     "data-l10n-id": use12HourFormat ? "newtab-clock-widget-menu-switch-to-24h" : "newtab-clock-widget-menu-switch-to-12h",
     onClick: handleToggleHourFormat
-  }), /*#__PURE__*/external_React_default().createElement("panel-item", {
-    "data-l10n-id": "newtab-clock-widget-menu-hide",
-    onClick: handleHide
-  }), /*#__PURE__*/external_React_default().createElement("panel-item", {
-    "data-l10n-id": "newtab-clock-widget-menu-learn-more",
-    onClick: handleLearnMore
+  }), /*#__PURE__*/external_React_default().createElement(WidgetMenuFooter, {
+    dispatch: dispatch,
+    widgetId: "clocks",
+    widgetEnabledMap: widgetEnabledMap,
+    widgetName: "clocks",
+    enabledPref: PREF_WIDGETS_CLOCKS_ENABLED,
+    widgetSize: currentSize,
+    learnMoreL10nId: "newtab-clock-widget-menu-learn-more",
+    onAfterHide: closeContextMenu,
+    onLearnMore: handleLearnMore,
+    sizeSubmenu: /*#__PURE__*/external_React_default().createElement(SizeSubmenu, {
+      submenuId: "clocks-size-submenu",
+      sizes: ["small", "medium", "large"],
+      checkedSize: currentSize,
+      onChangeSize: handleChangeSize
+    })
   }))), isClockFormOpen && /*#__PURE__*/external_React_default().createElement(AddClockForm, {
     key: editingClockIndex ?? "add",
     isEditing: editingClockIndex !== null,
@@ -19507,10 +21874,1347 @@ function Clocks({
   })));
 }
 
+;// CONCATENATED MODULE: ./content-src/components/Widgets/Privacy/Privacy.jsx
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+// eslint-disable-next-line no-unused-vars
+
+
+
+
+
+
+const Privacy_USER_ACTION_TYPES = {
+  CHANGE_SIZE: "change_size"
+};
+const PRIVACY_ENTRY = WIDGET_REGISTRY.find(w => w.id === "privacy");
+const ICON_BASE_URL = "chrome://newtab/content/data/content/assets/";
+
+// Renders a widget icon by asset filename. The wrapper div is the alignment
+// hook. TEMP (Bug 2049390): callers pass a static filename for now; the
+// per-message icon mapping (shield/planet/star/bolt/kit) is a follow-up commit.
+const privacyImage = filename => /*#__PURE__*/external_React_default().createElement("div", {
+  className: "privacy-image"
+}, /*#__PURE__*/external_React_default().createElement("img", {
+  className: "privacy-image-icon",
+  src: `${ICON_BASE_URL}${filename}`,
+  alt: ""
+}));
+const PREF_PRIVACY_MAX_COUNT = "widgets.privacy.maxCount";
+const DEFAULT_PRIVACY_MAX_COUNT = 100;
+
+// Resolves the count at which the readout caps to "N+". trainhopConfig wins so
+// an experiment can override the pref's default; then the pref
+// (widgets.privacy.maxCount, default 100); then a defensive fallback. Routed
+// through a helper (never the raw pref) per the trainhop-gate convention.
+function resolvePrivacyMaxCount(prefs) {
+  return prefs.trainhopConfig?.widgets?.privacyMaxCount || prefs[PREF_PRIVACY_MAX_COUNT] || DEFAULT_PRIVACY_MAX_COUNT;
+}
+function Privacy({
+  dispatch,
+  widgetsMayBeMaximized,
+  widgetEnabledMap
+}) {
+  const prefs = (0,external_ReactRedux_namespaceObject.useSelector)(state => state.Prefs.values);
+  const privacyData = (0,external_ReactRedux_namespaceObject.useSelector)(state => state.PrivacyWidget);
+
+  // Size comes from the registry helper: user-set pref > trainhop suggestion
+  // > registry defaultSize. Never read the size pref directly.
+  const widgetSize = resolveWidgetSize(PRIVACY_ENTRY, prefs);
+  const impressionFired = (0,external_React_namespaceObject.useRef)(false);
+  const trackersToday = privacyData?.trackersToday ?? 0;
+  const sitesToday = privacyData?.sitesToday ?? 0;
+  // Gate the metric UI on a real feed update. Before the first broadcast — or
+  // when it's skipped (e.g. the backward-compat guard in PrivacyFeed on older
+  // platforms) — show no metric state rather than a misleading empty/zero one.
+  const initialized = privacyData?.initialized ?? false;
+  // Ceiling the readout at "{maxCount}+" so the number stays a tidy single line.
+  const maxCount = resolvePrivacyMaxCount(prefs);
+  const displayCount = trackersToday > maxCount ? `${maxCount}+` : `${trackersToday}`;
+  const isEmptyState = trackersToday === 0;
+  const showTip = !isEmptyState;
+  const isLarge = widgetSize === "large";
+  const handleIntersection = (0,external_React_namespaceObject.useCallback)(() => {
+    if (impressionFired.current) {
+      return;
+    }
+    impressionFired.current = true;
+    dispatch(actionCreators.AlsoToMain({
+      type: actionTypes.WIDGETS_IMPRESSION,
+      data: {
+        widget_name: "privacy",
+        widget_size: widgetSize
+      }
+    }));
+  }, [dispatch, widgetSize]);
+  const widgetRef = useIntersectionObserver(handleIntersection);
+  function handlePrivacyHide() {
+    (0,external_ReactRedux_namespaceObject.batch)(() => {
+      dispatch(actionCreators.OnlyToMain({
+        type: actionTypes.SET_PREF,
+        data: {
+          name: PRIVACY_ENTRY.enabledPref,
+          value: false
+        }
+      }));
+      dispatch(actionCreators.OnlyToMain({
+        type: actionTypes.WIDGETS_ENABLED,
+        data: {
+          widget_name: "privacy",
+          widget_source: "context_menu",
+          enabled: false,
+          widget_size: widgetSize
+        }
+      }));
+    });
+  }
+  const handleChangeSize = (0,external_React_namespaceObject.useCallback)(size => {
+    (0,external_ReactRedux_namespaceObject.batch)(() => {
+      dispatch(actionCreators.OnlyToMain({
+        type: actionTypes.SET_PREF,
+        data: {
+          name: PRIVACY_ENTRY.sizePref,
+          value: size
+        }
+      }));
+      dispatch(actionCreators.OnlyToMain({
+        type: actionTypes.WIDGETS_USER_EVENT,
+        data: {
+          widget_name: "privacy",
+          widget_source: "context_menu",
+          user_action: Privacy_USER_ACTION_TYPES.CHANGE_SIZE,
+          action_value: size,
+          widget_size: size
+        }
+      }));
+    });
+  }, [dispatch]);
+  const sizeSubmenuRef = useSizeSubmenu(handleChangeSize);
+  function handleLearnMore() {
+    (0,external_ReactRedux_namespaceObject.batch)(() => {
+      dispatch(actionCreators.OnlyToMain({
+        type: actionTypes.OPEN_LINK,
+        data: {
+          url: "https://support.mozilla.org/kb/firefox-new-tab-widgets"
+        }
+      }));
+      dispatch(actionCreators.OnlyToMain({
+        type: actionTypes.WIDGETS_USER_EVENT,
+        data: {
+          widget_name: "privacy",
+          widget_source: "context_menu",
+          user_action: "learn_more",
+          widget_size: widgetSize
+        }
+      }));
+    });
+  }
+  return /*#__PURE__*/external_React_default().createElement("article", {
+    className: `privacy widget col-4 ${widgetSize}-widget${initialized && isEmptyState ? " is-empty" : ""}${initialized && showTip ? " has-tip-msg" : ""}`,
+    ref: el => {
+      widgetRef.current = [el];
+    }
+  }, /*#__PURE__*/external_React_default().createElement("div", {
+    className: "privacy-title-wrapper"
+  }, /*#__PURE__*/external_React_default().createElement("div", {
+    className: "privacy-context-menu-wrapper"
+  }, /*#__PURE__*/external_React_default().createElement("moz-button", {
+    className: "privacy-context-menu-button",
+    iconSrc: "chrome://global/skin/icons/more.svg",
+    menuId: "privacy-context-menu",
+    type: "ghost"
+  }), /*#__PURE__*/external_React_default().createElement("panel-list", {
+    id: "privacy-context-menu"
+  }, widgetsMayBeMaximized && /*#__PURE__*/external_React_default().createElement("panel-item", {
+    submenu: "privacy-size-submenu"
+  }, /*#__PURE__*/external_React_default().createElement("span", {
+    "data-l10n-id": "newtab-widget-menu-change-size"
+  }), /*#__PURE__*/external_React_default().createElement("panel-list", {
+    ref: sizeSubmenuRef,
+    slot: "submenu",
+    id: "privacy-size-submenu"
+  }, ["medium", "large"].map(size => /*#__PURE__*/external_React_default().createElement("panel-item", {
+    key: size,
+    type: "checkbox",
+    checked: widgetSize === size || undefined,
+    "data-size": size,
+    "data-l10n-id": `newtab-widget-size-${size}`
+  })))), /*#__PURE__*/external_React_default().createElement(MoveSubmenu, {
+    widgetId: "privacy",
+    widgetEnabledMap: widgetEnabledMap
+  }), /*#__PURE__*/external_React_default().createElement("panel-item", {
+    "data-l10n-id": "newtab-widget-menu-hide",
+    onClick: handlePrivacyHide
+  }), /*#__PURE__*/external_React_default().createElement("panel-item", {
+    "data-l10n-id": "newtab-privacy-menu-learn-more",
+    onClick: handleLearnMore
+  })))), /*#__PURE__*/external_React_default().createElement("div", {
+    className: "privacy-body"
+  }, initialized && (isEmptyState ? /*#__PURE__*/external_React_default().createElement("div", {
+    className: "privacy-empty"
+  }, privacyImage("widget-privacy-shield.svg"), /*#__PURE__*/external_React_default().createElement("p", {
+    className: "privacy-empty-message",
+    "data-l10n-id": "newtab-privacy-empty"
+  })) : /*#__PURE__*/external_React_default().createElement((external_React_default()).Fragment, null, /*#__PURE__*/external_React_default().createElement("div", {
+    className: "privacy-count"
+  }, /*#__PURE__*/external_React_default().createElement("div", {
+    className: "privacy-count-number-wrapper"
+  }, !isLarge && privacyImage("widget-privacy-shield-check.svg"), /*#__PURE__*/external_React_default().createElement("span", {
+    className: "privacy-count-number"
+  }, displayCount)), /*#__PURE__*/external_React_default().createElement("span", {
+    className: "privacy-count-label",
+    "data-l10n-id": "newtab-privacy-trackers-blocked-today",
+    "data-l10n-args": JSON.stringify({
+      count: trackersToday
+    })
+  }), /*#__PURE__*/external_React_default().createElement("span", {
+    className: "privacy-count-sites",
+    "data-l10n-id": "newtab-privacy-across-sites",
+    "data-l10n-args": JSON.stringify({
+      count: sitesToday
+    })
+  })), showTip && /*#__PURE__*/external_React_default().createElement((external_React_default()).Fragment, null, /*#__PURE__*/external_React_default().createElement("hr", {
+    className: "privacy-divider"
+  }), /*#__PURE__*/external_React_default().createElement("div", {
+    className: "privacy-tip"
+  }, isLarge && privacyImage("widget-privacy-shield-check.svg"), /*#__PURE__*/external_React_default().createElement("p", {
+    className: "privacy-tip-message",
+    "data-l10n-id": "newtab-privacy-message-informed-5"
+  })))))));
+}
+
+;// CONCATENATED MODULE: ./content-src/components/Widgets/Crossword/Crossword.jsx
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
+
+// eslint-disable-next-line no-unused-vars
+
+
+
+
+
+
+const Crossword_USER_ACTION_TYPES = {
+  CHANGE_SIZE: "change_size"
+};
+
+// postMessage contract with the Particle crossword bundle (per the widget's
+// postMessage API doc). Every message travels on a single channel; the widget
+// discards anything without it, and so do we.
+const CROSSWORD_CHANNEL = "crossword_widget";
+
+// Outbound: newtab -> widget host commands. Sent with an explicit targetOrigin
+// (never "*"). A menu_action carries a unique requestId so the widget can reply
+// with a matching command_ack.
+const COMMAND_TYPES = {
+  MENU_ACTION: "menu_action",
+  FORCE_REFRESH: "force_refresh"
+};
+
+// Inbound: widget -> newtab events. Only accepted from the Merino bundle origin.
+const EVENT_TYPES = {
+  COMMAND_ACK: "command_ack",
+  WIDGET_READY: "widget_ready",
+  WIDGET_ERROR: "widget_error",
+  PUZZLE_STATE: "puzzle_state",
+  PUZZLE_COMPLETED: "puzzle_completed",
+  INTERACTION: "interaction"
+};
+
+// The puzzle lifecycle states the widget reports via puzzle_state. Only
+// "in_progress" drives the widget to the large layout; "intro" and "completed"
+// (the compact returning-completion card) use the user's configured size.
+const PUZZLE_STATES = ["intro", "in_progress", "completed"];
+const isNonNegativeNumber = value => typeof value === "number" && Number.isFinite(value) && value >= 0;
+const isWholeCount = value => isNonNegativeNumber(value) && Number.isInteger(value);
+
+// Structural validators for each inbound event payload. An event whose type is
+// unknown, or whose payload fails its validator, is discarded without side
+// effects so a malformed/unexpected message can't drive Redux or telemetry.
+const EVENT_PAYLOAD_VALIDATORS = {
+  [EVENT_TYPES.COMMAND_ACK]: payload => typeof payload?.requestId === "string" && typeof payload?.status === "string",
+  [EVENT_TYPES.WIDGET_READY]: () => true,
+  [EVENT_TYPES.WIDGET_ERROR]: payload => typeof payload?.reason === "string" && typeof payload?.terminal === "boolean",
+  [EVENT_TYPES.PUZZLE_STATE]: payload => PUZZLE_STATES.includes(payload?.state),
+  [EVENT_TYPES.PUZZLE_COMPLETED]: payload => isNonNegativeNumber(payload?.elapsedTimeSeconds) && isWholeCount(payload?.hintsTaken),
+  [EVENT_TYPES.INTERACTION]: payload => typeof payload?.action === "string"
+};
+const MENU_ACTION_ITEMS = [{
+  key: "show-all-clues",
+  label: "Show clues",
+  action: "show_all_clues"
+}, {
+  // "Solve puzzle" only shows when the crossword is in the intro state or
+  // in-progress, so it is hidden once the puzzle is completed.
+  key: "solve-puzzle",
+  label: "Solve puzzle",
+  action: "reveal_grid",
+  hideWhenCompleted: true
+}];
+const CROSSWORD_ENTRY = WIDGET_REGISTRY.find(w => w.id === "crossword");
+
+// Flipped to true the first time the user interacts with the crossword. Used to
+// hide the "New" badge once the widget has been used.
+const PREF_CROSSWORD_INTERACTION = "widgets.crossword.interaction";
+function Crossword({
+  dispatch,
+  handleUserInteraction,
+  widgetsMayBeMaximized,
+  widgetEnabledMap
+}) {
+  const prefs = (0,external_ReactRedux_namespaceObject.useSelector)(state => state.Prefs.values);
+  const widgetSize = resolveWidgetSize(CROSSWORD_ENTRY, prefs);
+  const hasInteracted = prefs[PREF_CROSSWORD_INTERACTION];
+  const crosswordEndpoint = resolveCrosswordEndpoint(prefs);
+  const impressionFired = (0,external_React_namespaceObject.useRef)(false);
+  const iframeRef = (0,external_React_namespaceObject.useRef)(null);
+
+  // Set once the widget reports the puzzle is finished, so menu actions that
+  // only apply to an in-progress game (Solve puzzle) can be hidden.
+  const [puzzleCompleted, setPuzzleCompleted] = (0,external_React_namespaceObject.useState)(false);
+
+  // Grow to large once a puzzle is in progress and stay large through the
+  // completed screen; only the intro state (or loading directly into completed,
+  // i.e. the returning-completion card) stays medium. Driven by puzzle_state.
+  const [showLarge, setShowLarge] = (0,external_React_namespaceObject.useState)(false);
+
+  // Gated on widgetsMayBeMaximized so we never render a large-widget on a layout
+  // that can't host it.
+  const displaySize = widgetsMayBeMaximized && showLarge ? "large" : widgetSize;
+
+  // Any real interaction flips the interaction pref, which hides the "New"
+  // badge. The helper is a no-op once the pref is already true.
+  const handleInteraction = (0,external_React_namespaceObject.useCallback)(() => handleUserInteraction("crossword"), [handleUserInteraction]);
+
+  // The single origin we accept inbound messages from and target for outbound
+  // ones.
+  const merinoOrigin = (0,external_React_namespaceObject.useMemo)(() => {
+    try {
+      return new URL(crosswordEndpoint).origin;
+    } catch {
+      return null;
+    }
+  }, [crosswordEndpoint]);
+
+  // requestId -> action for menu_action commands awaiting a command_ack, so an
+  // incoming ack can be matched back to the action the user selected. A
+  // command_ack is the widget's reply confirming it received and processed a
+  // command we sent.
+  const pendingCommandsRef = (0,external_React_namespaceObject.useRef)(new Map());
+
+  // Post a menu_action host command to the widget, always with the Merino
+  // origin as targetOrigin so a replaced/compromised iframe src can never
+  // receive it. Each command gets a unique requestId; without one the widget
+  // replies with widget_error (host-missing-request-id) instead of a
+  // command_ack.
+  const postMenuAction = (0,external_React_namespaceObject.useCallback)(action => {
+    const frameWindow = iframeRef.current?.contentWindow;
+    const requestId = `firefox-menu-${crypto.randomUUID()}`;
+    if (!frameWindow || !merinoOrigin) {
+      return;
+    }
+    pendingCommandsRef.current.set(requestId, action);
+    frameWindow.postMessage({
+      channel: CROSSWORD_CHANNEL,
+      type: COMMAND_TYPES.MENU_ACTION,
+      requestId,
+      action
+    }, merinoOrigin);
+  }, [merinoOrigin]);
+  const handleWidgetEvent = (0,external_React_namespaceObject.useCallback)((type, payload) => {
+    switch (type) {
+      case EVENT_TYPES.COMMAND_ACK:
+        pendingCommandsRef.current.delete(payload.requestId);
+        break;
+      case EVENT_TYPES.WIDGET_READY:
+        break;
+      case EVENT_TYPES.WIDGET_ERROR:
+        break;
+      case EVENT_TYPES.PUZZLE_STATE:
+        // Grow when a puzzle is in progress and stay large through the
+        // completed screen; shrink only when returning to the intro state.
+        if (payload.state === "in_progress") {
+          setShowLarge(true);
+        } else if (payload.state === "intro") {
+          setShowLarge(false);
+        }
+        break;
+      case EVENT_TYPES.PUZZLE_COMPLETED:
+        setPuzzleCompleted(true);
+        dispatch(actionCreators.AlsoToMain({
+          type: actionTypes.WIDGETS_USER_EVENT,
+          data: {
+            widget_name: "crossword",
+            widget_source: "iframe",
+            user_action: "puzzle_completed",
+            action_value: payload.hintsTaken,
+            widget_size: widgetSize
+          }
+        }));
+        break;
+      case EVENT_TYPES.INTERACTION:
+        handleInteraction();
+        dispatch(actionCreators.AlsoToMain({
+          type: actionTypes.WIDGETS_USER_EVENT,
+          data: {
+            widget_name: "crossword",
+            widget_source: "iframe",
+            user_action: "interaction",
+            action_value: payload.action,
+            widget_size: widgetSize
+          }
+        }));
+        break;
+      default:
+        break;
+    }
+  }, [dispatch, handleInteraction, widgetSize]);
+
+  // Listen for events from the widget, discarding anything that fails origin,
+  // source, channel, or payload validation before it can touch Redux/telemetry.
+  (0,external_React_namespaceObject.useEffect)(() => {
+    if (!merinoOrigin) {
+      return undefined;
+    }
+    function handleMessage(event) {
+      if (event.origin !== merinoOrigin) {
+        return;
+      }
+      if (event.source !== iframeRef.current?.contentWindow) {
+        return;
+      }
+      const message = event.data;
+      if (!message || message.channel !== CROSSWORD_CHANNEL || typeof message.type !== "string") {
+        return;
+      }
+      const validatePayload = EVENT_PAYLOAD_VALIDATORS[message.type];
+      const payload = message.payload ?? {};
+      if (!validatePayload || !validatePayload(payload)) {
+        return;
+      }
+      handleWidgetEvent(message.type, payload);
+    }
+    window.addEventListener("message", handleMessage);
+    return () => window.removeEventListener("message", handleMessage);
+  }, [merinoOrigin, handleWidgetEvent]);
+  const handleMenuAction = (0,external_React_namespaceObject.useCallback)(action => {
+    handleInteraction();
+    postMenuAction(action);
+    dispatch(actionCreators.OnlyToMain({
+      type: actionTypes.WIDGETS_USER_EVENT,
+      data: {
+        widget_name: "crossword",
+        widget_source: "context_menu",
+        user_action: "menu_action",
+        action_value: action,
+        widget_size: widgetSize
+      }
+    }));
+  }, [handleInteraction, postMenuAction, dispatch, widgetSize]);
+  const handleIntersection = (0,external_React_namespaceObject.useCallback)(() => {
+    if (impressionFired.current) {
+      return;
+    }
+    impressionFired.current = true;
+    dispatch(actionCreators.AlsoToMain({
+      type: actionTypes.WIDGETS_IMPRESSION,
+      data: {
+        widget_name: "crossword",
+        widget_size: widgetSize
+      }
+    }));
+  }, [dispatch, widgetSize]);
+  const widgetRef = useIntersectionObserver(handleIntersection);
+  function handleCrosswordHide() {
+    (0,external_ReactRedux_namespaceObject.batch)(() => {
+      dispatch(actionCreators.OnlyToMain({
+        type: actionTypes.SET_PREF,
+        data: {
+          name: CROSSWORD_ENTRY.enabledPref,
+          value: false
+        }
+      }));
+      dispatch(actionCreators.OnlyToMain({
+        type: actionTypes.WIDGETS_ENABLED,
+        data: {
+          widget_name: "crossword",
+          widget_source: "context_menu",
+          enabled: false,
+          widget_size: widgetSize
+        }
+      }));
+    });
+  }
+  const handleChangeSize = (0,external_React_namespaceObject.useCallback)(size => {
+    handleInteraction();
+    (0,external_ReactRedux_namespaceObject.batch)(() => {
+      dispatch(actionCreators.OnlyToMain({
+        type: actionTypes.SET_PREF,
+        data: {
+          name: CROSSWORD_ENTRY.sizePref,
+          value: size
+        }
+      }));
+      dispatch(actionCreators.OnlyToMain({
+        type: actionTypes.WIDGETS_USER_EVENT,
+        data: {
+          widget_name: "crossword",
+          widget_source: "context_menu",
+          user_action: Crossword_USER_ACTION_TYPES.CHANGE_SIZE,
+          action_value: size,
+          widget_size: size
+        }
+      }));
+    });
+  }, [dispatch, handleInteraction]);
+  const sizeSubmenuRef = useSizeSubmenu(handleChangeSize);
+  function handleLearnMore() {
+    handleInteraction();
+    (0,external_ReactRedux_namespaceObject.batch)(() => {
+      dispatch(actionCreators.OnlyToMain({
+        type: actionTypes.OPEN_LINK,
+        data: {
+          url: "https://support.mozilla.org/kb/firefox-new-tab-widgets"
+        }
+      }));
+      dispatch(actionCreators.OnlyToMain({
+        type: actionTypes.WIDGETS_USER_EVENT,
+        data: {
+          widget_name: "crossword",
+          widget_source: "context_menu",
+          user_action: "learn_more",
+          widget_size: widgetSize
+        }
+      }));
+    });
+  }
+  function handlePoweredByParticle() {
+    handleInteraction();
+    (0,external_ReactRedux_namespaceObject.batch)(() => {
+      dispatch(actionCreators.OnlyToMain({
+        type: actionTypes.OPEN_LINK,
+        data: {
+          url: "https://particle.news"
+        }
+      }));
+      dispatch(actionCreators.OnlyToMain({
+        type: actionTypes.WIDGETS_USER_EVENT,
+        data: {
+          widget_name: "crossword",
+          widget_source: "context_menu",
+          user_action: "powered_by_particle",
+          widget_size: widgetSize
+        }
+      }));
+    });
+  }
+  return /*#__PURE__*/external_React_default().createElement("article", {
+    className: `crossword widget col-4 ${displaySize}-widget`,
+    ref: el => {
+      widgetRef.current = [el];
+    }
+  }, /*#__PURE__*/external_React_default().createElement("div", {
+    className: "crossword-title-wrapper"
+  }, /*#__PURE__*/external_React_default().createElement("div", {
+    className: "crossword-badge-title-wrapper"
+  }, !hasInteracted && /*#__PURE__*/external_React_default().createElement("moz-badge", {
+    className: "crossword-new-badge",
+    "data-l10n-id": "newtab-widget-lists-label-new"
+  }), /*#__PURE__*/external_React_default().createElement("h3", {
+    className: "newtab-crossword-title"
+  }, "Daily crossword")), /*#__PURE__*/external_React_default().createElement("div", {
+    className: "crossword-context-menu-wrapper"
+  }, /*#__PURE__*/external_React_default().createElement("moz-button", {
+    className: "crossword-context-menu-button",
+    iconSrc: "chrome://global/skin/icons/more.svg",
+    menuId: "crossword-context-menu",
+    type: "ghost"
+  }), /*#__PURE__*/external_React_default().createElement("panel-list", {
+    id: "crossword-context-menu"
+  }, MENU_ACTION_ITEMS.filter(item => !(puzzleCompleted && item.hideWhenCompleted)).map(item => /*#__PURE__*/external_React_default().createElement("panel-item", {
+    key: item.key,
+    className: item.key,
+    onClick: () => handleMenuAction(item.action)
+  }, item.label)), /*#__PURE__*/external_React_default().createElement("panel-item", {
+    className: "powered-by-particle",
+    onClick: handlePoweredByParticle
+  }, "Powered by Particle"), /*#__PURE__*/external_React_default().createElement("hr", null), widgetsMayBeMaximized && /*#__PURE__*/external_React_default().createElement("panel-item", {
+    submenu: "crossword-size-submenu"
+  }, /*#__PURE__*/external_React_default().createElement("span", {
+    "data-l10n-id": "newtab-widget-menu-change-size"
+  }), /*#__PURE__*/external_React_default().createElement("panel-list", {
+    ref: sizeSubmenuRef,
+    slot: "submenu",
+    id: "crossword-size-submenu"
+  }, ["medium", "large"].map(size => /*#__PURE__*/external_React_default().createElement("panel-item", {
+    key: size,
+    type: "checkbox",
+    checked: widgetSize === size || undefined,
+    "data-size": size,
+    "data-l10n-id": `newtab-widget-size-${size}`
+  })))), /*#__PURE__*/external_React_default().createElement(MoveSubmenu, {
+    widgetId: "crossword",
+    widgetEnabledMap: widgetEnabledMap
+  }), /*#__PURE__*/external_React_default().createElement("panel-item", {
+    "data-l10n-id": "newtab-widget-menu-hide",
+    onClick: handleCrosswordHide
+  }), /*#__PURE__*/external_React_default().createElement("panel-item", {
+    className: "learn-more",
+    onClick: handleLearnMore
+  }, "Learn more")))), /*#__PURE__*/external_React_default().createElement("div", {
+    className: "crossword-body"
+  }, /*#__PURE__*/external_React_default().createElement("iframe", {
+    ref: iframeRef,
+    className: "crossword-frame",
+    title: "Crossword",
+    src: crosswordEndpoint
+    // allow-same-origin is required for the crossword to work, but is
+    // currently under security review to see if it's safe to keep in our codebase right now.
+    ,
+    sandbox: "allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox"
+  })));
+}
+
+;// CONCATENATED MODULE: ./content-src/components/Widgets/Stocks/StockTicker.jsx
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
+
+
+function getDirection(changePercent) {
+  const value = parseFloat(String(changePercent ?? "").replace(/[^0-9.-]/g, ""));
+  if (!Number.isFinite(value) || value === 0) {
+    return "flat";
+  }
+  return value > 0 ? "up" : "down";
+}
+
+// The feed hands us Merino's preformatted values: last_price like "$559.44 USD"
+// and todays_change_perc like "+0.2" (US formatting, no percent sign). Parse the
+// number back out and reformat it for the viewer's locale, so the decimal
+// separator, currency symbol, and percent sign follow local conventions.
+function parseAmount(raw) {
+  const value = parseFloat(String(raw ?? "").replace(/[^0-9.-]/g, ""));
+  return Number.isFinite(value) ? value : null;
+}
+
+// How many decimal places the source value carries, so the formatted output
+// keeps the same precision Merino sent (e.g. "0.2" stays 1 place, "0.00" stays 2).
+function decimalPlaces(raw) {
+  const decimals = String(raw ?? "").match(/\.(\d+)/);
+  return decimals ? decimals[1].length : 0;
+}
+function formatPrice(price, locale) {
+  const value = parseAmount(price);
+  if (value === null) {
+    return String(price ?? "");
+  }
+  return new Intl.NumberFormat(locale, {
+    style: "currency",
+    // For now the feed only returns US stocks and ETFs, which are all priced
+    // in USD, so the currency is fixed here.
+    currency: "USD",
+    currencyDisplay: "narrowSymbol"
+  }).format(value);
+}
+function formatChange(change, locale) {
+  const value = parseAmount(change);
+  if (value === null) {
+    return String(change ?? "");
+  }
+  const places = decimalPlaces(change);
+  // Merino sends the value already in percent units ("0.2" means 0.2%), but the
+  // percent style expects a ratio, so divide by 100.
+  return new Intl.NumberFormat(locale, {
+    style: "percent",
+    signDisplay: "exceptZero",
+    minimumFractionDigits: places,
+    maximumFractionDigits: places
+  }).format(value / 100);
+}
+const TICKER_STATUS_L10N_ID = {
+  up: "newtab-stocks-ticker-status-up",
+  down: "newtab-stocks-ticker-status-down",
+  flat: "newtab-stocks-ticker-status-flat"
+};
+
+// A single read-only ticker card. The visible rows are hidden from screen
+// readers; the spoken label comes from the localized `.stock-ticker-sr` span
+// instead (one of the newtab-stocks-ticker-status-* messages, by direction).
+function StockTicker({
+  loading,
+  size = "medium",
+  name: stockName,
+  ticker,
+  price,
+  changePercent
+}) {
+  const direction = getDirection(changePercent);
+  const locale = typeof navigator !== "undefined" ? navigator.language : undefined;
+  const displayPrice = formatPrice(price, locale);
+  const displayChange = formatChange(changePercent, locale);
+  // Flat is a sideways arrow, so it mirrors for right-to-left locales. The URL
+  // is built in JS like the other newtab arrows, not as a CSS url(): a static
+  // reference to shaft-arrow-right.svg makes browser_all_files_referenced.js
+  // flag the icon.
+  const isRTL = typeof document !== "undefined" && document.dir === "rtl";
+  const indicatorStyle = direction === "flat" ? {
+    backgroundImage: `url("chrome://global/skin/icons/shaft-arrow-${isRTL ? "left" : "right"}.svg")`
+  } : undefined;
+  const changeText = /*#__PURE__*/external_React_default().createElement("span", {
+    className: `stock-ticker-change stock-ticker-change--${direction}`
+  }, displayChange);
+  return /*#__PURE__*/external_React_default().createElement("li", {
+    className: `stock-ticker stock-ticker--${size}`,
+    "aria-hidden": loading ? "true" : undefined
+  }, !loading && /*#__PURE__*/external_React_default().createElement("span", {
+    className: "stock-ticker-sr",
+    "data-l10n-id": TICKER_STATUS_L10N_ID[direction],
+    "data-l10n-args": JSON.stringify({
+      name: stockName || ticker,
+      change: displayChange,
+      price: displayPrice
+    })
+  }), /*#__PURE__*/external_React_default().createElement("span", {
+    className: `stock-indicator stock-indicator--${direction}`,
+    style: indicatorStyle,
+    "aria-hidden": "true"
+  }), /*#__PURE__*/external_React_default().createElement("span", {
+    className: "stock-ticker-label",
+    "aria-hidden": "true"
+  }, size === "large" ? /*#__PURE__*/external_React_default().createElement((external_React_default()).Fragment, null, /*#__PURE__*/external_React_default().createElement("span", {
+    className: "stock-ticker-line"
+  }, /*#__PURE__*/external_React_default().createElement("span", {
+    className: "stock-ticker-name"
+  }, stockName), /*#__PURE__*/external_React_default().createElement("span", {
+    className: "stock-ticker-dot"
+  }), /*#__PURE__*/external_React_default().createElement("span", {
+    className: "stock-ticker-symbol"
+  }, ticker)), /*#__PURE__*/external_React_default().createElement("span", {
+    className: "stock-ticker-line"
+  }, changeText, /*#__PURE__*/external_React_default().createElement("span", {
+    className: "stock-ticker-dot"
+  }), /*#__PURE__*/external_React_default().createElement("span", {
+    className: "stock-ticker-price"
+  }, displayPrice))) : /*#__PURE__*/external_React_default().createElement((external_React_default()).Fragment, null, /*#__PURE__*/external_React_default().createElement("span", {
+    className: "stock-ticker-line"
+  }, /*#__PURE__*/external_React_default().createElement("span", {
+    className: "stock-ticker-symbol"
+  }, ticker), /*#__PURE__*/external_React_default().createElement("span", {
+    className: "stock-ticker-dot"
+  }), /*#__PURE__*/external_React_default().createElement("span", {
+    className: "stock-ticker-price"
+  }, displayPrice)), changeText)));
+}
+
+;// CONCATENATED MODULE: ./content-src/components/Widgets/Stocks/Stocks.jsx
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
+
+// eslint-disable-next-line no-unused-vars
+
+
+
+
+
+
+
+
+const Stocks_USER_ACTION_TYPES = {
+  CHANGE_SIZE: "change_size",
+  SEARCH_TICKERS: "search_tickers",
+  LEARN_MORE: "learn_more"
+};
+const STOCKS_ENTRY = WIDGET_REGISTRY.find(w => w.id === "stocks");
+const STOCKS_PLACEHOLDER_COUNT = 4;
+function Stocks_Stocks({
+  dispatch,
+  widgetsMayBeMaximized,
+  widgetEnabledMap
+}) {
+  const prefs = (0,external_ReactRedux_namespaceObject.useSelector)(state => state.Prefs.values);
+  const {
+    tickers
+  } = (0,external_ReactRedux_namespaceObject.useSelector)(state => state.Stocks);
+
+  // Resolve size through the registry helper, not the pref, so trainhop and the
+  // default can apply.
+  const widgetSize = resolveWidgetSize(STOCKS_ENTRY, prefs);
+  const impressionFired = (0,external_React_namespaceObject.useRef)(false);
+  const handleIntersection = (0,external_React_namespaceObject.useCallback)(() => {
+    if (impressionFired.current) {
+      return;
+    }
+    impressionFired.current = true;
+    dispatch(actionCreators.AlsoToMain({
+      type: actionTypes.WIDGETS_IMPRESSION,
+      data: {
+        widget_name: "stocks",
+        widget_size: widgetSize
+      }
+    }));
+  }, [dispatch, widgetSize]);
+  const widgetRef = useIntersectionObserver(handleIntersection);
+  const handleChangeSize = (0,external_React_namespaceObject.useCallback)(size => {
+    (0,external_ReactRedux_namespaceObject.batch)(() => {
+      dispatch(actionCreators.OnlyToMain({
+        type: actionTypes.SET_PREF,
+        data: {
+          name: STOCKS_ENTRY.sizePref,
+          value: size
+        }
+      }));
+      dispatch(actionCreators.OnlyToMain({
+        type: actionTypes.WIDGETS_USER_EVENT,
+        data: {
+          widget_name: "stocks",
+          widget_source: "context_menu",
+          user_action: Stocks_USER_ACTION_TYPES.CHANGE_SIZE,
+          action_value: size,
+          widget_size: size
+        }
+      }));
+    });
+  }, [dispatch]);
+
+  // Placeholder: a real ticker search will replace this telemetry-only stub in
+  // a follow-up.
+  function handleSearchTickers() {
+    dispatch(actionCreators.OnlyToMain({
+      type: actionTypes.WIDGETS_USER_EVENT,
+      data: {
+        widget_name: "stocks",
+        widget_source: "context_menu",
+        user_action: Stocks_USER_ACTION_TYPES.SEARCH_TICKERS,
+        widget_size: widgetSize
+      }
+    }));
+  }
+
+  // The shared footer opens the support link; here we only record the click.
+  function handleLearnMore() {
+    dispatch(actionCreators.OnlyToMain({
+      type: actionTypes.WIDGETS_USER_EVENT,
+      data: {
+        widget_name: "stocks",
+        widget_source: "context_menu",
+        user_action: Stocks_USER_ACTION_TYPES.LEARN_MORE,
+        widget_size: widgetSize
+      }
+    }));
+  }
+  return /*#__PURE__*/external_React_default().createElement("article", {
+    className: `stocks widget col-4 ${widgetSize}-widget`,
+    ref: el => {
+      widgetRef.current = [el];
+    }
+  }, /*#__PURE__*/external_React_default().createElement("div", {
+    className: "stocks-title-wrapper"
+  }, /*#__PURE__*/external_React_default().createElement("span", {
+    className: "stocks-title",
+    "data-l10n-id": "newtab-stocks-widget-title"
+  }), /*#__PURE__*/external_React_default().createElement("div", {
+    className: "stocks-context-menu-wrapper"
+  }, /*#__PURE__*/external_React_default().createElement("moz-button", {
+    className: "stocks-context-menu-button",
+    iconSrc: "chrome://global/skin/icons/more.svg",
+    menuId: "stocks-context-menu",
+    type: "icon ghost",
+    size: "small",
+    "data-l10n-id": "newtab-stocks-widget-menu-button"
+  }), /*#__PURE__*/external_React_default().createElement("panel-list", {
+    id: "stocks-context-menu"
+  }, /*#__PURE__*/external_React_default().createElement("panel-item", {
+    "data-l10n-id": "newtab-stocks-menu-search",
+    onClick: handleSearchTickers
+  }), /*#__PURE__*/external_React_default().createElement(WidgetMenuFooter, {
+    dispatch: dispatch,
+    widgetId: "stocks",
+    widgetEnabledMap: widgetEnabledMap,
+    widgetName: "stocks",
+    enabledPref: STOCKS_ENTRY.enabledPref,
+    widgetSize: widgetSize,
+    learnMoreL10nId: "newtab-stocks-menu-learn-more",
+    onLearnMore: handleLearnMore,
+    sizeSubmenu: widgetsMayBeMaximized ? /*#__PURE__*/external_React_default().createElement(SizeSubmenu, {
+      submenuId: "stocks-size-submenu",
+      sizes: ["medium", "large"],
+      checkedSize: widgetSize,
+      onChangeSize: handleChangeSize
+    }) : null
+  })))), /*#__PURE__*/external_React_default().createElement("div", {
+    className: "stocks-body"
+  }, widgetSize === "medium" && /*#__PURE__*/external_React_default().createElement("ul", {
+    className: `stocks-grid${tickers.length ? "" : " stocks-grid--loading"}`
+  }, tickers.length ? tickers.map(t => /*#__PURE__*/external_React_default().createElement(StockTicker, {
+    key: t.ticker,
+    name: t.name,
+    ticker: t.ticker,
+    price: t.last_price,
+    changePercent: t.todays_change_perc
+  })) : Array.from({
+    length: STOCKS_PLACEHOLDER_COUNT
+  }).map((_, i) => /*#__PURE__*/external_React_default().createElement(StockTicker, {
+    key: i,
+    loading: true
+  }))), widgetSize === "large" && /*#__PURE__*/external_React_default().createElement("ul", {
+    className: `stocks-list${tickers.length ? "" : " stocks-list--loading"}`
+  }, tickers.length ? tickers.map(t => /*#__PURE__*/external_React_default().createElement(StockTicker, {
+    key: t.ticker,
+    size: "large",
+    name: t.name,
+    ticker: t.ticker,
+    price: t.last_price,
+    changePercent: t.todays_change_perc
+  })) : Array.from({
+    length: STOCKS_PLACEHOLDER_COUNT
+  }).map((_, i) => /*#__PURE__*/external_React_default().createElement(StockTicker, {
+    key: i,
+    size: "large",
+    loading: true
+  })))));
+}
+
+;// CONCATENATED MODULE: ./content-src/components/Widgets/PictureOfTheDay/PictureOfTheDay.jsx
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
+
+// eslint-disable-next-line no-unused-vars
+
+
+
+
+
+
+
+const PICTURE_OF_THE_DAY_ENTRY = WIDGET_REGISTRY.find(w => w.id === "pictureOfTheDay");
+
+// Whether the "Set as wallpaper" feature is enabled. The dedicated
+// widgetPictureOfTheDay trainhop object wins, then the legacy widgets.* key, then
+// the pref (each checked with !== undefined so a trainhop `false` can turn the
+// feature off even when the pref default is `true`).
+function resolveSetAsWallpaperEnabled(prefs) {
+  const dedicated = prefs.trainhopConfig?.widgetPictureOfTheDay?.setAsWallpaperEnabled;
+  if (dedicated !== undefined) {
+    return dedicated;
+  }
+  const shared = prefs.trainhopConfig?.widgets?.pictureOfTheDaySetAsWallpaperEnabled;
+  if (shared !== undefined) {
+    return shared;
+  }
+  return Boolean(prefs["widgets.pictureOfTheDay.setAsWallpaper.enabled"]);
+}
+
+// How long the confirmation checkmark shows after setting the wallpaper.
+const JUST_SET_CHECKMARK_MS = 2000;
+
+// "Set wallpaper" button icons: the canvas icon by default, swapped for a
+// checkmark during the brief post-set confirmation.
+const SET_WALLPAPER_ICON = "chrome://browser/skin/canvas.svg";
+const SET_WALLPAPER_CHECK_ICON = "chrome://global/skin/icons/check.svg";
+
+// The daily Merino picture (image, attribution, description, "Set wallpaper"),
+// or a sunrise-gradient empty state with an eye button when it's hidden/absent.
+const PictureOfTheDay_PictureOfTheDay = ({
+  dispatch,
+  handleUserInteraction,
+  widgetsMayBeMaximized,
+  widgetEnabledMap
+}) => {
+  const prefs = (0,external_ReactRedux_namespaceObject.useSelector)(state => state.Prefs.values);
+  const pictureData = (0,external_ReactRedux_namespaceObject.useSelector)(state => state.PictureOfTheDay);
+  const widgetSize = resolveWidgetSize(PICTURE_OF_THE_DAY_ENTRY, prefs);
+
+  // Only offer the "Set wallpaper" CTA when the feature is enabled and wallpapers
+  // are on and custom wallpapers are allowed, since this action sets a custom
+  // wallpaper.
+  const canSetWallpaper = Boolean(resolveSetAsWallpaperEnabled(prefs) && prefs["newtabWallpapers.enabled"] && prefs["newtabWallpapers.customWallpaper.enabled"]);
+
+  // Fall back to the empty state when the picture fails to load (e.g. a cached
+  // URL opened offline, or a broken/404 image) instead of showing a broken
+  // image. Reset when a new picture arrives so the next day's image is tried.
+  const [imageFailed, setImageFailed] = (0,external_React_namespaceObject.useState)(false);
+  (0,external_React_namespaceObject.useEffect)(() => {
+    setImageFailed(false);
+  }, [pictureData.imageUrl]);
+
+  // Dismissal is keyed to the picture's date so a new day's picture shows again
+  // automatically (Bug 2050972). Edge case: Merino may omit published_date, and
+  // without a key "Hide today's picture" would silently no-op, so fall back to
+  // the local day. Tradeoff: hide then tracks the user's local clock, so an
+  // undated picture restores at local midnight even if Merino hasn't rotated it.
+  const pictureDate = pictureData.publishedDate || new Date().toDateString();
+  const dismissed = pictureDate === prefs["widgets.pictureOfTheDay.dismissedDate"];
+  // The picture is the active wallpaper only while the stored published date
+  // matches the currently-shown picture (mirrors the dismissed check above, so a
+  // new day's picture automatically re-offers the CTA) AND wallpapers are toggled
+  // on. Toggling wallpapers off in the Content section keeps the picture selected
+  // but hidden, so the checkmark hides while off and returns when toggled back on.
+  const isSetAsWallpaper = Boolean(prefs["newtabWallpapers.user.enabled"]) && pictureDate === prefs["widgets.pictureOfTheDay.wallpaperActive"];
+  const hasPicture = Boolean(pictureData.imageUrl) && !dismissed && !imageFailed;
+
+  // Show the "New" badge until the user first interacts with the widget;
+  // handleInteraction flips widgets.pictureOfTheDay.interaction on any action,
+  // which removes it.
+  const hasInteracted = prefs["widgets.pictureOfTheDay.interaction"];
+
+  // Show a brief checkmark right after the user sets the wallpaper, then settle
+  // into the collapsed "already set" state.
+  const [justSet, setJustSet] = (0,external_React_namespaceObject.useState)(false);
+  (0,external_React_namespaceObject.useEffect)(() => {
+    if (!justSet) {
+      return undefined;
+    }
+    const timer = setTimeout(() => setJustSet(false), JUST_SET_CHECKMARK_MS);
+    return () => clearTimeout(timer);
+  }, [justSet]);
+
+  // After setting, keep the button collapsed for the current hover/focus
+  // session so it doesn't pop open to the pill the moment the checkmark clears;
+  // a fresh hover (after leaving the widget) expands it again.
+  const [suppressExpand, setSuppressExpand] = (0,external_React_namespaceObject.useState)(false);
+  const {
+    impressionRef,
+    recordUserAction,
+    recordEnabled
+  } = useWidgetTelemetry({
+    dispatch,
+    widget: PICTURE_OF_THE_DAY_ENTRY,
+    widgetSize
+  });
+
+  // Flip widgets.pictureOfTheDay.interaction on the first user action; every
+  // handler calls it so no action is missed (the flip is idempotent).
+  const handleInteraction = (0,external_React_namespaceObject.useCallback)(() => handleUserInteraction("pictureOfTheDay"), [handleUserInteraction]);
+
+  // Alt text uses the (localized) description when present, else a localized
+  // generic fallback (a11y decision, Bug 2050975; the raw image title was
+  // rejected as unreliable). Resolved via the l10n value API (computed string).
+  const [fallbackAlt, setFallbackAlt] = (0,external_React_namespaceObject.useState)("");
+  (0,external_React_namespaceObject.useEffect)(() => {
+    document.l10n?.formatValues?.([{
+      id: "newtab-picture-image-alt"
+    }])?.then(([value]) => value && setFallbackAlt(value));
+  }, []);
+  const imageAlt = pictureData.description || fallbackAlt;
+  const handleHide = () => {
+    (0,external_ReactRedux_namespaceObject.batch)(() => {
+      dispatch(actionCreators.OnlyToMain({
+        type: actionTypes.SET_PREF,
+        data: {
+          name: PICTURE_OF_THE_DAY_ENTRY.enabledPref,
+          value: false
+        }
+      }));
+      // Disabling the widget is not an interaction, so it does not flip the
+      // interaction pref.
+      recordEnabled(false, {
+        source: "context_menu"
+      });
+    });
+  };
+  const handleChangeSize = (0,external_React_namespaceObject.useCallback)(size => {
+    (0,external_ReactRedux_namespaceObject.batch)(() => {
+      dispatch(actionCreators.OnlyToMain({
+        type: actionTypes.SET_PREF,
+        data: {
+          name: PICTURE_OF_THE_DAY_ENTRY.sizePref,
+          value: size
+        }
+      }));
+      recordUserAction("change_size", {
+        source: "context_menu",
+        value: size,
+        size
+      });
+      handleInteraction();
+    });
+  }, [dispatch, recordUserAction, handleInteraction]);
+  const sizeSubmenuRef = useSizeSubmenu(handleChangeSize);
+  const handleLearnMore = () => {
+    (0,external_ReactRedux_namespaceObject.batch)(() => {
+      dispatch(actionCreators.OnlyToMain({
+        type: actionTypes.OPEN_LINK,
+        data: {
+          url: "https://support.mozilla.org/kb/firefox-new-tab-widgets",
+          where: "tab"
+        }
+      }));
+      recordUserAction("learn_more", {
+        source: "context_menu"
+      });
+      handleInteraction();
+    });
+  };
+  const handleManageWallpaper = () => {
+    (0,external_ReactRedux_namespaceObject.batch)(() => {
+      dispatch({
+        type: actionTypes.SHOW_PERSONALIZE
+      });
+      recordUserAction("manage_wallpaper", {
+        source: "context_menu"
+      });
+      handleInteraction();
+    });
+  };
+  const setDismissedDate = value => dispatch(actionCreators.OnlyToMain({
+    type: actionTypes.SET_PREF,
+    data: {
+      name: "widgets.pictureOfTheDay.dismissedDate",
+      value
+    }
+  }));
+  const handleHidePhoto = () => {
+    (0,external_ReactRedux_namespaceObject.batch)(() => {
+      setDismissedDate(pictureDate);
+      recordUserAction("hide_photo", {
+        source: "context_menu"
+      });
+      handleInteraction();
+    });
+  };
+  const handleShow = (source = "widget") => {
+    (0,external_ReactRedux_namespaceObject.batch)(() => {
+      setDismissedDate("");
+      recordUserAction("show_picture", {
+        source
+      });
+      handleInteraction();
+    });
+  };
+
+  // The Merino image host doesn't send CORS headers, so the picture bytes can
+  // only be read in the privileged main process. The feed does the fetch,
+  // derives the theme, and applies it as the custom wallpaper; show a checkmark
+  // confirmation immediately.
+  const handleSetWallpaper = () => {
+    // Once the picture is the active wallpaper the button is just a status
+    // checkmark, so clicking it is a no-op.
+    if (isSetAsWallpaper) {
+      return;
+    }
+    (0,external_ReactRedux_namespaceObject.batch)(() => {
+      dispatch(actionCreators.OnlyToMain({
+        type: actionTypes.WIDGETS_PICTURE_SET_WALLPAPER
+      }));
+      recordUserAction("set_wallpaper", {
+        source: "widget"
+      });
+      handleInteraction();
+    });
+    setJustSet(true);
+    setSuppressExpand(true);
+  };
+
+  // The image, source line, and description open the picture's source page
+  // (Wikimedia Commons) in a new tab. Only wired when the feed supplies a source
+  // URL; otherwise the elements render as their plain text/image equivalents.
+  const canOpenSource = Boolean(pictureData.sourceUrl);
+  const handleOpenSource = () => {
+    if (!pictureData.sourceUrl) {
+      return;
+    }
+    (0,external_ReactRedux_namespaceObject.batch)(() => {
+      dispatch(actionCreators.OnlyToMain({
+        type: actionTypes.OPEN_LINK,
+        data: {
+          url: pictureData.sourceUrl,
+          where: "tab"
+        }
+      }));
+      recordUserAction("open_source", {
+        source: "widget"
+      });
+      handleInteraction();
+    });
+  };
+
+  // The license name links to the license terms (Creative Commons) in a new
+  // tab, separate from the source page link above.
+  const canOpenLicense = Boolean(pictureData.licenseUrl);
+  const handleOpenLicense = () => {
+    if (!pictureData.licenseUrl) {
+      return;
+    }
+    (0,external_ReactRedux_namespaceObject.batch)(() => {
+      dispatch(actionCreators.OnlyToMain({
+        type: actionTypes.OPEN_LINK,
+        data: {
+          url: pictureData.licenseUrl,
+          where: "tab"
+        }
+      }));
+      recordUserAction("open_license", {
+        source: "widget"
+      });
+      handleInteraction();
+    });
+  };
+
+  // Attribution line under the title: "© {author} / {source} / {license}".
+  // Each part renders only when its field is present; the source and license
+  // are links (when their URLs are supplied), the author is plain text.
+  const renderAttribution = () => {
+    const parts = [];
+    if (pictureData.author) {
+      parts.push(/*#__PURE__*/external_React_default().createElement("span", {
+        key: "author",
+        className: "picture-of-the-day-attribution-author",
+        "data-l10n-id": "newtab-picture-attribution-author",
+        "data-l10n-args": JSON.stringify({
+          author: pictureData.author
+        })
+      }));
+    }
+    if (canOpenSource) {
+      parts.push(/*#__PURE__*/external_React_default().createElement("button", {
+        key: "source",
+        type: "button",
+        className: "picture-of-the-day-attribution-link picture-of-the-day-source-link",
+        "data-l10n-id": "newtab-picture-attribution-source-link",
+        onClick: handleOpenSource
+      }));
+    }
+    if (pictureData.licenseLabel) {
+      parts.push(canOpenLicense ? /*#__PURE__*/external_React_default().createElement("button", {
+        key: "license",
+        type: "button",
+        className: "picture-of-the-day-attribution-link picture-of-the-day-source-link",
+        "data-l10n-id": "newtab-picture-attribution-license",
+        "data-l10n-args": JSON.stringify({
+          license: pictureData.licenseLabel
+        }),
+        onClick: handleOpenLicense
+      }, pictureData.licenseLabel) : /*#__PURE__*/external_React_default().createElement("span", {
+        key: "license",
+        className: "picture-of-the-day-attribution-item"
+      }, pictureData.licenseLabel));
+    }
+    if (!parts.length) {
+      return null;
+    }
+    return /*#__PURE__*/external_React_default().createElement("p", {
+      className: "picture-of-the-day-attribution"
+    }, parts.map((part, i) => /*#__PURE__*/external_React_default().createElement((external_React_default()).Fragment, {
+      key: part.key
+    }, i > 0 ? /*#__PURE__*/external_React_default().createElement("span", {
+      className: "picture-of-the-day-attribution-sep",
+      "aria-hidden": "true"
+    }, " / ") : null, part)));
+  };
+  const pictureImage = /*#__PURE__*/external_React_default().createElement("img", {
+    className: "picture-of-the-day-image",
+    src: pictureData.imageUrl,
+    alt: imageAlt,
+    onError: () => setImageFailed(true)
+  });
+  return /*#__PURE__*/external_React_default().createElement("article", {
+    className: `picture-of-the-day widget col-4 ${widgetSize}-widget${hasPicture ? " has-picture" : ""}`,
+    ref: impressionRef,
+    onMouseLeave: () => setSuppressExpand(false),
+    onBlur: e => {
+      // Only reset when focus leaves the whole widget, not when it moves
+      // between the menu and button inside it.
+      if (!e.currentTarget.contains(e.relatedTarget)) {
+        setSuppressExpand(false);
+      }
+    }
+  }, /*#__PURE__*/external_React_default().createElement("div", {
+    className: "picture-of-the-day-toolbar"
+  }, hasPicture ? /*#__PURE__*/external_React_default().createElement("div", {
+    className: "picture-of-the-day-heading"
+  }, /*#__PURE__*/external_React_default().createElement("div", {
+    className: "picture-of-the-day-title-row"
+  }, !hasInteracted && /*#__PURE__*/external_React_default().createElement("moz-badge", {
+    className: "picture-of-the-day-new-badge",
+    "data-l10n-id": "newtab-widget-lists-label-new"
+  }), /*#__PURE__*/external_React_default().createElement("p", {
+    className: "picture-of-the-day-source",
+    "data-l10n-id": "newtab-picture-header-main"
+  })), renderAttribution()) : null, /*#__PURE__*/external_React_default().createElement("div", {
+    className: "picture-of-the-day-context-menu-wrapper"
+  }, /*#__PURE__*/external_React_default().createElement("moz-button", {
+    className: "picture-of-the-day-context-menu-button",
+    "data-l10n-id": "newtab-picture-widget-menu-button",
+    iconSrc: "chrome://global/skin/icons/more.svg",
+    menuId: "picture-of-the-day-context-menu",
+    type: "ghost"
+  }), /*#__PURE__*/external_React_default().createElement("panel-list", {
+    id: "picture-of-the-day-context-menu"
+  }, /*#__PURE__*/external_React_default().createElement("panel-item", {
+    "data-l10n-id": "newtab-picture-menu-manage-wallpaper",
+    onClick: handleManageWallpaper
+  }), dismissed ? /*#__PURE__*/external_React_default().createElement("panel-item", {
+    "data-l10n-id": "newtab-picture-menu-show-photo",
+    onClick: () => handleShow("context_menu")
+  }) : /*#__PURE__*/external_React_default().createElement("panel-item", {
+    "data-l10n-id": "newtab-picture-menu-hide-photo",
+    onClick: handleHidePhoto
+  }), /*#__PURE__*/external_React_default().createElement("hr", null), widgetsMayBeMaximized && /*#__PURE__*/external_React_default().createElement("panel-item", {
+    submenu: "picture-of-the-day-size-submenu"
+  }, /*#__PURE__*/external_React_default().createElement("span", {
+    "data-l10n-id": "newtab-widget-menu-change-size"
+  }), /*#__PURE__*/external_React_default().createElement("panel-list", {
+    ref: sizeSubmenuRef,
+    slot: "submenu",
+    id: "picture-of-the-day-size-submenu"
+  }, ["medium", "large"].map(size => /*#__PURE__*/external_React_default().createElement("panel-item", {
+    key: size,
+    type: "checkbox",
+    checked: widgetSize === size || undefined,
+    "data-size": size,
+    "data-l10n-id": `newtab-widget-size-${size}`
+  })))), /*#__PURE__*/external_React_default().createElement(MoveSubmenu, {
+    widgetId: "pictureOfTheDay",
+    widgetEnabledMap: widgetEnabledMap
+  }), /*#__PURE__*/external_React_default().createElement("panel-item", {
+    "data-l10n-id": "newtab-widget-menu-hide",
+    onClick: handleHide
+  }), /*#__PURE__*/external_React_default().createElement("panel-item", {
+    "data-l10n-id": "newtab-picture-menu-learn-more",
+    onClick: handleLearnMore
+  })))), hasPicture ? /*#__PURE__*/external_React_default().createElement("div", {
+    className: "picture-of-the-day-populated"
+  }, canOpenSource ? /*#__PURE__*/external_React_default().createElement("button", {
+    type: "button",
+    className: "picture-of-the-day-image-link",
+    onClick: handleOpenSource
+  }, pictureImage) : pictureImage, /*#__PURE__*/external_React_default().createElement("div", {
+    className: "picture-of-the-day-details"
+  }, pictureData.description ? /*#__PURE__*/external_React_default().createElement("p", {
+    className: "picture-of-the-day-description"
+  }, pictureData.description) : null, canSetWallpaper ? /*#__PURE__*/external_React_default().createElement("moz-button", {
+    className: `picture-of-the-day-set-wallpaper${justSet || isSetAsWallpaper ? " is-collapsed" : ""}${suppressExpand || isSetAsWallpaper ? " no-expand" : ""}`,
+    type: "primary",
+    iconSrc: justSet || isSetAsWallpaper ? SET_WALLPAPER_CHECK_ICON : SET_WALLPAPER_ICON,
+    onClick: handleSetWallpaper,
+    "data-l10n-id": "newtab-picture-set-wallpaper"
+  }) : null)) : /*#__PURE__*/external_React_default().createElement("div", {
+    className: "picture-of-the-day-footer"
+  }, /*#__PURE__*/external_React_default().createElement("button", {
+    type: "button",
+    className: "picture-of-the-day-show-button",
+    onClick: () => handleShow("widget"),
+    "data-l10n-id": "newtab-picture-show-button"
+  }), /*#__PURE__*/external_React_default().createElement("p", {
+    className: "picture-of-the-day-message",
+    "data-l10n-id": "newtab-picture-check-back"
+  })));
+};
+
 ;// CONCATENATED MODULE: ./content-src/components/Widgets/WidgetsComponentRegistry.jsx
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+
+
+
 
 
 
@@ -19563,7 +23267,11 @@ const WIDGET_ROW_COMPONENTS = {
   focusTimer: FocusTimer,
   weather: WeatherRowWidget,
   sportsWidget: SportsWidget_SportsWidget,
-  clocks: ClocksRowWidget
+  clocks: ClocksRowWidget,
+  privacy: Privacy,
+  crossword: Crossword,
+  stocks: Stocks_Stocks,
+  pictureOfTheDay: PictureOfTheDay_PictureOfTheDay
 };
 const WIDGET_SIDEBAR_COMPONENTS = {
   weather: WeatherSidebarWidget
@@ -19598,7 +23306,7 @@ function WidgetWrapper({
 // Elements where mousedown should start an interaction, not a widget reorder.
 // Anchors are excluded so clicking still navigates, and dragging an anchor
 // drags the widget.
-const INTERACTIVE_DESCENDANT_SELECTOR = ["button", "moz-button", "moz-checkbox", "moz-toggle", "moz-radio", "moz-select", "moz-input-text", "moz-input-password", "moz-input-search", "input", "textarea", "select", "[contenteditable='true']", "[role='button']", "[role='checkbox']", "[role='switch']", "[role='textbox']"].join(", ");
+const INTERACTIVE_DESCENDANT_SELECTOR = ["button", "moz-button", "moz-checkbox", "moz-toggle", "moz-radio", "moz-select", "moz-input-text", "moz-input-password", "moz-input-search", "input", "textarea", "select", "dialog", "[contenteditable='true']", "[role='button']", "[role='checkbox']", "[role='switch']", "[role='textbox']"].join(", ");
 
 /**
  * Builds a high-DPI drag image clone anchored at the cursor's grab point.
@@ -19972,7 +23680,11 @@ function Widgets() {
     focusTimer: timerEnabled,
     weather: weatherEnabled && !weatherGoesToSidebar,
     sportsWidget: isWidgetEnabled(WIDGET_REGISTRY.find(w => w.id === "sportsWidget"), prefs, widgetsEnabled),
-    clocks: isWidgetEnabled(WIDGET_REGISTRY.find(w => w.id === "clocks"), prefs, widgetsEnabled)
+    clocks: isWidgetEnabled(WIDGET_REGISTRY.find(w => w.id === "clocks"), prefs, widgetsEnabled),
+    privacy: isWidgetEnabled(WIDGET_REGISTRY.find(w => w.id === "privacy"), prefs, widgetsEnabled),
+    crossword: isWidgetEnabled(WIDGET_REGISTRY.find(w => w.id === "crossword"), prefs, widgetsEnabled),
+    stocks: isWidgetEnabled(WIDGET_REGISTRY.find(w => w.id === "stocks"), prefs, widgetsEnabled),
+    pictureOfTheDay: isWidgetEnabled(WIDGET_REGISTRY.find(w => w.id === "pictureOfTheDay"), prefs, widgetsEnabled)
   };
   const widgetOrder = resolveWidgetOrder(prefs);
   const {
@@ -20074,34 +23786,38 @@ function Widgets() {
   function toggleMaximize() {
     const newMaximizedState = !isMaximized;
     const newWidgetSize = widgetsMayBeMaximized && !newMaximizedState ? "medium" : "large";
-    (0,external_ReactRedux_namespaceObject.batch)(() => {
-      dispatch(actionCreators.SetPref(PREF_WIDGETS_MAXIMIZED, newMaximizedState));
 
-      // When Nova is enabled, treat the shared header control as a toggle
-      // between the default/full widget presentation and the compact one.
-      // Widgets at "small" are skipped — they are either in the sidebar or
-      // user-pinned and should not be moved by the row toggle.
-      //
-      // Future: if we add a "small" in-row presentation for a widget, this
-      // loop will need to distinguish between "small-in-sidebar" and
-      // "small-in-row". One way to do that is to add a hasSidebar-aware
-      // helper (e.g. isWidgetInSidebar(widget, prefs)) and only skip widgets
-      // that are actually rendered in the sidebar, not all widgets at "small".
-      // The registry already carries hasSidebar and trainhopSidebarKey, so
-      // resolveWidgetHasSidebar(widget, prefs) provides that check today.
-      if (novaEnabled) {
-        const targetSize = newMaximizedState ? "large" : "medium";
-        for (const widget of WIDGET_REGISTRY) {
-          if (resolveWidgetSize(widget, prefs) !== "small") {
-            dispatch(actionCreators.SetPref(widget.sizePref, targetSize));
-          }
+    // Batch into one SET_MULTIPLE_PREFS so the sizes return in a single broadcast,
+    // not one staggered round-trip per widget.
+    const prefUpdates = {
+      [PREF_WIDGETS_MAXIMIZED]: newMaximizedState
+    };
+
+    // When Nova is enabled, treat the shared header control as a toggle
+    // between the default/full widget presentation and the compact one.
+    // Only widgets actually rendered in the sidebar are skipped — that is the
+    // same hasSidebar + size === "small" test used in WidgetsSidebar and by
+    // weatherGoesToSidebar above, not "any small widget". A "small" widget
+    // sitting in the row is resized along with the others so it isn't left
+    // behind by the row toggle. On minimize such a widget lands at "medium"
+    // rather than returning to "small", since the size pref holds the display
+    // state directly and the pre-maximize size isn't retained.
+    if (novaEnabled) {
+      const targetSize = newMaximizedState ? "large" : "medium";
+      for (const widget of WIDGET_REGISTRY) {
+        const inSidebar = resolveWidgetHasSidebar(widget, prefs) && resolveWidgetSize(widget, prefs) === "small";
+        if (!inSidebar) {
+          prefUpdates[widget.sizePref] = targetSize;
         }
       }
-      const telemetryData = {
-        action_type: CONTAINER_ACTION_TYPES.CHANGE_SIZE_ALL,
-        action_value: newMaximizedState ? "maximize_widgets" : "minimize_widgets",
-        widget_size: newWidgetSize
-      };
+    }
+    const telemetryData = {
+      action_type: CONTAINER_ACTION_TYPES.CHANGE_SIZE_ALL,
+      action_value: newMaximizedState ? "maximize_widgets" : "minimize_widgets",
+      widget_size: newWidgetSize
+    };
+    (0,external_ReactRedux_namespaceObject.batch)(() => {
+      dispatch(actionCreators.SetMultiplePrefs(prefUpdates));
       dispatch(actionCreators.OnlyToMain({
         type: actionTypes.WIDGETS_CONTAINER_ACTION,
         data: telemetryData
@@ -20238,62 +23954,30 @@ function Widgets() {
   }
 
   // CSS container queries on the widgets section decide whether the toggle
-  // button is shown — see _Widgets.scss. JS builds the ordered list of
-  // enabled widget sizes and, for each possible card-column count
-  // (1–4), checks whether the layout overflows: any large past the
-  // first N positions can't fit, and any medium past N needs a medium
-  // in the first N to pair with. The matching `data-overflow-N`
-  // attribute is read by the @container rules in CSS.
-  const sizes = [];
+  // button is shown — see _Widgets.scss. The collapsed row holds one widget
+  // per card-column slot regardless of size, so for each card-column count
+  // (1–4) anything past the first N positions overflows. This keeps mediums
+  // to a single (shorter) row rather than stacking them two-deep to fill a
+  // large-height band. The matching `data-overflow-N` attribute is read by
+  // the @container rules in CSS.
   const enabledWidgetIds = [];
   // Use effectiveOrder (matches the render loop) so optimistic reorders aren't briefly mis-hidden.
   for (const id of effectiveOrder) {
     if (!WIDGET_ROW_COMPONENTS[id] || !widgetEnabledMap[id]) {
       continue;
     }
-    const entry = WIDGET_REGISTRY.find(w => w.id === id);
-    let size = entry ? resolveWidgetSize(entry, prefs) : null;
-    // Mirrors the size override applied in the render loop below — when
-    // the sports follow-teams panel is active it always renders large.
-    if (id === "sportsWidget" && sportsWidgetState === "sports-follow-state") {
-      size = "large";
-    }
-    sizes.push(size);
     enabledWidgetIds.push(id);
   }
-  const overflowsAt = cols => {
-    if (sizes.length <= cols) {
-      return false;
-    }
-    const rest = sizes.slice(cols);
-    if (rest.some(s => s === "large")) {
-      return true;
-    }
-    const partnersAvailable = sizes.slice(0, cols).filter(s => s !== "large").length;
-    return rest.length > partnersAvailable;
-  };
+  const widgetCount = enabledWidgetIds.length;
+  const overflowsAt = cols => widgetCount > cols;
   // For each viewport (cols 1–4), returns the set of widget render indices
-  // that would be clipped when the row is collapsed: any large past the
-  // first `cols` positions, plus mediums past `cols` whose pair-partner
-  // in the first `cols` is already taken. CSS keys off the matching
-  // `data-hidden-N` to make them tab-out and a11y-hide via
-  // `visibility: hidden` at that viewport.
+  // that would be clipped when the row is collapsed: everything past the
+  // first `cols` slots. CSS keys off the matching `data-hidden-N` to make
+  // them tab-out and a11y-hide at that viewport.
   const hiddenIndicesAt = cols => {
     const set = new Set();
-    if (sizes.length <= cols) {
-      return set;
-    }
-    const partnersCount = sizes.slice(0, cols).filter(s => s !== "large").length;
-    let mediumOverflowSeen = 0;
-    for (let i = cols; i < sizes.length; i++) {
-      if (sizes[i] === "large") {
-        set.add(i);
-      } else {
-        if (mediumOverflowSeen >= partnersCount) {
-          set.add(i);
-        }
-        mediumOverflowSeen++;
-      }
+    for (let i = cols; i < widgetCount; i++) {
+      set.add(i);
     }
     return set;
   };
@@ -21178,9 +24862,7 @@ function SectionsMgmtPanel({
   let arrowIconSrc;
   if (novaEnabled) {
     const isRTL = typeof document !== "undefined" && document.dir === "rtl";
-    // @backward-compat { version 151 } Switch to chrome://global/skin/icons/shaft-arrow-${dir}.svg
-    // once Firefox 151 reaches Release (icons not available in toolkit until then).
-    arrowIconSrc = `chrome://newtab/content/data/content/assets/shaft-arrow-${isRTL ? "right" : "left"}.svg`;
+    arrowIconSrc = `chrome://global/skin/icons/shaft-arrow-${isRTL ? "right" : "left"}.svg`;
   }
   const panelBody = /*#__PURE__*/external_React_default().createElement((external_React_default()).Fragment, null, /*#__PURE__*/external_React_default().createElement("h3", {
     "data-l10n-id": "newtab-section-mangage-topics-followed-topics"
@@ -21304,6 +24986,57 @@ async function calculateTheme(win, blob) {
   return averageLuminance <= CONTRAST_BRIGHTTEXT_THRESHOLD ? "dark" : "light";
 }
 
+;// CONCATENATED MODULE: ./content-src/lib/constants.mjs
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this file,
+ * You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+const IS_NEWTAB =
+  globalThis.document && globalThis.document.documentURI === "about:newtab";
+const NEWTAB_DARK_THEME = {
+  ntp_background: {
+    r: 42,
+    g: 42,
+    b: 46,
+    a: 1,
+  },
+  ntp_card_background: {
+    r: 66,
+    g: 65,
+    b: 77,
+    a: 1,
+  },
+  ntp_text: {
+    r: 249,
+    g: 249,
+    b: 250,
+    a: 1,
+  },
+  sidebar: {
+    r: 56,
+    g: 56,
+    b: 61,
+    a: 1,
+  },
+  sidebar_text: {
+    r: 249,
+    g: 249,
+    b: 250,
+    a: 1,
+  },
+};
+
+// Wallpaper category ids. These must match the `category` values the
+// wallpaper feed provides; prefer this map over bare category strings.
+const WALLPAPER_CATEGORIES = {
+  Abstracts: "abstracts",
+  Celestial: "celestial",
+  Photographs: "photographs",
+  SolidColors: "solid-colors",
+  Firefox: "firefox",
+  CustomWallpaper: "custom-wallpaper",
+};
+
 ;// CONCATENATED MODULE: ./content-src/components/WallpaperCategories/WallpaperCategories.jsx
 function WallpaperCategories_extends() { return WallpaperCategories_extends = Object.assign ? Object.assign.bind() : function (n) { for (var e = 1; e < arguments.length; e++) { var t = arguments[e]; for (var r in t) ({}).hasOwnProperty.call(t, r) && (n[r] = t[r]); } return n; }, WallpaperCategories_extends.apply(null, arguments); }
 /* This Source Code Form is subject to the terms of the Mozilla Public
@@ -21314,6 +25047,7 @@ function WallpaperCategories_extends() { return WallpaperCategories_extends = Ob
 
 
 // eslint-disable-next-line no-shadow
+
 
 
 const PREF_WALLPAPER_UPLOADED_PREVIOUSLY = "newtabWallpapers.customWallpaper.uploadedPreviously";
@@ -21373,6 +25107,29 @@ class _WallpaperCategories extends (external_React_default()).PureComponent {
     if (this.props.exitEventFired && this.props.exitEventFired !== prevProps.exitEventFired) {
       this.handleBack();
     }
+
+    // A CTA can deep-link into a specific wallpaper category by dispatching
+    // SHOW_PERSONALIZE with a wallpaperCategory. Open it once when it appears.
+    const requestedCategory = this.props.customizePanelWallpaperCategory;
+    if (requestedCategory && requestedCategory !== prevProps.customizePanelWallpaperCategory) {
+      this.openRequestedCategory(requestedCategory);
+    }
+  }
+  openRequestedCategory(categoryId) {
+    const {
+      categories
+    } = this.props.Wallpapers;
+    const index = categories?.indexOf(categoryId) ?? -1;
+    // Category may not be available in every build/region; bail if missing.
+    if (index === -1) {
+      return;
+    }
+    this.setState({
+      focusedCategoryIndex: index
+    });
+    this.openCategory(categoryId, {
+      fromUser: false
+    });
   }
   handleColorInput(event) {
     let {
@@ -21526,38 +25283,44 @@ class _WallpaperCategories extends (external_React_default()).PureComponent {
       had_uploaded_previously: !!uploadedPreviously
     });
   }
-  handleCategory = event => {
+  categoryFluentID(categoryId) {
+    switch (categoryId) {
+      case WALLPAPER_CATEGORIES.Abstracts:
+        return "newtab-wallpaper-category-title-abstract";
+      case WALLPAPER_CATEGORIES.Celestial:
+        return "newtab-wallpaper-category-title-celestial";
+      case WALLPAPER_CATEGORIES.Photographs:
+        return "newtab-wallpaper-category-title-photographs";
+      case WALLPAPER_CATEGORIES.SolidColors:
+        // @nova-cleanup(remove-conditional): Remove novaEnabled conditional and always use newtab-wallpaper-colors
+        return this.props.Prefs.values["nova.enabled"] ? "newtab-wallpaper-colors" : "newtab-wallpaper-category-title-colors";
+      case WALLPAPER_CATEGORIES.Firefox:
+        return "newtab-wallpaper-category-title-firefox";
+      default:
+        return undefined;
+    }
+  }
+
+  // Open a wallpaper category subpanel. `fromUser` distinguishes a real category
+  // click (records telemetry) from a programmatic deep-link via a CTA.
+  openCategory(categoryId, {
+    fromUser = true
+  } = {}) {
     this.setState({
-      activeCategory: event.target.id
+      activeCategory: categoryId,
+      activeCategoryFluentID: this.categoryFluentID(categoryId)
     });
-    this.handleUserEvent(actionTypes.WALLPAPER_CATEGORY_CLICK, event.target.id);
+    if (fromUser) {
+      this.handleUserEvent(actionTypes.WALLPAPER_CATEGORY_CLICK, categoryId);
+    }
 
     // Notify parent menu when subpanel opens
     if (this.props.onSubpanelToggle) {
       this.props.onSubpanelToggle(true);
     }
-    let fluent_id;
-    switch (event.target.id) {
-      case "abstracts":
-        fluent_id = "newtab-wallpaper-category-title-abstract";
-        break;
-      case "celestial":
-        fluent_id = "newtab-wallpaper-category-title-celestial";
-        break;
-      case "photographs":
-        fluent_id = "newtab-wallpaper-category-title-photographs";
-        break;
-      case "solid-colors":
-        // @nova-cleanup(remove-conditional): Remove novaEnabled conditional and always use newtab-wallpaper-colors
-        fluent_id = this.props.Prefs.values["nova.enabled"] ? "newtab-wallpaper-colors" : "newtab-wallpaper-category-title-colors";
-        break;
-      case "firefox":
-        fluent_id = "newtab-wallpaper-category-title-firefox";
-        break;
-    }
-    this.setState({
-      activeCategoryFluentID: fluent_id
-    });
+  }
+  handleCategory = event => {
+    this.openCategory(event.target.id);
   };
 
   // Custom wallpaper image upload
@@ -21723,9 +25486,7 @@ class _WallpaperCategories extends (external_React_default()).PureComponent {
     let arrowIconSrc;
     if (novaEnabled) {
       const isRTL = typeof document !== "undefined" && document.dir === "rtl";
-      // @backward-compat { version 151 } Switch to chrome://global/skin/icons/shaft-arrow-${dir}.svg
-      // once Firefox 151 reaches Release (icons not available in toolkit until then).
-      arrowIconSrc = `chrome://newtab/content/data/content/assets/shaft-arrow-${isRTL ? "right" : "left"}.svg`;
+      arrowIconSrc = `chrome://global/skin/icons/shaft-arrow-${isRTL ? "right" : "left"}.svg`;
     }
     // Enable custom color select if pref'ed on
     let showColorPicker = prefs["newtabWallpapers.customColor.enabled"];
@@ -21822,27 +25583,11 @@ class _WallpaperCategories extends (external_React_default()).PureComponent {
         const isCustomSolidColor = category === "solid-colors" && activeWallpaper.startsWith("solid-color-picker");
         const thumbnail = activeWallpaperObj || sortedList[0];
         let fluent_id;
-        switch (category) {
-          case "abstracts":
-            fluent_id = "newtab-wallpaper-category-title-abstract";
-            break;
-          case "celestial":
-            fluent_id = "newtab-wallpaper-category-title-celestial";
-            break;
-          case "custom-wallpaper":
-            // @nova-cleanup(remove-conditional): Remove novaEnabled conditional and always use newtab-wallpaper-add-an-image
-            fluent_id = novaEnabled ? "newtab-wallpaper-add-an-image" : "newtab-wallpaper-upload-image";
-            break;
-          case "photographs":
-            fluent_id = "newtab-wallpaper-category-title-photographs";
-            break;
-          case "solid-colors":
-            // @nova-cleanup(remove-conditional): Remove novaEnabled conditional and always use newtab-wallpaper-colors
-            fluent_id = novaEnabled ? "newtab-wallpaper-colors" : "newtab-wallpaper-category-title-colors";
-            break;
-          case "firefox":
-            fluent_id = "newtab-wallpaper-category-title-firefox";
-            break;
+        if (category === WALLPAPER_CATEGORIES.CustomWallpaper) {
+          // @nova-cleanup(remove-conditional): Remove novaEnabled conditional and always use newtab-wallpaper-add-an-image
+          fluent_id = novaEnabled ? "newtab-wallpaper-add-an-image" : "newtab-wallpaper-upload-image";
+        } else {
+          fluent_id = this.categoryFluentID(category);
         }
         let style = {};
         if (thumbnail?.wallpaperUrl) {
@@ -21985,7 +25730,8 @@ class _WallpaperCategories extends (external_React_default()).PureComponent {
 const WallpaperCategories = (0,external_ReactRedux_namespaceObject.connect)(state => {
   return {
     Wallpapers: state.Wallpapers,
-    Prefs: state.Prefs
+    Prefs: state.Prefs,
+    customizePanelWallpaperCategory: state.App.customizePanelWallpaperCategory
   };
 })(_WallpaperCategories);
 ;// CONCATENATED MODULE: ./content-src/components/Nova/CustomizeMenu/WidgetsManagementPanel/WidgetsManagementPanel.jsx
@@ -22012,6 +25758,10 @@ function WidgetsManagementPanel({
   mayHaveListsWidget,
   mayHaveSportsWidget,
   mayHaveClocksWidget,
+  mayHavePrivacyWidget,
+  mayHaveCrosswordWidget,
+  mayHaveStocksWidget,
+  mayHavePictureOfTheDayWidget,
   setPref
 }) {
   const prefs = (0,external_ReactRedux_namespaceObject.useSelector)(state => state.Prefs.values);
@@ -22060,6 +25810,18 @@ function WidgetsManagementPanel({
         case "WIDGET_CLOCKS":
           widgetName = "clocks";
           break;
+        case "WIDGET_PRIVACY":
+          widgetName = "privacy";
+          break;
+        case "WIDGET_CROSSWORD":
+          widgetName = "crossword";
+          break;
+        case "WIDGET_STOCKS":
+          widgetName = "stocks";
+          break;
+        case "WIDGET_PICTURE_OF_THE_DAY":
+          widgetName = "picture_of_the_day";
+          break;
       }
       if (widgetName) {
         const widget = WIDGET_REGISTRY.find(w => w.telemetryName === widgetName);
@@ -22084,12 +25846,14 @@ function WidgetsManagementPanel({
     timerEnabled,
     listsEnabled,
     sportsWidgetEnabled,
-    clocksEnabled
+    clocksEnabled,
+    privacyEnabled,
+    crosswordEnabled,
+    stocksEnabled,
+    pictureOfTheDayEnabled
   } = enabledWidgets;
   const isRTL = typeof document !== "undefined" && document.dir === "rtl";
-  // @backward-compat { version 151 } Switch to chrome://global/skin/icons/shaft-arrow-${dir}.svg
-  // once Firefox 151 reaches Release (icons not available in toolkit until then).
-  const arrowIconSrc = `chrome://newtab/content/data/content/assets/shaft-arrow-${isRTL ? "right" : "left"}.svg`;
+  const arrowIconSrc = `chrome://global/skin/icons/shaft-arrow-${isRTL ? "right" : "left"}.svg`;
   return /*#__PURE__*/external_React_default().createElement("div", {
     id: "widgets-management-panel",
     className: "widgets-mgmt-panel-container"
@@ -22126,7 +25890,7 @@ function WidgetsManagementPanel({
   }, /*#__PURE__*/external_React_default().createElement("moz-toggle", {
     id: "weather-toggle",
     pressed: weatherEnabled || null,
-    onToggle: onToggleWidget,
+    ontoggle: onToggleWidget,
     "data-preference": "widgets.weather.enabled",
     "data-event-source": "WEATHER",
     "data-l10n-id": "newtab-custom-widget-weather-toggle"
@@ -22136,7 +25900,7 @@ function WidgetsManagementPanel({
   }, /*#__PURE__*/external_React_default().createElement("moz-toggle", {
     id: "timer-toggle",
     pressed: timerEnabled || null,
-    onToggle: onToggleWidget,
+    ontoggle: onToggleWidget,
     "data-preference": "widgets.focusTimer.enabled",
     "data-event-source": "WIDGET_TIMER",
     "data-l10n-id": "newtab-custom-widget-timer-toggle"
@@ -22146,7 +25910,7 @@ function WidgetsManagementPanel({
   }, /*#__PURE__*/external_React_default().createElement("moz-toggle", {
     id: "lists-toggle",
     pressed: listsEnabled || null,
-    onToggle: onToggleWidget,
+    ontoggle: onToggleWidget,
     "data-preference": "widgets.lists.enabled",
     "data-event-source": "WIDGET_LISTS",
     "data-l10n-id": "newtab-custom-widget-lists-toggle"
@@ -22157,7 +25921,6 @@ function WidgetsManagementPanel({
     id: "sports-widget-toggle",
     pressed: sportsWidgetEnabled || null,
     ontoggle: onToggleWidget,
-    onToggle: onToggleWidget,
     "data-preference": "widgets.sportsWidget.enabled",
     "data-event-source": "WIDGET_SPORTS",
     "data-l10n-id": "newtab-custom-widget-sports-toggle2"
@@ -22168,10 +25931,49 @@ function WidgetsManagementPanel({
     id: "clocks-toggle",
     pressed: clocksEnabled || null,
     ontoggle: onToggleWidget,
-    onToggle: onToggleWidget,
     "data-preference": "widgets.clocks.enabled",
     "data-event-source": "WIDGET_CLOCKS",
     "data-l10n-id": "newtab-custom-widget-clock-toggle"
+  })), mayHavePrivacyWidget && /*#__PURE__*/external_React_default().createElement("div", {
+    id: "privacy-widget-section",
+    className: "section"
+  }, /*#__PURE__*/external_React_default().createElement("moz-toggle", {
+    id: "privacy-toggle",
+    pressed: privacyEnabled || null,
+    ontoggle: onToggleWidget,
+    "data-preference": "widgets.privacy.enabled",
+    "data-event-source": "WIDGET_PRIVACY",
+    "data-l10n-id": "newtab-custom-widget-privacy-toggle"
+  })), mayHaveCrosswordWidget && /*#__PURE__*/external_React_default().createElement("div", {
+    id: "crossword-widget-section",
+    className: "section"
+  }, /*#__PURE__*/external_React_default().createElement("moz-toggle", {
+    id: "crossword-toggle",
+    pressed: crosswordEnabled || null,
+    ontoggle: onToggleWidget,
+    "data-preference": "widgets.crossword.enabled",
+    "data-event-source": "WIDGET_CROSSWORD",
+    label: "Crossword"
+  })), mayHaveStocksWidget && /*#__PURE__*/external_React_default().createElement("div", {
+    id: "stocks-widget-section",
+    className: "section"
+  }, /*#__PURE__*/external_React_default().createElement("moz-toggle", {
+    id: "stocks-toggle",
+    pressed: stocksEnabled || null,
+    ontoggle: onToggleWidget,
+    "data-preference": "widgets.stocks.enabled",
+    "data-event-source": "WIDGET_STOCKS",
+    "data-l10n-id": "newtab-custom-widget-stocks-toggle"
+  })), mayHavePictureOfTheDayWidget && /*#__PURE__*/external_React_default().createElement("div", {
+    id: "picture-widget-section",
+    className: "section"
+  }, /*#__PURE__*/external_React_default().createElement("moz-toggle", {
+    id: "picture-toggle",
+    pressed: pictureOfTheDayEnabled || null,
+    ontoggle: onToggleWidget,
+    "data-preference": "widgets.pictureOfTheDay.enabled",
+    "data-event-source": "WIDGET_PICTURE_OF_THE_DAY",
+    "data-l10n-id": "newtab-custom-widget-picture-toggle"
   })))))));
 }
 
@@ -22226,6 +26028,18 @@ class ContentSection extends (external_React_default()).PureComponent {
         case "WIDGET_CLOCKS":
           widgetName = "clocks";
           break;
+        case "WIDGET_PRIVACY":
+          widgetName = "privacy";
+          break;
+        case "WIDGET_CROSSWORD":
+          widgetName = "crossword";
+          break;
+        case "WIDGET_STOCKS":
+          widgetName = "stocks";
+          break;
+        case "WIDGET_PICTURE_OF_THE_DAY":
+          widgetName = "picture_of_the_day";
+          break;
       }
       if (widgetName) {
         const {
@@ -22264,7 +26078,7 @@ class ContentSection extends (external_React_default()).PureComponent {
     let value;
     if (e.target.nodeName === "MOZ-SELECT") {
       value = parseInt(e.target.value, 10);
-    } else if (e.target.nodeName === "INPUT") {
+    } else if (e.target.nodeName === "INPUT" || e.target.nodeName === "MOZ-CHECKBOX") {
       value = e.target.checked;
       if (eventSource) {
         this.inputUserEvent(eventSource, value);
@@ -22327,6 +26141,10 @@ class ContentSection extends (external_React_default()).PureComponent {
       mayHaveListsWidget,
       mayHaveSportsWidget,
       mayHaveClocksWidget,
+      mayHavePrivacyWidget,
+      mayHaveCrosswordWidget,
+      mayHaveStocksWidget,
+      mayHavePictureOfTheDayWidget,
       mayHaveWeatherForecast,
       openPreferences,
       wallpapersUserEnabled,
@@ -22355,7 +26173,11 @@ class ContentSection extends (external_React_default()).PureComponent {
     const {
       timerEnabled,
       listsEnabled,
-      clocksEnabled
+      clocksEnabled,
+      privacyEnabled,
+      crosswordEnabled,
+      stocksEnabled,
+      pictureOfTheDayEnabled
     } = enabledWidgets;
 
     // @nova-cleanup(remove-conditional): Remove novaEnabled check and newtab-custom-stories-toggle, default to newtab-recommended-stories-toggle
@@ -22376,7 +26198,7 @@ class ContentSection extends (external_React_default()).PureComponent {
     }, novaEnabled && /*#__PURE__*/external_React_default().createElement("moz-toggle", {
       id: "wallpapers-toggle",
       pressed: wallpapersUserEnabled && !!activeWallpaper || null,
-      onToggle: this.onPreferenceSelect,
+      ontoggle: this.onPreferenceSelect,
       "data-preference": "newtabWallpapers.user.enabled",
       "data-event-source": "WALLPAPERS",
       "data-l10n-id": "newtab-wallpaper-toggle-title"
@@ -22399,7 +26221,7 @@ class ContentSection extends (external_React_default()).PureComponent {
     }, /*#__PURE__*/external_React_default().createElement("moz-toggle", {
       id: "weather-toggle",
       pressed: weatherEnabled || null,
-      onToggle: this.onPreferenceSelect,
+      ontoggle: this.onPreferenceSelect,
       "data-preference": "showWeather",
       "data-event-source": "WEATHER",
       "data-l10n-id": "newtab-custom-widget-weather-toggle"
@@ -22409,7 +26231,7 @@ class ContentSection extends (external_React_default()).PureComponent {
     }, /*#__PURE__*/external_React_default().createElement("moz-toggle", {
       id: "lists-toggle",
       pressed: listsEnabled || null,
-      onToggle: this.onPreferenceSelect,
+      ontoggle: this.onPreferenceSelect,
       "data-preference": "widgets.lists.enabled",
       "data-event-source": "WIDGET_LISTS",
       "data-l10n-id": "newtab-custom-widget-lists-toggle"
@@ -22419,7 +26241,7 @@ class ContentSection extends (external_React_default()).PureComponent {
     }, /*#__PURE__*/external_React_default().createElement("moz-toggle", {
       id: "timer-toggle",
       pressed: timerEnabled || null,
-      onToggle: this.onPreferenceSelect,
+      ontoggle: this.onPreferenceSelect,
       "data-preference": "widgets.focusTimer.enabled",
       "data-event-source": "WIDGET_TIMER",
       "data-l10n-id": "newtab-custom-widget-timer-toggle"
@@ -22430,10 +26252,49 @@ class ContentSection extends (external_React_default()).PureComponent {
       id: "clocks-toggle",
       pressed: !!clocksEnabled,
       ontoggle: this.onPreferenceSelect,
-      onToggle: this.onPreferenceSelect,
       "data-preference": "widgets.clocks.enabled",
       "data-event-source": "WIDGET_CLOCKS",
       "data-l10n-id": "newtab-custom-widget-clock-toggle"
+    })), mayHavePrivacyWidget && /*#__PURE__*/external_React_default().createElement("div", {
+      id: "privacy-widget-section",
+      className: "section"
+    }, /*#__PURE__*/external_React_default().createElement("moz-toggle", {
+      id: "privacy-toggle",
+      pressed: privacyEnabled || null,
+      ontoggle: this.onPreferenceSelect,
+      "data-preference": "widgets.privacy.enabled",
+      "data-event-source": "WIDGET_PRIVACY",
+      "data-l10n-id": "newtab-custom-widget-privacy-toggle"
+    })), mayHaveCrosswordWidget && /*#__PURE__*/external_React_default().createElement("div", {
+      id: "crossword-widget-section",
+      className: "section"
+    }, /*#__PURE__*/external_React_default().createElement("moz-toggle", {
+      id: "crossword-toggle",
+      pressed: !!crosswordEnabled,
+      ontoggle: this.onPreferenceSelect,
+      "data-preference": "widgets.crossword.enabled",
+      "data-event-source": "WIDGET_CROSSWORD",
+      label: "Crossword"
+    })), mayHaveStocksWidget && /*#__PURE__*/external_React_default().createElement("div", {
+      id: "stocks-widget-section",
+      className: "section"
+    }, /*#__PURE__*/external_React_default().createElement("moz-toggle", {
+      id: "stocks-toggle",
+      pressed: stocksEnabled || null,
+      ontoggle: this.onPreferenceSelect,
+      "data-preference": "widgets.stocks.enabled",
+      "data-event-source": "WIDGET_STOCKS",
+      "data-l10n-id": "newtab-custom-widget-stocks-toggle"
+    })), mayHavePictureOfTheDayWidget && /*#__PURE__*/external_React_default().createElement("div", {
+      id: "picture-widget-section",
+      className: "section"
+    }, /*#__PURE__*/external_React_default().createElement("moz-toggle", {
+      id: "picture-toggle",
+      pressed: pictureOfTheDayEnabled || null,
+      ontoggle: this.onPreferenceSelect,
+      "data-preference": "widgets.pictureOfTheDay.enabled",
+      "data-event-source": "WIDGET_PICTURE_OF_THE_DAY",
+      "data-l10n-id": "newtab-custom-widget-picture-toggle"
     })))), /*#__PURE__*/external_React_default().createElement("div", {
       className: "settings-toggles"
     },
@@ -22444,7 +26305,7 @@ class ContentSection extends (external_React_default()).PureComponent {
     }, /*#__PURE__*/external_React_default().createElement("moz-toggle", {
       id: "weather-toggle",
       pressed: weatherEnabled || null,
-      onToggle: this.onPreferenceSelect,
+      ontoggle: this.onPreferenceSelect,
       "data-preference": novaEnabled ? "widgets.weather.enabled" : "showWeather",
       "data-event-source": "WEATHER",
       "data-l10n-id": "newtab-custom-weather-toggle"
@@ -22457,7 +26318,7 @@ class ContentSection extends (external_React_default()).PureComponent {
     }, /*#__PURE__*/external_React_default().createElement("moz-toggle", {
       id: "shortcuts-toggle",
       pressed: topSitesEnabled || null,
-      onToggle: this.onPreferenceSelect,
+      ontoggle: this.onPreferenceSelect,
       "data-preference": "feeds.topsites",
       "data-event-source": "TOP_SITES",
       "data-l10n-id": novaEnabled ? "newtab-custom-shortcuts-nova" : "newtab-custom-shortcuts-toggle"
@@ -22504,7 +26365,7 @@ class ContentSection extends (external_React_default()).PureComponent {
     }, /*#__PURE__*/external_React_default().createElement("moz-toggle", {
       id: "widgets-system-toggle",
       pressed: widgetsEnabled || null,
-      onToggle: this.onPreferenceSelect,
+      ontoggle: this.onPreferenceSelect,
       "data-preference": "widgets.enabled",
       "data-event-source": "WIDGETS_SYSTEM",
       "data-l10n-id": "newtab-custom-widget-section-toggle"
@@ -22523,6 +26384,10 @@ class ContentSection extends (external_React_default()).PureComponent {
       mayHaveListsWidget: mayHaveListsWidget,
       mayHaveSportsWidget: mayHaveSportsWidget,
       mayHaveClocksWidget: mayHaveClocksWidget,
+      mayHavePrivacyWidget: mayHavePrivacyWidget,
+      mayHaveCrosswordWidget: mayHaveCrosswordWidget,
+      mayHaveStocksWidget: mayHaveStocksWidget,
+      mayHavePictureOfTheDayWidget: mayHavePictureOfTheDayWidget,
       mayHaveWeatherForecast: mayHaveWeatherForecast,
       weatherDisplay: weatherDisplay,
       setPref: setPref,
@@ -22541,7 +26406,7 @@ class ContentSection extends (external_React_default()).PureComponent {
     }, /*#__PURE__*/external_React_default().createElement("moz-toggle", {
       id: "pocket-toggle",
       pressed: pocketEnabled || null,
-      onToggle: this.onPreferenceSelect,
+      ontoggle: this.onPreferenceSelect,
       "data-preference": "feeds.section.topstories",
       "data-event-source": "TOP_STORIES",
       "data-l10n-id": pocketToggleL10nId
@@ -22552,23 +26417,16 @@ class ContentSection extends (external_React_default()).PureComponent {
     }, /*#__PURE__*/external_React_default().createElement("div", {
       className: "more-information",
       ref: this.pocketDrawerRef
-    }, mayHaveInferredPersonalization && /*#__PURE__*/external_React_default().createElement("div", {
-      className: "check-wrapper",
-      role: "presentation"
-    }, /*#__PURE__*/external_React_default().createElement("input", {
+    }, mayHaveInferredPersonalization && /*#__PURE__*/external_React_default().createElement("moz-checkbox", {
       id: "inferred-personalization",
       className: "customize-menu-checkbox",
       disabled: !pocketEnabled,
       checked: showInferredPersonalizationEnabled,
-      type: "checkbox",
       onChange: this.onPreferenceSelect,
       "data-preference": "discoverystream.sections.personalization.inferred.user.enabled",
-      "data-event-source": "INFERRED_PERSONALIZATION"
-    }), /*#__PURE__*/external_React_default().createElement("label", {
-      className: "customize-menu-checkbox-label",
-      htmlFor: "inferred-personalization",
-      "data-l10n-id": "newtab-custom-stories-personalized-checkbox-label"
-    })), mayHaveTopicSections && /*#__PURE__*/external_React_default().createElement(SectionsMgmtPanel, {
+      "data-event-source": "INFERRED_PERSONALIZATION",
+      "data-l10n-id": "newtab-custom-stories-personalized-checkbox"
+    }), mayHaveTopicSections && /*#__PURE__*/external_React_default().createElement(SectionsMgmtPanel, {
       exitEventFired: exitEventFired,
       pocketEnabled: pocketEnabled,
       onSubpanelToggle: onSubpanelToggle,
@@ -22698,7 +26556,7 @@ class _CustomizeMenu extends (external_React_default()).PureComponent {
     }, /*#__PURE__*/external_React_default().createElement("label", {
       "data-l10n-id": "newtab-customize-panel-icon-button-label"
     }), /*#__PURE__*/external_React_default().createElement("div", null, /*#__PURE__*/external_React_default().createElement("img", {
-      role: "presentation",
+      alt: "",
       src: "chrome://global/skin/icons/edit-outline.svg"
     })))), /*#__PURE__*/external_React_default().createElement(external_ReactTransitionGroup_namespaceObject.CSSTransition, {
       nodeRef: this.dialogRef,
@@ -22746,6 +26604,10 @@ class _CustomizeMenu extends (external_React_default()).PureComponent {
       mayHaveListsWidget: this.props.mayHaveListsWidget,
       mayHaveSportsWidget: this.props.mayHaveSportsWidget,
       mayHaveClocksWidget: this.props.mayHaveClocksWidget,
+      mayHavePrivacyWidget: this.props.mayHavePrivacyWidget,
+      mayHaveCrosswordWidget: this.props.mayHaveCrosswordWidget,
+      mayHaveStocksWidget: this.props.mayHaveStocksWidget,
+      mayHavePictureOfTheDayWidget: this.props.mayHavePictureOfTheDayWidget,
       dispatch: this.props.dispatch,
       onSubpanelToggle: this.onSubpanelToggle,
       toggleSectionsMgmtPanel: this.props.toggleSectionsMgmtPanel,
@@ -23881,7 +27743,8 @@ class _Weather extends (external_React_default()).PureComponent {
     this.state = {
       url: "https://example.com",
       impressionSeen: false,
-      errorSeen: false
+      errorSeen: false,
+      isMenuEnabled: false
     };
     this.setImpressionRef = element => {
       this.impressionElement = element;
@@ -23890,7 +27753,13 @@ class _Weather extends (external_React_default()).PureComponent {
       this.errorElement = element;
     };
     this.setPanelRef = element => {
+      if (this.panelElement) {
+        this.panelElement.removeEventListener("toggle", this.handlePanelToggle);
+      }
       this.panelElement = element;
+      if (element) {
+        element.addEventListener("toggle", this.handlePanelToggle);
+      }
     };
     this.setSizeSubmenuRef = element => {
       if (this.sizeSubmenuElement) {
@@ -23905,6 +27774,7 @@ class _Weather extends (external_React_default()).PureComponent {
     this.onProviderClick = this.onProviderClick.bind(this);
     this.onMenuButtonClick = this.onMenuButtonClick.bind(this);
     this.onMenuButtonKeyDown = this.onMenuButtonKeyDown.bind(this);
+    this.handlePanelToggle = this.handlePanelToggle.bind(this);
   }
   onSizeSubmenuClick(e) {
     // The size submenu panel-list is moved into the panel-item's shadow DOM by
@@ -24050,6 +27920,9 @@ class _Weather extends (external_React_default()).PureComponent {
   handleChangeLocation = () => {
     if (this.panelElement) {
       this.panelElement.hide();
+      this.setState({
+        isMenuEnabled: false
+      });
     }
     (0,external_ReactRedux_namespaceObject.batch)(() => {
       this.props.dispatch(actionCreators.BroadcastToContent({
@@ -24281,6 +28154,12 @@ class _Weather extends (external_React_default()).PureComponent {
     const experimentValue = values.trainhopConfig?.weather?.enabled;
     return systemValue || experimentValue;
   }
+  handlePanelToggle(e) {
+    const isOpen = e.newState === "open";
+    this.setState({
+      isMenuEnabled: isOpen
+    });
+  }
   render() {
     // Check if weather should be rendered
     if (!this.isEnabled()) {
@@ -24346,6 +28225,7 @@ class _Weather extends (external_React_default()).PureComponent {
       className: "weatherButtonContextMenuWrapper"
     }, /*#__PURE__*/external_React_default().createElement("button", {
       "aria-haspopup": "true",
+      "aria-expanded": this.state.isMenuEnabled,
       onKeyDown: this.onMenuButtonKeyDown,
       onClick: this.onMenuButtonClick,
       "data-l10n-id": "newtab-menu-section-tooltip",
@@ -25109,6 +28989,7 @@ function DownloadMobilePromoHighlight({
 
 
 
+
 function WallpaperFeatureHighlight({
   position,
   dispatch,
@@ -25118,31 +28999,58 @@ function WallpaperFeatureHighlight({
 }) {
   // @nova-cleanup(remove-pref): Remove the nova.enabled pref check and keep the Nova copy and image path as the default once Nova ships.
   const isNova = (0,external_ReactRedux_namespaceObject.useSelector)(state => state.Prefs.values["nova.enabled"]);
+  // Message content from OMC; drives the copy, feature id, and deep-link category.
+  const {
+    messageData
+  } = (0,external_ReactRedux_namespaceObject.useSelector)(state => state.Messages);
   const onDismiss = (0,external_React_namespaceObject.useCallback)(() => {
     handleDismiss();
     handleBlock();
   }, [handleDismiss, handleBlock]);
   const onToggleClick = (0,external_React_namespaceObject.useCallback)(elementId => {
+    // Deep-link the customize panel into a wallpaper category. OMC can
+    // target any known category per-message (not just Firefox): an unset
+    // value defaults to Firefox to keep existing messages working, a known
+    // category is forwarded as-is, and an explicit empty or unrecognized
+    // value opens the top-level panel (no deep-link).
+    const {
+      wallpaperCategory
+    } = messageData?.content || {};
+    let category = WALLPAPER_CATEGORIES.Firefox;
+    if (wallpaperCategory !== undefined) {
+      category = Object.values(WALLPAPER_CATEGORIES).includes(wallpaperCategory) ? wallpaperCategory : null;
+    }
+    // The custom-wallpaper category has no dedicated subsection yet, so
+    // deep-linking into it opens a blank panel. Fall back to the top-level
+    // panel for now; remove this guard once a user's uploaded custom
+    // wallpapers get their own subsection.
+    if (category === WALLPAPER_CATEGORIES.CustomWallpaper) {
+      category = null;
+    }
     dispatch({
-      type: actionTypes.SHOW_PERSONALIZE
+      type: actionTypes.SHOW_PERSONALIZE,
+      data: {
+        wallpaperCategory: category
+      }
     });
     dispatch(actionCreators.UserEvent({
       event: "SHOW_PERSONALIZE"
     }));
     handleClick(elementId);
     onDismiss();
-  }, [dispatch, onDismiss, handleClick]);
-
-  // Extract the strings and feature ID from OMC
+  }, [dispatch, onDismiss, handleClick, messageData]);
   const {
-    messageData
-  } = (0,external_ReactRedux_namespaceObject.useSelector)(state => state.Messages);
-  const isWorldCup = isNova && messageData?.content?.messageType === "WorldCupWallpaperHighlight";
+    messageType
+  } = messageData?.content || {};
+  const isSemiFinal = isNova && messageType === "WorldCupSemiFinalWallpaperHighlight";
+  const isWorldCup = isNova && (messageType === "WorldCupWallpaperHighlight" || isSemiFinal);
+  const worldCupTitleL10nId = isSemiFinal ? "newtab-sports-widget-message-wallpapers-semifinals-title" : "newtab-sports-widget-message-wallpapers-title";
+  const worldCupSubtitleL10nId = isSemiFinal ? "newtab-sports-widget-message-wallpapers-semifinals-body" : "newtab-sports-widget-message-wallpapers-body";
   const novaHighlightImage = isWorldCup ? "chrome://newtab/content/data/content/assets/highlights/wallpaper-callout.png" : "chrome://newtab/content/data/content/assets/highlights/firefox-mascot-prop-paintbucket-rgb.svg";
   const novaImgWidth = isWorldCup ? "319" : "207";
   const novaImgHeight = isWorldCup ? "204" : "156";
-  const novaTitleL10nId = isWorldCup ? "newtab-sports-widget-message-wallpapers-title" : "newtab-wallpaper-feature-highlight-title";
-  const novaSubtitleL10nId = isWorldCup ? "newtab-sports-widget-message-wallpapers-body" : "newtab-wallpaper-feature-highlight-subtitle";
+  const novaTitleL10nId = isWorldCup ? worldCupTitleL10nId : "newtab-wallpaper-feature-highlight-title";
+  const novaSubtitleL10nId = isWorldCup ? worldCupSubtitleL10nId : "newtab-wallpaper-feature-highlight-subtitle";
   const novaCtaL10nId = isWorldCup ? "newtab-sports-widget-message-wallpapers-cta" : "newtab-wallpaper-feature-highlight-cta";
   return /*#__PURE__*/external_React_default().createElement("div", {
     className: `wallpaper-feature-highlight ${isWorldCup ? "world-cup-variant" : ""} ${messageData.content?.darkModeDismiss ? "is-inverted-dark-dismiss-button" : ""}`
@@ -25310,6 +29218,8 @@ function Base_extends() { return Base_extends = Object.assign ? Object.assign.bi
 
 const Base_VISIBLE = "visible";
 const Base_VISIBILITY_CHANGE_EVENT = "visibilitychange";
+// Minimum scroll distance in pixels to record a scroll telemetry event.
+const SCROLL_TELEMETRY_THRESHOLD = 50;
 const PREF_INFERRED_PERSONALIZATION_SYSTEM = "discoverystream.sections.personalization.inferred.enabled";
 const Base_PREF_INFERRED_PERSONALIZATION_USER = "discoverystream.sections.personalization.inferred.user.enabled";
 // @nova-cleanup(remove-pref): Remove PREF_NOVA_ENABLED
@@ -25382,6 +29292,7 @@ class BaseContent extends (external_React_default()).PureComponent {
     this.attachSearchSentinel = this.attachSearchSentinel.bind(this);
     this.onSearchSentinelIntersect = this.onSearchSentinelIntersect.bind(this);
     this.searchStickyObserver = null;
+    this._hasScrolledForSession = false;
     this.state = {
       fixedSearch: false,
       colorMode: "",
@@ -25652,6 +29563,12 @@ class BaseContent extends (external_React_default()).PureComponent {
     }
   }
   onWindowScroll() {
+    if (!this._hasScrolledForSession && __webpack_require__.g.scrollY > SCROLL_TELEMETRY_THRESHOLD) {
+      this._hasScrolledForSession = true;
+      this.props.dispatch(actionCreators.OnlyToMain({
+        type: actionTypes.NEW_TAB_SCROLL
+      }));
+    }
     if (this.props.Prefs.values[Base_PREF_NOVA_ENABLED]) {
       // Nova restores sticky search via IntersectionObserver
       // (attachSearchSentinel); the scroll-based fixed-search math below
@@ -25983,25 +29900,25 @@ class BaseContent extends (external_React_default()).PureComponent {
     };
     const pocketRegion = prefs["feeds.system.topstories"];
     const mayHaveInferredPersonalization = prefs[PREF_INFERRED_PERSONALIZATION_SYSTEM];
-    const mayHaveWeather = prefs["system.showWeather"] || prefs.trainhopConfig?.weather?.enabled;
+    // Weather's visibility gate differs from the other widgets (it keys off
+    // system.showWeather / trainhopConfig.weather), so it keeps its own check
+    // plus the additive widgetsSettings.weatherVisible override.
+    const mayHaveWeather = prefs["system.showWeather"] || prefs.trainhopConfig?.weather?.enabled || prefs.trainhopConfig?.widgetsSettings?.weatherVisible;
     const supportUrl = prefs["support.url"];
 
-    // Widgets experiment pref check
-    const nimbusWidgetsEnabled = prefs.widgetsConfig?.enabled;
-    const nimbusListsEnabled = prefs.widgetsConfig?.listsEnabled;
-    const nimbusTimerEnabled = prefs.widgetsConfig?.timerEnabled;
-    const nimbusClocksEnabled = prefs.widgetsConfig?.clocksEnabled;
-    const nimbusWidgetsTrainhopEnabled = prefs.trainhopConfig?.widgets?.enabled;
-    const nimbusListsTrainhopEnabled = prefs.trainhopConfig?.widgets?.listsEnabled;
-    const nimbusTimerTrainhopEnabled = prefs.trainhopConfig?.widgets?.timerEnabled;
-    const nimbusClocksTrainhopEnabled = prefs.trainhopConfig?.widgets?.clocksEnabled;
-    const mayHaveWidgets = prefs["widgets.system.enabled"] || nimbusWidgetsEnabled || nimbusWidgetsTrainhopEnabled;
-    const mayHaveListsWidget = prefs["widgets.system.lists.enabled"] || nimbusListsEnabled || nimbusListsTrainhopEnabled;
-    const mayHaveTimerWidget = prefs["widgets.system.focusTimer.enabled"] || nimbusTimerEnabled || nimbusTimerTrainhopEnabled;
-    const mayHaveClocksWidget = prefs["widgets.system.clocks.enabled"] || nimbusClocksEnabled || nimbusClocksTrainhopEnabled;
-    const nimbusSportsWidgetEnabled = prefs.widgetsConfig?.sportsWidgetEnabled;
-    const nimbusSportsWidgetTrainhopEnabled = prefs.trainhopConfig?.widgets?.sportsWidgetEnabled;
-    const mayHaveSportsWidget = prefs["widgets.system.sportsWidget.enabled"] || nimbusSportsWidgetEnabled || nimbusSportsWidgetTrainhopEnabled;
+    // Widget toggle visibility is resolved by the shared registry helpers, which
+    // are additive across the system pref, the legacy widgetsConfig variable,
+    // trainhopConfig.widgets (addable), and trainhopConfig.widgetsSettings.
+    const widgetVisibleById = id => isWidgetToggleVisible(WIDGET_REGISTRY.find(w => w.id === id), prefs);
+    const mayHaveWidgets = isWidgetsContainerVisible(prefs);
+    const mayHaveListsWidget = widgetVisibleById("lists");
+    const mayHaveTimerWidget = widgetVisibleById("focusTimer");
+    const mayHaveClocksWidget = widgetVisibleById("clocks");
+    const mayHaveSportsWidget = widgetVisibleById("sportsWidget");
+    const mayHavePrivacyWidget = widgetVisibleById("privacy");
+    const mayHaveCrosswordWidget = widgetVisibleById("crossword");
+    const mayHaveStocksWidget = widgetVisibleById("stocks");
+    const mayHavePictureOfTheDayWidget = widgetVisibleById("pictureOfTheDay");
 
     // These prefs set the initial values on the Customize panel toggle switches
     const enabledWidgets = {
@@ -26010,6 +29927,10 @@ class BaseContent extends (external_React_default()).PureComponent {
       clocksEnabled: prefs["widgets.clocks.enabled"],
       weatherEnabled: novaEnabled ? prefs["widgets.weather.enabled"] : prefs.showWeather,
       sportsWidgetEnabled: prefs["widgets.sportsWidget.enabled"],
+      privacyEnabled: prefs["widgets.privacy.enabled"],
+      crosswordEnabled: prefs["widgets.crossword.enabled"],
+      stocksEnabled: prefs["widgets.stocks.enabled"],
+      pictureOfTheDayEnabled: prefs["widgets.pictureOfTheDay.enabled"],
       widgetsMaximized: prefs["widgets.maximized"],
       widgetsMayBeMaximized: prefs["widgets.system.maximized"]
     };
@@ -26143,6 +30064,10 @@ class BaseContent extends (external_React_default()).PureComponent {
         mayHaveListsWidget: mayHaveListsWidget,
         mayHaveSportsWidget: mayHaveSportsWidget,
         mayHaveClocksWidget: mayHaveClocksWidget,
+        mayHavePrivacyWidget: mayHavePrivacyWidget,
+        mayHaveCrosswordWidget: mayHaveCrosswordWidget,
+        mayHaveStocksWidget: mayHaveStocksWidget,
+        mayHavePictureOfTheDayWidget: mayHavePictureOfTheDayWidget,
         mayHaveWeatherForecast: prefs["widgets.system.weatherForecast.enabled"],
         weatherDisplay: prefs["weather.display"],
         showing: customizeMenuVisible,
@@ -26152,7 +30077,7 @@ class BaseContent extends (external_React_default()).PureComponent {
         toggleWidgetsManagementPanel: this.toggleWidgetsManagementPanel,
         widgetsEnabled: prefs["widgets.enabled"],
         dispatch: this.props.dispatch
-      }), (shouldShowOMCHighlight(this.props.Messages, "CustomWallpaperHighlight") || shouldShowOMCHighlight(this.props.Messages, "WorldCupWallpaperHighlight")) && /*#__PURE__*/external_React_default().createElement(MessageWrapper, {
+      }), (shouldShowOMCHighlight(this.props.Messages, "CustomWallpaperHighlight") || shouldShowOMCHighlight(this.props.Messages, "WorldCupWallpaperHighlight") || shouldShowOMCHighlight(this.props.Messages, "WorldCupSemiFinalWallpaperHighlight")) && /*#__PURE__*/external_React_default().createElement(MessageWrapper, {
         dispatch: this.props.dispatch
       }, /*#__PURE__*/external_React_default().createElement(WallpaperFeatureHighlight, {
         position: "inset-block-start inset-inline-start",
@@ -26233,6 +30158,10 @@ class BaseContent extends (external_React_default()).PureComponent {
       mayHaveListsWidget: mayHaveListsWidget,
       mayHaveSportsWidget: mayHaveSportsWidget,
       mayHaveClocksWidget: mayHaveClocksWidget,
+      mayHavePrivacyWidget: mayHavePrivacyWidget,
+      mayHaveCrosswordWidget: mayHaveCrosswordWidget,
+      mayHaveStocksWidget: mayHaveStocksWidget,
+      mayHavePictureOfTheDayWidget: mayHavePictureOfTheDayWidget,
       mayHaveWeatherForecast: prefs["widgets.system.weatherForecast.enabled"],
       weatherDisplay: prefs["weather.display"],
       showing: customizeMenuVisible,

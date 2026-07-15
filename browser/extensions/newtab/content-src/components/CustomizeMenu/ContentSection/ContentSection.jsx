@@ -48,6 +48,18 @@ export class ContentSection extends React.PureComponent {
         case "WIDGET_CLOCKS":
           widgetName = "clocks";
           break;
+        case "WIDGET_PRIVACY":
+          widgetName = "privacy";
+          break;
+        case "WIDGET_CROSSWORD":
+          widgetName = "crossword";
+          break;
+        case "WIDGET_STOCKS":
+          widgetName = "stocks";
+          break;
+        case "WIDGET_PICTURE_OF_THE_DAY":
+          widgetName = "picture_of_the_day";
+          break;
       }
 
       if (widgetName) {
@@ -93,7 +105,10 @@ export class ContentSection extends React.PureComponent {
     let value;
     if (e.target.nodeName === "MOZ-SELECT") {
       value = parseInt(e.target.value, 10);
-    } else if (e.target.nodeName === "INPUT") {
+    } else if (
+      e.target.nodeName === "INPUT" ||
+      e.target.nodeName === "MOZ-CHECKBOX"
+    ) {
       value = e.target.checked;
       if (eventSource) {
         this.inputUserEvent(eventSource, value);
@@ -172,6 +187,10 @@ export class ContentSection extends React.PureComponent {
       mayHaveListsWidget,
       mayHaveSportsWidget,
       mayHaveClocksWidget,
+      mayHavePrivacyWidget,
+      mayHaveCrosswordWidget,
+      mayHaveStocksWidget,
+      mayHavePictureOfTheDayWidget,
       mayHaveWeatherForecast,
       openPreferences,
       wallpapersUserEnabled,
@@ -197,7 +216,15 @@ export class ContentSection extends React.PureComponent {
       showInferredPersonalizationEnabled,
       topSitesRowsCount,
     } = enabledSections;
-    const { timerEnabled, listsEnabled, clocksEnabled } = enabledWidgets;
+    const {
+      timerEnabled,
+      listsEnabled,
+      clocksEnabled,
+      privacyEnabled,
+      crosswordEnabled,
+      stocksEnabled,
+      pictureOfTheDayEnabled,
+    } = enabledWidgets;
 
     // @nova-cleanup(remove-conditional): Remove novaEnabled check and newtab-custom-stories-toggle, default to newtab-recommended-stories-toggle
     let pocketToggleL10nId;
@@ -222,7 +249,7 @@ export class ContentSection extends React.PureComponent {
                     pressed={
                       (wallpapersUserEnabled && !!activeWallpaper) || null
                     }
-                    onToggle={this.onPreferenceSelect}
+                    ontoggle={this.onPreferenceSelect}
                     data-preference="newtabWallpapers.user.enabled"
                     data-event-source="WALLPAPERS"
                     data-l10n-id="newtab-wallpaper-toggle-title"
@@ -249,7 +276,7 @@ export class ContentSection extends React.PureComponent {
                     <moz-toggle
                       id="weather-toggle"
                       pressed={weatherEnabled || null}
-                      onToggle={this.onPreferenceSelect}
+                      ontoggle={this.onPreferenceSelect}
                       data-preference="showWeather"
                       data-event-source="WEATHER"
                       data-l10n-id="newtab-custom-widget-weather-toggle"
@@ -263,7 +290,7 @@ export class ContentSection extends React.PureComponent {
                     <moz-toggle
                       id="lists-toggle"
                       pressed={listsEnabled || null}
-                      onToggle={this.onPreferenceSelect}
+                      ontoggle={this.onPreferenceSelect}
                       data-preference="widgets.lists.enabled"
                       data-event-source="WIDGET_LISTS"
                       data-l10n-id="newtab-custom-widget-lists-toggle"
@@ -277,7 +304,7 @@ export class ContentSection extends React.PureComponent {
                     <moz-toggle
                       id="timer-toggle"
                       pressed={timerEnabled || null}
-                      onToggle={this.onPreferenceSelect}
+                      ontoggle={this.onPreferenceSelect}
                       data-preference="widgets.focusTimer.enabled"
                       data-event-source="WIDGET_TIMER"
                       data-l10n-id="newtab-custom-widget-timer-toggle"
@@ -288,15 +315,69 @@ export class ContentSection extends React.PureComponent {
                 {/* Clocks */}
                 {mayHaveClocksWidget && (
                   <div id="clocks-widget-section" className="section">
-                    {/** @backward-compat { version 150 } React 16 (cached page) uses ontoggle; React 19 uses onToggle. Remove onToggle once Firefox 150 reaches Release. */}
                     <moz-toggle
                       id="clocks-toggle"
                       pressed={!!clocksEnabled}
                       ontoggle={this.onPreferenceSelect}
-                      onToggle={this.onPreferenceSelect}
                       data-preference="widgets.clocks.enabled"
                       data-event-source="WIDGET_CLOCKS"
                       data-l10n-id="newtab-custom-widget-clock-toggle"
+                    />
+                  </div>
+                )}
+
+                {/* Privacy */}
+                {mayHavePrivacyWidget && (
+                  <div id="privacy-widget-section" className="section">
+                    <moz-toggle
+                      id="privacy-toggle"
+                      pressed={privacyEnabled || null}
+                      ontoggle={this.onPreferenceSelect}
+                      data-preference="widgets.privacy.enabled"
+                      data-event-source="WIDGET_PRIVACY"
+                      data-l10n-id="newtab-custom-widget-privacy-toggle"
+                    />
+                  </div>
+                )}
+
+                {/* Crossword */}
+                {mayHaveCrosswordWidget && (
+                  <div id="crossword-widget-section" className="section">
+                    {/* TODO: Add in fluent string when correct preview files are set up */}
+                    <moz-toggle
+                      id="crossword-toggle"
+                      pressed={!!crosswordEnabled}
+                      ontoggle={this.onPreferenceSelect}
+                      data-preference="widgets.crossword.enabled"
+                      data-event-source="WIDGET_CROSSWORD"
+                      label="Crossword"
+                    ></moz-toggle>
+                  </div>
+                )}
+
+                {/* Stocks */}
+                {mayHaveStocksWidget && (
+                  <div id="stocks-widget-section" className="section">
+                    <moz-toggle
+                      id="stocks-toggle"
+                      pressed={stocksEnabled || null}
+                      ontoggle={this.onPreferenceSelect}
+                      data-preference="widgets.stocks.enabled"
+                      data-event-source="WIDGET_STOCKS"
+                      data-l10n-id="newtab-custom-widget-stocks-toggle"
+                    />
+                  </div>
+                )}
+                {/* Picture of the day */}
+                {mayHavePictureOfTheDayWidget && (
+                  <div id="picture-widget-section" className="section">
+                    <moz-toggle
+                      id="picture-toggle"
+                      pressed={pictureOfTheDayEnabled || null}
+                      ontoggle={this.onPreferenceSelect}
+                      data-preference="widgets.pictureOfTheDay.enabled"
+                      data-event-source="WIDGET_PICTURE_OF_THE_DAY"
+                      data-l10n-id="newtab-custom-widget-picture-toggle"
                     />
                   </div>
                 )}
@@ -312,7 +393,7 @@ export class ContentSection extends React.PureComponent {
                   <moz-toggle
                     id="weather-toggle"
                     pressed={weatherEnabled || null}
-                    onToggle={this.onPreferenceSelect}
+                    ontoggle={this.onPreferenceSelect}
                     data-preference={
                       novaEnabled ? "widgets.weather.enabled" : "showWeather"
                     }
@@ -329,7 +410,7 @@ export class ContentSection extends React.PureComponent {
               <moz-toggle
                 id="shortcuts-toggle"
                 pressed={topSitesEnabled || null}
-                onToggle={this.onPreferenceSelect}
+                ontoggle={this.onPreferenceSelect}
                 data-preference="feeds.topsites"
                 data-event-source="TOP_SITES"
                 data-l10n-id={
@@ -395,7 +476,7 @@ export class ContentSection extends React.PureComponent {
                   <moz-toggle
                     id="widgets-system-toggle"
                     pressed={widgetsEnabled || null}
-                    onToggle={this.onPreferenceSelect}
+                    ontoggle={this.onPreferenceSelect}
                     data-preference="widgets.enabled"
                     data-event-source="WIDGETS_SYSTEM"
                     data-l10n-id="newtab-custom-widget-section-toggle"
@@ -414,6 +495,12 @@ export class ContentSection extends React.PureComponent {
                             mayHaveListsWidget={mayHaveListsWidget}
                             mayHaveSportsWidget={mayHaveSportsWidget}
                             mayHaveClocksWidget={mayHaveClocksWidget}
+                            mayHavePrivacyWidget={mayHavePrivacyWidget}
+                            mayHaveCrosswordWidget={mayHaveCrosswordWidget}
+                            mayHaveStocksWidget={mayHaveStocksWidget}
+                            mayHavePictureOfTheDayWidget={
+                              mayHavePictureOfTheDayWidget
+                            }
                             mayHaveWeatherForecast={mayHaveWeatherForecast}
                             weatherDisplay={weatherDisplay}
                             setPref={setPref}
@@ -442,7 +529,7 @@ export class ContentSection extends React.PureComponent {
                 <moz-toggle
                   id="pocket-toggle"
                   pressed={pocketEnabled || null}
-                  onToggle={this.onPreferenceSelect}
+                  ontoggle={this.onPreferenceSelect}
                   data-preference="feeds.section.topstories"
                   data-event-source="TOP_STORIES"
                   data-l10n-id={pocketToggleL10nId}
@@ -456,23 +543,16 @@ export class ContentSection extends React.PureComponent {
                           ref={this.pocketDrawerRef}
                         >
                           {mayHaveInferredPersonalization && (
-                            <div className="check-wrapper" role="presentation">
-                              <input
-                                id="inferred-personalization"
-                                className="customize-menu-checkbox"
-                                disabled={!pocketEnabled}
-                                checked={showInferredPersonalizationEnabled}
-                                type="checkbox"
-                                onChange={this.onPreferenceSelect}
-                                data-preference="discoverystream.sections.personalization.inferred.user.enabled"
-                                data-event-source="INFERRED_PERSONALIZATION"
-                              />
-                              <label
-                                className="customize-menu-checkbox-label"
-                                htmlFor="inferred-personalization"
-                                data-l10n-id="newtab-custom-stories-personalized-checkbox-label"
-                              />
-                            </div>
+                            <moz-checkbox
+                              id="inferred-personalization"
+                              className="customize-menu-checkbox"
+                              disabled={!pocketEnabled}
+                              checked={showInferredPersonalizationEnabled}
+                              onChange={this.onPreferenceSelect}
+                              data-preference="discoverystream.sections.personalization.inferred.user.enabled"
+                              data-event-source="INFERRED_PERSONALIZATION"
+                              data-l10n-id="newtab-custom-stories-personalized-checkbox"
+                            />
                           )}
                           {mayHaveTopicSections && (
                             <SectionsMgmtPanel

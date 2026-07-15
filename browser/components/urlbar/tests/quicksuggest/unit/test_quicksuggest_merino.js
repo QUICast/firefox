@@ -680,8 +680,8 @@ add_task(async function dismissals_unmanaged_1() {
     MerinoTestUtils.server.response.body.suggestions = [suggestion];
 
     let expectedResult = {
-      type: UrlbarUtils.RESULT_TYPE.URL,
-      source: UrlbarUtils.RESULT_SOURCE.SEARCH,
+      type: UrlbarShared.RESULT_TYPE.URL,
+      source: UrlbarShared.RESULT_SOURCE.SEARCH,
       heuristic: false,
       payload: {
         provider,
@@ -800,8 +800,8 @@ add_task(async function dismissals_unmanaged_2() {
   ];
 
   let expectedBaseResult = {
-    type: UrlbarUtils.RESULT_TYPE.URL,
-    source: UrlbarUtils.RESULT_SOURCE.SEARCH,
+    type: UrlbarShared.RESULT_TYPE.URL,
+    source: UrlbarShared.RESULT_SOURCE.SEARCH,
     heuristic: false,
     payload: {
       provider,
@@ -946,13 +946,12 @@ add_task(async function dismissals_unmanaged_2() {
   merinoClient().resetSession();
 });
 
-// Tests a Merino suggestion that is a top pick/best match.
-add_task(async function bestMatch() {
+// Tests a mock `top_picks` Merino suggestion, which
+// `UrlbarProviderQuickSuggest` handles as an unmanaged suggestion type.
+add_task(async function topPicks() {
   UrlbarPrefs.set("quicksuggest.online.available", true);
   UrlbarPrefs.set("quicksuggest.online.enabled", true);
 
-  // Set up a suggestion with `is_top_pick` and the "top_picks" provider so that
-  // UrlbarProviderQuickSuggest will make a default result for it.
   let provider = "top_picks";
   MerinoTestUtils.server.response.body.suggestions = [
     {
@@ -975,8 +974,8 @@ add_task(async function bestMatch() {
     matches: [
       {
         isBestMatch: true,
-        type: UrlbarUtils.RESULT_TYPE.URL,
-        source: UrlbarUtils.RESULT_SOURCE.SEARCH,
+        type: UrlbarShared.RESULT_TYPE.URL,
+        source: UrlbarShared.RESULT_SOURCE.SEARCH,
         heuristic: false,
         payload: {
           telemetryType: provider,
@@ -1071,8 +1070,8 @@ async function doUnmanagedTest({ pref, suggestion, shouldBeAdded }) {
   MerinoTestUtils.server.response.body.suggestions = [suggestion];
 
   let expectedResult = {
-    type: UrlbarUtils.RESULT_TYPE.URL,
-    source: UrlbarUtils.RESULT_SOURCE.SEARCH,
+    type: UrlbarShared.RESULT_TYPE.URL,
+    source: UrlbarShared.RESULT_SOURCE.SEARCH,
     heuristic: false,
     payload: {
       title: suggestion.title,

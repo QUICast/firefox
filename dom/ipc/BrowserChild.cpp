@@ -466,6 +466,15 @@ nsresult BrowserChild::Init(mozIDOMWindowProxy* aParent,
   MOZ_ASSERT(aInitialWindowChild->DocumentPrincipal() ==
              aOpenWindowInfo->PrincipalToInheritForAboutBlank());
 
+  // Ensure we have marked this process as untrusted before BrowserChild can
+  // receive any further messages.
+  //
+  // This call could load additional trusted scripts, which are safe to cache
+  // with the ScriptPreloader, so we avoid setting ourselves as untrusted until
+  // this method returns.
+  auto markAsUntrustedGuard =
+      MakeScopeExit([&] { ContentChild::MaybeBecomeUntrusted(); });
+
   nsCOMPtr<nsIWidget> widget = nsIWidget::CreatePuppetWidget(this);
   mPuppetWidget = static_cast<PuppetWidget*>(widget.get());
   if (!mPuppetWidget) {
@@ -2754,9 +2763,9 @@ mozilla::ipc::IPCResult BrowserChild::RecvPasteTransferable(
 
 #ifdef ACCESSIBILITY
 a11y::PDocAccessibleChild* BrowserChild::AllocPDocAccessibleChild(
-    PDocAccessibleChild*, const uint64_t&,
-    const MaybeDiscardedBrowsingContext&) {
-  MOZ_ASSERT(false, "should never call this!");
+    PDocAccessibleChild*, const uint64_t&, const MaybeDiscardedBrowsingContext&,
+    const bool&) {
+  MOZ_ASSERT_UNREACHABLE("should never call this!");
   return nullptr;
 }
 

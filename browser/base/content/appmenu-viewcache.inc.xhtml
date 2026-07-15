@@ -9,7 +9,17 @@
       <vbox id="appMenu-addon-banners"/>
       <toolbarbutton id="appMenu-update-banner" class="panel-banner-item subviewbutton"
                      wrap="true"
-                     hidden="true"/>
+                     hidden="true">
+        <box class="appMenu-update-banner-pulse-ring"/>
+        <box class="appMenu-update-banner-text" orient="vertical">
+          <label id="appMenu-update-banner-title"
+                 class="appMenu-update-banner-title text-box-trim-start"
+                 data-l10n-id="appmenu-nova-update-title"/>
+          <label id="appMenu-update-banner-description"
+                 class="appMenu-update-banner-description"
+                 data-l10n-id="appmenu-nova-update-description"/>
+        </box>
+      </toolbarbutton>
 
       <toolbaritem id="appMenu-menu-message"
                    closemenu="none">
@@ -19,8 +29,7 @@
                    class="subviewbutton toolbaritem-combined-buttons">
         <html:div id="appMenu-fxa-text" data-l10n-id="appmenu-fxa-sync-and-save-data2"/>
         <toolbarbutton id="appMenu-fxa-label2"
-                      class="subviewbutton"
-                      >
+                       class="subviewbutton">
           <vbox flex="1">
             <label id="appMenu-header-title"
                    crop="end"/>
@@ -28,6 +37,7 @@
                    crop="end"/>
           </vbox>
         </toolbarbutton>
+        <html:moz-button id="appMenu-nova-fxa-label"/>
       </toolbaritem>
       <toolbarbutton id="appMenu-empty-profiles-button"
                      class="subviewbutton subviewbutton-nav"
@@ -449,6 +459,10 @@
                      class="subviewbutton"
                      data-l10n-id="appmenu-abouttranslations"
                      command="cmd_openAboutTranslations"/>
+      <toolbarbutton id="appmenu-edit-pdf-button"
+                     class="subviewbutton"
+                     data-l10n-id="appmenu-edit-pdf"
+                     command="cmd_editPDF"/>
       <toolbarseparator/>
       <html:h2 id="appmenu-developer-tools"
           data-l10n-id="appmenu-developer-tools-subheader"
@@ -712,33 +726,33 @@
       <!-- updateCTAPanel will control if we show this panel -->
       <vbox id="PanelUI-fxa-cta-menu" hidden="true">
         <toolbarseparator id="PanelUI-products-separator" />
-        <label crop="end" class="subview-subheader" data-l10n-id="appmenu-other-protection-header2" />
+        <label crop="end" class="subview-subheader" data-l10n-id="appmenu-other-protection-header3" />
         <toolbarbutton id="PanelUI-fxa-menu-monitor-button" class="fxa-cta-button subviewbutton subviewbutton-iconic">
-          <vbox flex="1">
-            <hbox align="center">
-              <image class="PanelUI-fxa-menu-monitor-button ctaMenuLogo" role="presentation" />
-              <label id="fxa-menu-header-title" crop="end" data-l10n-id="appmenuitem-monitor-title" />
-            </hbox>
-            <label id="cta-menu-header-description" crop="end" data-l10n-id="appmenuitem-monitor-description" />
-          </vbox>
+          <hbox align="center">
+            <image class="PanelUI-fxa-menu-monitor-button ctaMenuLogo" role="presentation" />
+            <vbox flex="1">
+              <label id="fxa-menu-header-title" crop="end" data-l10n-id="appmenuitem-monitor-title2" />
+              <label id="cta-menu-header-description" crop="end" data-l10n-id="appmenuitem-monitor-description2" />
+            </vbox>
+          </hbox>
         </toolbarbutton>
         <toolbarbutton id="PanelUI-fxa-menu-relay-button" class="fxa-cta-button subviewbutton subviewbutton-iconic">
-          <vbox flex="1">
-            <hbox align="center">
-              <image class="PanelUI-fxa-menu-relay-button ctaMenuLogo" role="presentation" />
-              <label id="fxa-menu-header-title" crop="end" data-l10n-id="appmenuitem-relay-title" />
-            </hbox>
-            <label id="cta-menu-header-description" crop="end" data-l10n-id="appmenuitem-relay-description" />
-          </vbox>
+          <hbox align="center">
+            <image class="PanelUI-fxa-menu-relay-button ctaMenuLogo" role="presentation" />
+            <vbox flex="1">
+              <label id="fxa-menu-header-title" crop="end" data-l10n-id="appmenuitem-relay-title2" />
+              <label id="cta-menu-header-description" crop="end" data-l10n-id="appmenuitem-relay-description2" />
+            </vbox>
+          </hbox>
         </toolbarbutton>
         <toolbarbutton id="PanelUI-fxa-menu-vpn-button" class="fxa-cta-button subviewbutton subviewbutton-iconic">
-          <vbox flex="1">
-            <hbox align="center">
-              <image class="PanelUI-fxa-menu-vpn-button ctaMenuLogo" role="presentation" />
-              <label id="fxa-menu-header-title" crop="end" data-l10n-id="appmenuitem-vpn-title" />
-            </hbox>
-            <label id="cta-menu-header-description" crop="end" data-l10n-id="appmenuitem-vpn-description-2" />
-          </vbox>
+          <hbox align="center">
+            <image class="PanelUI-fxa-menu-vpn-button ctaMenuLogo" role="presentation" />
+            <vbox flex="1">
+              <label id="fxa-menu-header-title" crop="end" data-l10n-id="appmenuitem-vpn-title2" />
+              <label id="cta-menu-header-description" crop="end" data-l10n-id="appmenuitem-vpn-description3" />
+            </vbox>
+          </hbox>
         </toolbarbutton>
       </vbox>
       <deck id="PanelUI-fxa-remotetabs-deck">

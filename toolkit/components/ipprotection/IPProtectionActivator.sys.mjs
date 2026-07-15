@@ -5,6 +5,7 @@
 import { AppConstants } from "resource://gre/modules/AppConstants.sys.mjs";
 import { IPProtectionService } from "moz-src:///toolkit/components/ipprotection/IPProtectionService.sys.mjs";
 import { IPPProxyManager } from "moz-src:///toolkit/components/ipprotection/IPPProxyManager.sys.mjs";
+import { IPPLifecycleHelper } from "moz-src:///toolkit/components/ipprotection/IPPLifecycleHelper.sys.mjs";
 import { IPPNimbusHelper } from "moz-src:///toolkit/components/ipprotection/IPPNimbusHelper.sys.mjs";
 import { IPProtectionServerlist } from "moz-src:///toolkit/components/ipprotection/IPProtectionServerlist.sys.mjs";
 import { IPPStartupCache } from "moz-src:///toolkit/components/ipprotection/IPPStartupCache.sys.mjs";
@@ -30,6 +31,7 @@ const coreHelpers = [
   IPPStartupCache,
   IPProtectionServerlist,
   IPPProxyManager,
+  IPPLifecycleHelper,
   IPPSessionPrefManager,
   ...(AppConstants.MOZ_ENTERPRISE
     ? lazy.IPPAlwaysOnHelpers
@@ -38,6 +40,9 @@ const coreHelpers = [
 ];
 
 let extraHelpers = [];
+let authProvider = null;
+let fallbackProvider = null;
+let onFallbackCallback = null;
 
 export const IPProtectionActivator = {
   addHelpers(helpers) {
@@ -47,16 +52,42 @@ export const IPProtectionActivator = {
     extraHelpers = [];
   },
   setupHelpers() {
-    IPProtectionService.setHelpers([...coreHelpers, ...extraHelpers]);
+    const providerHelpers = authProvider?.helpers ?? [];
+    IPProtectionService.setHelpers([
+      ...coreHelpers,
+      ...providerHelpers,
+      ...extraHelpers,
+    ]);
   },
-  setAuthProvider(authProvider) {
-    IPProtectionService.setAuthProvider(authProvider);
+  setAuthProvider(provider) {
+    authProvider = provider;
+    IPProtectionService.setAuthProvider(provider);
+  },
+  setFallbackAuthProvider(provider, onFallback = null) {
+    fallbackProvider = provider;
+    onFallbackCallback = onFallback;
+  },
+  async reinitWithFallback() {
+    if (!fallbackProvider) {
+      return;
+    }
+    const provider = fallbackProvider;
+    const cb = onFallbackCallback;
+    fallbackProvider = null;
+    onFallbackCallback = null;
+    this.uninit();
+    this.setAuthProvider(provider);
+    cb?.();
+    await this.init();
   },
   init() {
     this.setupHelpers();
     return IPProtectionService.init();
   },
   uninit() {
+    authProvider = null;
+    fallbackProvider = null;
+    onFallbackCallback = null;
     return IPProtectionService.uninit();
   },
 };

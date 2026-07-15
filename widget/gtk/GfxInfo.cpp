@@ -5,35 +5,36 @@
 #include "GfxInfo.h"
 
 #include <errno.h>
-#include <unistd.h>
-#include <string>
+#include <fcntl.h>
+#include <gbm.h>
+#include <glib.h>
 #include <poll.h>
 #include <sys/types.h>
 #include <sys/utsname.h>
 #include <sys/wait.h>
-#include <glib.h>
-#include <fcntl.h>
+#include <unistd.h>
 
-#include "mozilla/gfx/Logging.h"
-#include "mozilla/SSE.h"
-#include "mozilla/glean/GfxMetrics.h"
-#include "mozilla/XREAppData.h"
-#include "mozilla/ScopeExit.h"
+#include <string>
+
+#include "MediaCodecsSupport.h"
+#include "WidgetUtilsGtk.h"
 #include "mozilla/GUniquePtr.h"
+#include "mozilla/SSE.h"
+#include "mozilla/ScopeExit.h"
 #include "mozilla/StaticPrefs_media.h"
+#include "mozilla/XREAppData.h"
+#include "mozilla/gfx/Logging.h"
+#include "mozilla/glean/GfxMetrics.h"
+#include "nsAppRunner.h"
 #include "nsCRTGlue.h"
+#include "nsCharSeparatedTokenizer.h"
 #include "nsExceptionHandler.h"
 #include "nsPrintfCString.h"
 #include "nsString.h"
 #include "nsStringFwd.h"
 #include "nsUnicharUtils.h"
-#include "nsCharSeparatedTokenizer.h"
 #include "nsWhitespaceTokenizer.h"
 #include "prenv.h"
-#include "WidgetUtilsGtk.h"
-#include "MediaCodecsSupport.h"
-#include "nsAppRunner.h"
-#include <gbm.h>
 
 #ifndef GBM_FORMAT_P010
 #  define GBM_FORMAT_P010 __gbm_fourcc_code('P', '0', '1', '0')

@@ -5,7 +5,7 @@
 #include "mozilla/dom/CSSMathValue.h"
 
 #include "mozilla/Assertions.h"
-#include "mozilla/Maybe.h"
+#include "mozilla/NotNull.h"
 #include "mozilla/RefPtr.h"
 #include "mozilla/ServoStyleConsts.h"
 #include "mozilla/dom/CSSMathClamp.h"
@@ -19,13 +19,17 @@
 
 namespace mozilla::dom {
 
-CSSMathValue::CSSMathValue(nsCOMPtr<nsISupports> aParent)
-    : CSSNumericValue(std::move(aParent), NumericValueType::MathValue),
-      mMathValueType(MathValueType::Uninitialized) {}
-
 CSSMathValue::CSSMathValue(nsCOMPtr<nsISupports> aParent,
                            MathValueType aMathValueType)
     : CSSNumericValue(std::move(aParent), NumericValueType::MathValue),
+      mMathValueType(aMathValueType) {}
+
+CSSMathValue::CSSMathValue(
+    nsCOMPtr<nsISupports> aParent,
+    MovingNotNull<UniquePtr<StyleNumericType>> aNumericType,
+    MathValueType aMathValueType)
+    : CSSNumericValue(std::move(aParent), std::move(aNumericType),
+                      NumericValueType::MathValue),
       mMathValueType(aMathValueType) {}
 
 // static
@@ -38,6 +42,48 @@ RefPtr<CSSMathValue> CSSMathValue::Create(nsCOMPtr<nsISupports> aParent,
       const auto& mathSum = aMathValue.AsSum();
 
       mathValue = CSSMathSum::Create(std::move(aParent), mathSum);
+      break;
+    }
+
+    case StyleMathValue::Tag::Product: {
+      const auto& mathProduct = aMathValue.AsProduct();
+
+      mathValue = CSSMathProduct::Create(std::move(aParent), mathProduct);
+      break;
+    }
+
+    case StyleMathValue::Tag::Negate: {
+      const auto& mathNegate = aMathValue.AsNegate();
+
+      mathValue = CSSMathNegate::Create(std::move(aParent), mathNegate);
+      break;
+    }
+
+    case StyleMathValue::Tag::Invert: {
+      const auto& mathInvert = aMathValue.AsInvert();
+
+      mathValue = CSSMathInvert::Create(std::move(aParent), mathInvert);
+      break;
+    }
+
+    case StyleMathValue::Tag::Min: {
+      const auto& mathMin = aMathValue.AsMin();
+
+      mathValue = CSSMathMin::Create(std::move(aParent), mathMin);
+      break;
+    }
+
+    case StyleMathValue::Tag::Max: {
+      const auto& mathMax = aMathValue.AsMax();
+
+      mathValue = CSSMathMax::Create(std::move(aParent), mathMax);
+      break;
+    }
+
+    case StyleMathValue::Tag::Clamp: {
+      const auto& mathClamp = aMathValue.AsClamp();
+
+      mathValue = CSSMathClamp::Create(std::move(aParent), mathClamp);
       break;
     }
   }
@@ -70,10 +116,6 @@ CSSMathOperator CSSMathValue::Operator() const {
       return CSSMathOperator::Product;
 
     case MathValueType::MathSum:
-      return CSSMathOperator::Sum;
-
-    case MathValueType::Uninitialized:
-      // This is only a temporary variant, return Sum for now.
       return CSSMathOperator::Sum;
   }
   MOZ_MAKE_COMPILER_ASSUME_IS_UNREACHABLE("Bad math value type!");
@@ -161,40 +203,52 @@ void CSSMathValue::ToCssTextWithProperty(const CSSPropertyId& aPropertyId,
       mathSum.ToCssTextWithProperty(aPropertyId, aContext, aDest);
       break;
     }
-
-    case MathValueType::Uninitialized:
-      break;
   }
 }
 
-Maybe<StyleMathValue> CSSMathValue::ToStyleMathValue() const {
+StyleMathValue CSSMathValue::ToStyleMathValue() const {
   switch (GetMathValueType()) {
-    case MathValueType::MathClamp:
-      return Nothing();
+    case MathValueType::MathClamp: {
+      const CSSMathClamp& mathClamp = GetAsCSSMathClamp();
 
-    case MathValueType::MathMax:
-      return Nothing();
+      return StyleMathValue::Clamp(mathClamp.ToStyleMathClamp());
+    }
 
-    case MathValueType::MathMin:
-      return Nothing();
+    case MathValueType::MathMax: {
+      const CSSMathMax& mathMax = GetAsCSSMathMax();
 
-    case MathValueType::MathInvert:
-      return Nothing();
+      return StyleMathValue::Max(mathMax.ToStyleMathMax());
+    }
 
-    case MathValueType::MathNegate:
-      return Nothing();
+    case MathValueType::MathMin: {
+      const CSSMathMin& mathMin = GetAsCSSMathMin();
 
-    case MathValueType::MathProduct:
-      return Nothing();
+      return StyleMathValue::Min(mathMin.ToStyleMathMin());
+    }
+
+    case MathValueType::MathInvert: {
+      const CSSMathInvert& mathInvert = GetAsCSSMathInvert();
+
+      return StyleMathValue::Invert(mathInvert.ToStyleMathInvert());
+    }
+
+    case MathValueType::MathNegate: {
+      const CSSMathNegate& mathNegate = GetAsCSSMathNegate();
+
+      return StyleMathValue::Negate(mathNegate.ToStyleMathNegate());
+    }
+
+    case MathValueType::MathProduct: {
+      const CSSMathProduct& mathProduct = GetAsCSSMathProduct();
+
+      return StyleMathValue::Product(mathProduct.ToStyleMathProduct());
+    }
 
     case MathValueType::MathSum: {
       const CSSMathSum& mathSum = GetAsCSSMathSum();
 
-      return Some(StyleMathValue::Sum(mathSum.ToStyleMathSum()));
+      return StyleMathValue::Sum(mathSum.ToStyleMathSum());
     }
-
-    case MathValueType::Uninitialized:
-      return Nothing();
   }
   MOZ_MAKE_COMPILER_ASSUME_IS_UNREACHABLE("Bad math value type!");
 }

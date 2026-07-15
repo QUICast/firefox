@@ -152,8 +152,15 @@ already_AddRefed<ViewTimeline> ViewTimeline::Constructor(
       subject ? ScrollerInfo::Type::Nearest : ScrollerInfo::Type::Provided,
       subject, PseudoStyleRequest::NotPseudo());
 
-  return MakeAndAddRef<ViewTimeline>(doc, scroller, axis, subject,
-                                     PseudoStyleType::NotPseudo, inset);
+  RefPtr<ViewTimeline> result = MakeAndAddRef<ViewTimeline>(
+      doc, scroller, axis, subject, PseudoStyleType::NotPseudo, inset);
+  if (subject) {
+    // Maybe our nearested scroller already exists, try to compute the current
+    // time.
+    result->UpdateCachedCurrentTime();
+  }
+
+  return result.forget();
 }
 
 already_AddRefed<CSSNumericValue> ViewTimeline::GetStartOffset(
@@ -167,9 +174,9 @@ already_AddRefed<CSSNumericValue> ViewTimeline::GetStartOffset(
     aRv.Throw(NS_ERROR_DOM_NOT_SUPPORTED_ERR);
     return nullptr;
   }
-  return MakeAndAddRef<CSSUnitValue>(
-      GetParentObject(), nsPresContext::AppUnitsToDoubleCSSPixels(data->mStart),
-      "px"_ns);
+  return MakeCSSUnitValue(
+      GetParentObject(), StyleNumericType::Length(),
+      nsPresContext::AppUnitsToDoubleCSSPixels(data->mStart), "px"_ns);
 }
 
 already_AddRefed<CSSNumericValue> ViewTimeline::GetEndOffset(
@@ -183,9 +190,9 @@ already_AddRefed<CSSNumericValue> ViewTimeline::GetEndOffset(
     aRv.Throw(NS_ERROR_DOM_NOT_SUPPORTED_ERR);
     return nullptr;
   }
-  return MakeAndAddRef<CSSUnitValue>(
-      GetParentObject(), nsPresContext::AppUnitsToDoubleCSSPixels(data->mEnd),
-      "px"_ns);
+  return MakeCSSUnitValue(GetParentObject(), StyleNumericType::Length(),
+                          nsPresContext::AppUnitsToDoubleCSSPixels(data->mEnd),
+                          "px"_ns);
 }
 
 void ViewTimeline::ReplacePropertiesWith(
@@ -203,7 +210,8 @@ void ViewTimeline::ReplacePropertiesWith(
     MOZ_ASSERT(anim->GetTimeline() == this);
     MOZ_ASSERT(anim->GetTimelineName() == aName);
     // Set this so we just PostUpdate() for this animation.
-    anim->SetTimeline(this, aName);
+    // FIXME(dshin, bug 1737927): Mutation observer may need to be notified.
+    anim->SetTimeline(this, aName, Animation::FromJS::No);
   }
 }
 
@@ -246,18 +254,16 @@ bool ViewTimeline::UpdateCachedCurrentTime() {
 
   mCachedCurrentTime.reset();
 
-  const auto state = GetState();
-  // If no layout box, this timeline is inactive.
-  if (const auto* e = state.mSource.mElement; !e || !e->GetPrimaryFrame()) {
+  mCachedStateSnapshot = Some(ComputeSnapshot());
+  // The timeline is inactive if it has no principal box or its source is not a
+  // scroll container.
+  if (!mCachedStateSnapshot->IsActive()) {
     return prevCachedCurrentTime.isSome();
   }
 
-  // if this is not a scroller container, this timeline is inactive.
   const ScrollContainerFrame* scrollContainerFrame =
-      state.GetScrollContainerFrame();
-  if (!scrollContainerFrame) {
-    return prevCachedCurrentTime.isSome();
-  }
+      mCachedStateSnapshot->GetScrollContainerFrame();
+  MOZ_ASSERT(scrollContainerFrame);
 
   // Don't try to update against a frame that hasn't been laid out yet.
   if (scrollContainerFrame->HasAnyStateBits(NS_FRAME_FIRST_REFLOW)) {
@@ -304,7 +310,7 @@ bool ViewTimeline::UpdateCachedCurrentTime() {
   // (i.e. the box of the scrollport), where as |startOffset| refers to the
   // start of the timeline, and similarly for end side/offset. [1]
   // https://drafts.csswg.org/css-writing-modes-4/#css-start
-  const auto orientation = state.Axis();
+  const auto orientation = mCachedStateSnapshot->Axis();
   const auto sideInsets =
       ComputeInsets(scrollContainerFrame, orientation, mAxis, mInset);
 

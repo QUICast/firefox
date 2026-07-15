@@ -16,9 +16,11 @@ import androidx.navigation.fragment.findNavController
 import mozilla.components.lib.state.helpers.StoreProvider.Companion.fragmentStore
 import org.mozilla.fenix.e2e.SystemInsetsPaddedFragment
 import org.mozilla.fenix.ext.hideToolbar
-import org.mozilla.fenix.ext.settings
+import org.mozilla.fenix.ext.requireComponents
 import org.mozilla.fenix.settings.SupportUtils
 import org.mozilla.fenix.settings.labs.middleware.LabsMiddleware
+import org.mozilla.fenix.settings.labs.middleware.LabsTelemetryMiddleware
+import org.mozilla.fenix.settings.labs.store.LabsAction
 import org.mozilla.fenix.settings.labs.store.LabsState
 import org.mozilla.fenix.settings.labs.store.LabsStore
 import org.mozilla.fenix.settings.labs.ui.FirefoxLabsScreen
@@ -41,9 +43,14 @@ class FirefoxLabsFragment : Fragment(), SystemInsetsPaddedFragment {
             initialState = it,
             middleware = listOf(
                 LabsMiddleware(
-                    settings = requireContext().settings(),
+                    context = requireContext().applicationContext,
+                    settings = requireComponents.settings,
+                    nimbusSdk = requireComponents.nimbus.sdk,
                     onRestart = ::restartFenix,
+                    onOpenFeedback = ::openFeedbackLink,
+                    crashReporter = requireComponents.analytics.crashReporter,
                 ),
+                LabsTelemetryMiddleware(),
             ),
         )
     }
@@ -59,9 +66,23 @@ class FirefoxLabsFragment : Fragment(), SystemInsetsPaddedFragment {
                 onNavigationIconClick = {
                     findNavController().popBackStack()
                 },
-                onShareFeedbackClick = ::openFeedbackLink,
+                onShareFeedbackClick = { item ->
+                    labsStore.dispatch(LabsAction.ShareFeedbackClicked(item))
+                },
             )
         }
+    }
+
+    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+        super.onViewCreated(view, savedInstanceState)
+        // Observe Nimbus so the screen reflects enrollment changes Nimbus makes mid-session, such as
+        // an unenroll forced by a failed Gecko pref update.
+        viewLifecycleOwner.lifecycle.addObserver(
+            LabsRefreshFeature(
+                store = labsStore,
+                nimbusApi = requireComponents.nimbus.sdk,
+            ),
+        )
     }
 
     private fun openFeedbackLink(url: String) {

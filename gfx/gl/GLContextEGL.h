@@ -5,10 +5,11 @@
 #ifndef GLCONTEXTEGL_H_
 #define GLCONTEXTEGL_H_
 
+#include <memory>
+
 #include "GLContext.h"
 #include "GLLibraryEGL.h"
 #include "nsRegion.h"
-#include <memory>
 
 namespace mozilla {
 namespace layers {
@@ -101,6 +102,13 @@ class GLContextEGL final : public GLContext {
 
   bool HasExtBufferAge() const;
   bool HasKhrPartialUpdate() const;
+  // Returns which EGL texture target (e.g. EGL_TEXTURE_2D) should be used for
+  // binding MacIOSurface PBuffers on ANGLE. Requires the extension
+  // ANGLE_iosurface_client_buffer.
+  EGLint GetBindToTextureTargetANGLE() const;
+  // Same as above, but returns the corresponding GL texture target, e.g.
+  // GL_TEXTURE_2D.
+  GLenum GetPreferredMacIOSurfaceTextureTarget() const override;
 
   bool BindTex2DOffscreen(GLContext* aOffscreen);
   void UnbindTex2DOffscreen(GLContext* aOffscreen);
@@ -147,6 +155,7 @@ class GLContextEGL final : public GLContext {
   bool mCanBindToTexture = false;
   bool mShareWithEGLImage = false;
   bool mOwnsContext = true;
+  mutable Maybe<EGLint> mBindToTextureTargetANGLE;
 
   nsIntRegion mDamageRegion;
 

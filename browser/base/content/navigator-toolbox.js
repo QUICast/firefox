@@ -308,7 +308,9 @@ document.addEventListener(
     }
     navigatorToolbox.addEventListener("click", onClick);
     widgetOverflow.addEventListener("click", onClick);
-    document.getElementById("sidebar-main").addEventListener("click", onClick);
+    document
+      .getElementById("sidebar-container")
+      .addEventListener("click", onClick);
 
     function onKeyPress(event) {
       const isLikeLeftClick = event.key === "Enter" || event.key === " ";
@@ -321,6 +323,7 @@ document.addEventListener(
         #personal-toolbar-empty-description,
         #home-button,
         #tracking-protection-icon-container,
+        #trust-icon-container,
         #identity-icon-box,
         #identity-permission-box,
         #translations-button,
@@ -380,6 +383,10 @@ document.addEventListener(
 
         case "tracking-protection-icon-container":
           gProtectionsHandler.handleProtectionsButtonEvent(event);
+          break;
+
+        case "trust-icon-container":
+          gTrustPanelHandler.handleProtectionsButtonEvent(event);
           break;
 
         case "identity-icon-box":

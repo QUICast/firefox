@@ -187,6 +187,9 @@ class PrefObserver {
   #domWindow;
 
   #prefs = new Map([
+    // [pref-trie-audit] "accessibility.browsewithcaret" is an ambiguous prefix of
+    // "accessibility.browsewithcaret_shortcut.enabled"; triggers only for the exact pref
+    // (sibling is not in this Map so the observe() handler returns early for it).
     [
       caretBrowsingModePref,
       {
@@ -223,6 +226,9 @@ class PrefObserver {
       });
 
       // Once the experiment for new alt-text stuff is removed, we can remove this.
+      // [pref-trie-audit] "pdfjs.enableAltText" is an ambiguous prefix of
+      // "pdfjs.enableAltTextForEnglish", "pdfjs.enableAltTextModelDownload"; triggers only for
+      // the exact pref ("enableAltTextModelDownload" has its own entry in this Map above).
       this.#prefs.set("pdfjs.enableAltText", {
         name: "enableAltText",
         type: "bool",
@@ -393,7 +399,34 @@ class ChromeActions {
     sendResponse(await actor.sendQuery("PDFJS:Parent:loadAIEngine", data));
   }
 
+  async verifyPdfSignature(data, sendResponse) {
+    const actor = getActor(this.domWindow);
+    if (!actor) {
+      sendResponse({ error: "no-actor" });
+      return;
+    }
+    sendResponse(
+      await actor.sendQuery("PDFJS:Parent:verifyPdfSignature", data)
+    );
+  }
+
+  async viewPdfCertificate(data, sendResponse) {
+    const actor = getActor(this.domWindow);
+    if (!actor) {
+      sendResponse(false);
+      return;
+    }
+    sendResponse(
+      await actor.sendQuery("PDFJS:Parent:viewPdfCertificate", data)
+    );
+  }
+
   download(data) {
+    if (!this.supportsDownloading()) {
+      console.warn("PdfStreamConverter: blocked a download request.");
+      return;
+    }
+
     const { originalUrl } = data;
     const blobUrl = data.blobUrl || originalUrl;
     let { filename } = data;
@@ -424,6 +457,22 @@ class ChromeActions {
     return this.domWindow.windowGlobalChild.browsingContext.parent === null;
   }
 
+  supportsDownloading() {
+    const context = this.domWindow.windowGlobalChild.browsingContext;
+    // A top-level document may always trigger downloads. The sandboxed-downloads
+    // flag is meant to let an embedder gate downloads from embedded content; at
+    // top level there is no embedder, and since the PDF response's CSP sandbox
+    // is already ignored for http(s) URLs, enforcing it only for the blob: edge
+    // case would be inconsistent and needlessly stop users saving a PDF they
+    // view.
+    if (context.parent === null) {
+      return true;
+    }
+    // Copied from nsSandboxFlags.h
+    const SANDBOXED_DOWNLOADS = 0x10000;
+    return (context.sandboxFlags & SANDBOXED_DOWNLOADS) === 0;
+  }
+
   async getBrowserPrefs() {
     const isMobile = this.isMobile();
     const nimbusDataStr = isMobile
@@ -441,6 +490,7 @@ class ChromeActions {
         !!Services.prefs.getIntPref("browser.display.use_document_fonts") &&
         Services.prefs.getBoolPref("gfx.downloadable_fonts.enabled"),
       supportsIntegratedFind: this.supportsIntegratedFind(),
+      supportsDownloading: this.supportsDownloading(),
       supportsMouseWheelZoomCtrlKey:
         Services.prefs.getIntPref("mousewheel.with_control.action") === 3,
       supportsMouseWheelZoomMetaKey:

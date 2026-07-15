@@ -6,15 +6,14 @@
 #define GeckoProcessManager_h
 
 #include "WidgetUtils.h"
-#include "nsAppShell.h"
-#include "nsContentUtils.h"
-#include "nsIObserver.h"
-#include "nsWindow.h"
-
 #include "mozilla/RefPtr.h"
 #include "mozilla/dom/BrowserParent.h"
 #include "mozilla/dom/ContentProcessManager.h"
 #include "mozilla/java/GeckoProcessManagerNatives.h"
+#include "nsAppShell.h"
+#include "nsContentUtils.h"
+#include "nsIObserver.h"
+#include "nsWindow.h"
 
 namespace mozilla {
 

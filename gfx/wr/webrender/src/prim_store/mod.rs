@@ -2,17 +2,16 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-use api::{BorderRadius, ClipMode, ColorF};
-use api::{ImageRendering, RepeatMode, PrimitiveFlags};
-use api::{FillRule, POLYGON_CLIP_VERTEX_MAX};
+use api::ColorF;
+use api::{ImageRendering, LineOrientation, PrimitiveFlags};
 use api::units::*;
-use euclid::{SideOffsets2D, Size2D};
 use malloc_size_of::MallocSizeOf;
 use crate::clip::ClipLeafId;
+use crate::render_backend::DataStores;
+use crate::space::SnapRounding;
 use crate::quad::QuadTileClassifier;
 use crate::renderer::{GpuBufferAddress, GpuBufferHandle, GpuBufferWriterF};
 use crate::segment::EdgeMask;
-use crate::border::BorderSegmentCacheKey;
 use crate::debug_item::{DebugItem, DebugMessage};
 use crate::debug_colors;
 use glyph_rasterizer::GlyphKey;
@@ -38,11 +37,11 @@ pub mod interned;
 
 pub mod storage;
 
-use backdrop::{BackdropCaptureDataHandle, BackdropRenderDataHandle, BackdropRenderScratch};
-use borders::{ImageBorderDataHandle, ImageBorderScratch, NormalBorderDataHandle, NormalBorderScratch};
+use backdrop::{BackdropCaptureDataHandle, BackdropRenderDataHandle};
+use borders::{ImageBorderDataHandle, ImageBorderScratch, NormalBorderDataHandle};
 use gradient::{LinearGradientDataHandle, RadialGradientDataHandle, ConicGradientDataHandle};
 use image::{ImageDataHandle, ImageScratch, VisibleImageTile, YuvImageDataHandle};
-use line_dec::{LineDecorationDataHandle, LineDecorationScratch};
+use line_dec::LineDecorationDataHandle;
 use picture::PictureDataHandle;
 use rectangle::RectangleDataHandle;
 use text_run::{TextRunDataHandle, TextRunScratch};
@@ -190,232 +189,18 @@ impl From<WorldRect> for RectKey {
     }
 }
 
-/// To create a fixed-size representation of a polygon, we use a fixed
-/// number of points. Our initialization method restricts us to values
-/// <= 32. If our constant POLYGON_CLIP_VERTEX_MAX is > 32, the Rust
-/// compiler will complain.
-#[cfg_attr(feature = "capture", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
-#[derive(Copy, Debug, Clone, Hash, MallocSizeOf, PartialEq)]
-pub struct PolygonKey {
-    pub point_count: u8,
-    pub points: [PointKey; POLYGON_CLIP_VERTEX_MAX],
-    pub fill_rule: FillRule,
-}
+// `PolygonKey` now lives in `webrender_api` so builder-side interning keys can
+// reference it. Re-exported here to keep existing references working.
+pub use api::key_types::PolygonKey;
 
-impl PolygonKey {
-    pub fn new(
-        points_layout: &Vec<LayoutPoint>,
-        fill_rule: FillRule,
-    ) -> Self {
-        // We have to fill fixed-size arrays with data from a Vec.
-        // We'll do this by initializing the arrays to known-good
-        // values then overwriting those values as long as our
-        // iterator provides values.
-        let mut points: [PointKey; POLYGON_CLIP_VERTEX_MAX] = [PointKey { x: 0.0, y: 0.0}; POLYGON_CLIP_VERTEX_MAX];
+// `SideOffsetsKey`, `SizeKey`, `PointKey` and `VectorKey` now live in
+// `webrender_api` so builder-side interning keys can reference them. Re-exported
+// here to keep existing references working.
+pub use api::key_types::{PointKey, SizeKey, VectorKey};
 
-        let mut point_count: u8 = 0;
-        for (src, dest) in points_layout.iter().zip(points.iter_mut()) {
-            *dest = (*src as LayoutPoint).into();
-            point_count = point_count + 1;
-        }
-
-        PolygonKey {
-            point_count,
-            points,
-            fill_rule,
-        }
-    }
-}
-
-impl Eq for PolygonKey {}
-
-/// A hashable SideOffset2D that can be used in primitive keys.
-#[cfg_attr(feature = "capture", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
-#[derive(Debug, Clone, MallocSizeOf, PartialEq)]
-pub struct SideOffsetsKey {
-    pub top: f32,
-    pub right: f32,
-    pub bottom: f32,
-    pub left: f32,
-}
-
-impl Eq for SideOffsetsKey {}
-
-impl hash::Hash for SideOffsetsKey {
-    fn hash<H: hash::Hasher>(&self, state: &mut H) {
-        self.top.to_bits().hash(state);
-        self.right.to_bits().hash(state);
-        self.bottom.to_bits().hash(state);
-        self.left.to_bits().hash(state);
-    }
-}
-
-impl From<SideOffsetsKey> for LayoutSideOffsets {
-    fn from(key: SideOffsetsKey) -> LayoutSideOffsets {
-        LayoutSideOffsets::new(
-            key.top,
-            key.right,
-            key.bottom,
-            key.left,
-        )
-    }
-}
-
-impl<U> From<SideOffsets2D<f32, U>> for SideOffsetsKey {
-    fn from(offsets: SideOffsets2D<f32, U>) -> SideOffsetsKey {
-        SideOffsetsKey {
-            top: offsets.top,
-            right: offsets.right,
-            bottom: offsets.bottom,
-            left: offsets.left,
-        }
-    }
-}
-
-/// A hashable size for using as a key during primitive interning.
-#[cfg_attr(feature = "capture", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
-#[derive(Copy, Debug, Clone, MallocSizeOf, PartialEq)]
-pub struct SizeKey {
-    w: f32,
-    h: f32,
-}
-
-impl Eq for SizeKey {}
-
-impl hash::Hash for SizeKey {
-    fn hash<H: hash::Hasher>(&self, state: &mut H) {
-        self.w.to_bits().hash(state);
-        self.h.to_bits().hash(state);
-    }
-}
-
-impl From<SizeKey> for LayoutSize {
-    fn from(key: SizeKey) -> LayoutSize {
-        LayoutSize::new(key.w, key.h)
-    }
-}
-
-impl<U> From<Size2D<f32, U>> for SizeKey {
-    fn from(size: Size2D<f32, U>) -> SizeKey {
-        SizeKey {
-            w: size.width,
-            h: size.height,
-        }
-    }
-}
-
-/// A hashable vec for using as a key during primitive interning.
-#[cfg_attr(feature = "capture", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
-#[derive(Copy, Debug, Clone, MallocSizeOf, PartialEq)]
-pub struct VectorKey {
-    pub x: f32,
-    pub y: f32,
-}
-
-impl Eq for VectorKey {}
-
-impl hash::Hash for VectorKey {
-    fn hash<H: hash::Hasher>(&self, state: &mut H) {
-        self.x.to_bits().hash(state);
-        self.y.to_bits().hash(state);
-    }
-}
-
-impl From<VectorKey> for LayoutVector2D {
-    fn from(key: VectorKey) -> LayoutVector2D {
-        LayoutVector2D::new(key.x, key.y)
-    }
-}
-
-impl From<VectorKey> for WorldVector2D {
-    fn from(key: VectorKey) -> WorldVector2D {
-        WorldVector2D::new(key.x, key.y)
-    }
-}
-
-impl From<LayoutVector2D> for VectorKey {
-    fn from(vec: LayoutVector2D) -> VectorKey {
-        VectorKey {
-            x: vec.x,
-            y: vec.y,
-        }
-    }
-}
-
-impl From<WorldVector2D> for VectorKey {
-    fn from(vec: WorldVector2D) -> VectorKey {
-        VectorKey {
-            x: vec.x,
-            y: vec.y,
-        }
-    }
-}
-
-/// A hashable point for using as a key during primitive interning.
-#[cfg_attr(feature = "capture", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
-#[derive(Debug, Copy, Clone, MallocSizeOf, PartialEq)]
-pub struct PointKey {
-    pub x: f32,
-    pub y: f32,
-}
-
-impl Eq for PointKey {}
-
-impl hash::Hash for PointKey {
-    fn hash<H: hash::Hasher>(&self, state: &mut H) {
-        self.x.to_bits().hash(state);
-        self.y.to_bits().hash(state);
-    }
-}
-
-impl From<PointKey> for LayoutPoint {
-    fn from(key: PointKey) -> LayoutPoint {
-        LayoutPoint::new(key.x, key.y)
-    }
-}
-
-impl From<LayoutPoint> for PointKey {
-    fn from(p: LayoutPoint) -> PointKey {
-        PointKey {
-            x: p.x,
-            y: p.y,
-        }
-    }
-}
-
-impl From<PicturePoint> for PointKey {
-    fn from(p: PicturePoint) -> PointKey {
-        PointKey {
-            x: p.x,
-            y: p.y,
-        }
-    }
-}
-
-impl From<WorldPoint> for PointKey {
-    fn from(p: WorldPoint) -> PointKey {
-        PointKey {
-            x: p.x,
-            y: p.y,
-        }
-    }
-}
-
-/// A hashable float for using as a key during primitive interning.
-
-#[cfg_attr(feature = "capture", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
-#[derive(Debug, Clone, Eq, MallocSizeOf, PartialEq, Hash)]
-pub struct PrimKeyCommonData {
-    pub flags: PrimitiveFlags,
-    pub aligned_aa_edges: EdgeMask,
-    pub transformed_aa_edges: EdgeMask,
-}
+// `PrimKeyCommonData` now lives in `webrender_api` so interned keys reference
+// only api-resident types. Re-exported here to keep existing references working.
+pub use api::key_types::PrimKeyCommonData;
 
 impl From<&LayoutPrimitiveInfo> for PrimKeyCommonData {
     fn from(info: &LayoutPrimitiveInfo) -> Self {
@@ -441,13 +226,6 @@ pub struct PrimKey<T: MallocSizeOf> {
 #[derive(Debug)]
 pub struct PrimTemplateCommonData {
     pub flags: PrimitiveFlags,
-    pub opacity: PrimitiveOpacity,
-    /// Address of the per-primitive data in the GPU cache.
-    ///
-    /// TODO: This is only valid during the current frame and must
-    /// be overwritten each frame. We should move this out of the
-    /// common data to avoid accidental reuse.
-    pub gpu_buffer_address: GpuBufferAddress,
     pub aligned_aa_edges: EdgeMask,
     pub transformed_aa_edges: EdgeMask,
 }
@@ -456,8 +234,6 @@ impl PrimTemplateCommonData {
     pub fn with_key_common(common: PrimKeyCommonData) -> Self {
         PrimTemplateCommonData {
             flags: common.flags,
-            gpu_buffer_address: GpuBufferAddress::INVALID,
-            opacity: PrimitiveOpacity::translucent(),
             aligned_aa_edges: common.aligned_aa_edges,
             transformed_aa_edges: common.transformed_aa_edges,
         }
@@ -479,16 +255,6 @@ pub struct VisibleMaskImageTile {
     pub tile_offset: TileOffset,
     pub tile_rect: LayoutRect,
     pub task_id: RenderTaskId,
-}
-
-/// Information about how to cache a border segment,
-/// along with the current render task cache entry.
-#[cfg_attr(feature = "capture", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
-#[derive(Debug, MallocSizeOf)]
-pub struct BorderSegmentInfo {
-    pub local_task_size: LayoutSize,
-    pub cache_key: BorderSegmentCacheKey,
 }
 
 /// Represents the visibility state of a segment (wrt clip masks).
@@ -543,181 +309,9 @@ impl BrushSegment {
     }
 }
 
-#[derive(Debug, Clone)]
-#[repr(C)]
-#[cfg_attr(feature = "capture", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
-struct ClipRect {
-    rect: LayoutRect,
-    mode: f32,
-}
-
-#[derive(Debug, Clone)]
-#[repr(C)]
-#[cfg_attr(feature = "capture", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
-struct ClipCorner {
-    rect: LayoutRect,
-    outer_radius_x: f32,
-    outer_radius_y: f32,
-    inner_radius_x: f32,
-    inner_radius_y: f32,
-}
-
-impl ClipCorner {
-    fn uniform(rect: LayoutRect, outer_radius: f32, inner_radius: f32) -> ClipCorner {
-        ClipCorner {
-            rect,
-            outer_radius_x: outer_radius,
-            outer_radius_y: outer_radius,
-            inner_radius_x: inner_radius,
-            inner_radius_y: inner_radius,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-#[repr(C)]
-#[cfg_attr(feature = "capture", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
-pub struct ClipData {
-    rect: ClipRect,
-    top_left: ClipCorner,
-    top_right: ClipCorner,
-    bottom_left: ClipCorner,
-    bottom_right: ClipCorner,
-}
-
-impl ClipData {
-    pub fn rounded_rect(size: LayoutSize, radii: &BorderRadius, mode: ClipMode) -> ClipData {
-        // TODO(gw): For simplicity, keep most of the clip GPU structs the
-        //           same as they were, even though the origin is now always
-        //           zero, since they are in the clip's local space. In future,
-        //           we could reduce the GPU cache size of ClipData.
-        let rect = LayoutRect::from_size(size);
-
-        ClipData {
-            rect: ClipRect {
-                rect,
-                mode: mode as u32 as f32,
-            },
-            top_left: ClipCorner {
-                rect: LayoutRect::from_origin_and_size(
-                    LayoutPoint::new(rect.min.x, rect.min.y),
-                    LayoutSize::new(radii.top_left.width, radii.top_left.height),
-                ),
-                outer_radius_x: radii.top_left.width,
-                outer_radius_y: radii.top_left.height,
-                inner_radius_x: 0.0,
-                inner_radius_y: 0.0,
-            },
-            top_right: ClipCorner {
-                rect: LayoutRect::from_origin_and_size(
-                    LayoutPoint::new(
-                        rect.max.x - radii.top_right.width,
-                        rect.min.y,
-                    ),
-                    LayoutSize::new(radii.top_right.width, radii.top_right.height),
-                ),
-                outer_radius_x: radii.top_right.width,
-                outer_radius_y: radii.top_right.height,
-                inner_radius_x: 0.0,
-                inner_radius_y: 0.0,
-            },
-            bottom_left: ClipCorner {
-                rect: LayoutRect::from_origin_and_size(
-                    LayoutPoint::new(
-                        rect.min.x,
-                        rect.max.y - radii.bottom_left.height,
-                    ),
-                    LayoutSize::new(radii.bottom_left.width, radii.bottom_left.height),
-                ),
-                outer_radius_x: radii.bottom_left.width,
-                outer_radius_y: radii.bottom_left.height,
-                inner_radius_x: 0.0,
-                inner_radius_y: 0.0,
-            },
-            bottom_right: ClipCorner {
-                rect: LayoutRect::from_origin_and_size(
-                    LayoutPoint::new(
-                        rect.max.x - radii.bottom_right.width,
-                        rect.max.y - radii.bottom_right.height,
-                    ),
-                    LayoutSize::new(radii.bottom_right.width, radii.bottom_right.height),
-                ),
-                outer_radius_x: radii.bottom_right.width,
-                outer_radius_y: radii.bottom_right.height,
-                inner_radius_x: 0.0,
-                inner_radius_y: 0.0,
-            },
-        }
-    }
-
-    pub fn uniform(size: LayoutSize, radius: f32, mode: ClipMode) -> ClipData {
-        // TODO(gw): For simplicity, keep most of the clip GPU structs the
-        //           same as they were, even though the origin is now always
-        //           zero, since they are in the clip's local space. In future,
-        //           we could reduce the GPU cache size of ClipData.
-        let rect = LayoutRect::from_size(size);
-
-        ClipData {
-            rect: ClipRect {
-                rect,
-                mode: mode as u32 as f32,
-            },
-            top_left: ClipCorner::uniform(
-                LayoutRect::from_origin_and_size(
-                    LayoutPoint::new(rect.min.x, rect.min.y),
-                    LayoutSize::new(radius, radius),
-                ),
-                radius,
-                0.0,
-            ),
-            top_right: ClipCorner::uniform(
-                LayoutRect::from_origin_and_size(
-                    LayoutPoint::new(rect.max.x - radius, rect.min.y),
-                    LayoutSize::new(radius, radius),
-                ),
-                radius,
-                0.0,
-            ),
-            bottom_left: ClipCorner::uniform(
-                LayoutRect::from_origin_and_size(
-                    LayoutPoint::new(rect.min.x, rect.max.y - radius),
-                    LayoutSize::new(radius, radius),
-                ),
-                radius,
-                0.0,
-            ),
-            bottom_right: ClipCorner::uniform(
-                LayoutRect::from_origin_and_size(
-                    LayoutPoint::new(
-                        rect.max.x - radius,
-                        rect.max.y - radius,
-                    ),
-                    LayoutSize::new(radius, radius),
-                ),
-                radius,
-                0.0,
-            ),
-        }
-    }
-}
-
-/// A hashable descriptor for nine-patches, used by image and
-/// gradient borders.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, MallocSizeOf)]
-#[cfg_attr(feature = "capture", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
-pub struct NinePatchDescriptor {
-    pub width: i32,
-    pub height: i32,
-    pub slice: DeviceIntSideOffsets,
-    pub fill: bool,
-    pub repeat_horizontal: RepeatMode,
-    pub repeat_vertical: RepeatMode,
-    pub widths: SideOffsetsKey,
-}
+// `NinePatchDescriptor` now lives in `webrender_api` so builder-side interning
+// keys can reference it. Re-exported here to keep existing references working.
+pub use api::key_types::NinePatchDescriptor;
 
 #[derive(Debug)]
 #[cfg_attr(feature = "capture", derive(Serialize))]
@@ -836,6 +430,26 @@ impl PrimitiveInstance {
         }
     }
 
+    /// How this prim's rect should be rounded to the device pixel grid.
+    ///
+    /// `snaps` is the prim's snap policy, taken from its clip leaf: `false` for
+    /// a device-space prim (text) that stays at exact sub-pixel positions and
+    /// only needs a conservative, grid-aligned footprint. A decoration line
+    /// snaps its thickness specially so it can't vanish or double with scale
+    /// (bug 1783779); everything else snaps to the nearest pixel.
+    pub fn snap_rounding(&self, snaps: bool, data_stores: &DataStores) -> SnapRounding {
+        if !snaps {
+            return SnapRounding::RoundOut;
+        }
+        match self.kind {
+            PrimitiveKind::LineDecoration { data_handle, .. } => SnapRounding::Line {
+                horizontal: data_stores.line_decoration[data_handle].kind.orientation
+                    == LineOrientation::Horizontal,
+            },
+            _ => SnapRounding::Nearest,
+        }
+    }
+
     pub fn uid(&self) -> intern::ItemUid {
         match &self.kind {
             PrimitiveKind::Rectangle { data_handle, .. } => {
@@ -909,17 +523,6 @@ pub struct PrimitiveFrameScratch {
     /// visible primitive.
     pub draws: Vec<PrimitiveDrawHeader>,
 
-    /// Per-frame scratch for LineDecoration primitives.
-    pub line_decoration: storage::Storage<LineDecorationScratch>,
-
-    /// Per-frame scratch for NormalBorder primitives.
-    pub normal_border: storage::Storage<NormalBorderScratch>,
-
-    /// Per-frame scratch for BackdropRender primitives. Captures the
-    /// source sub-graph render task id at prepare time so batch reads
-    /// don't reach into the source Picture's per-frame state.
-    pub backdrop_render: storage::Storage<BackdropRenderScratch>,
-
     /// Per-frame scratch for Picture primitives. Holds the picture's
     /// primary/secondary render task ids and any per-composite-mode
     /// extra GPU buffer addresses. Indexed by `scratch_handle` on
@@ -959,15 +562,6 @@ pub struct PrimitiveFrameScratch {
     /// prims.
     pub segment_instances: SegmentInstanceStorage,
 
-    /// Trailing-array store for per-segment cached render-task ids
-    /// referenced by NormalBorderScratch entries.
-    pub border_task_ids: storage::Storage<RenderTaskId>,
-
-    /// Per-frame BorderSegmentInfo arena. NormalBorder builds its
-    /// edge/corner segment list each frame against the prim's size and
-    /// stores the resulting range on `NormalBorderScratch`.
-    pub border_segments: storage::Storage<BorderSegmentInfo>,
-
     /// Per-frame scratch for ImageBorder primitives. Holds the range
     /// into `segments` for the nine-patch brush segments built each
     /// frame against the prim's size.
@@ -994,9 +588,6 @@ impl Default for PrimitiveFrameScratch {
     fn default() -> Self {
         PrimitiveFrameScratch {
             draws: Vec::new(),
-            line_decoration: storage::Storage::new(0),
-            normal_border: storage::Storage::new(0),
-            backdrop_render: storage::Storage::new(0),
             pictures: storage::Storage::new(0),
             images: storage::Storage::new(0),
             visible_image_tiles: storage::Storage::new(0),
@@ -1004,8 +595,6 @@ impl Default for PrimitiveFrameScratch {
             glyph_keys: GlyphKeyStorage::new(0),
             segments: SegmentStorage::new(0),
             segment_instances: SegmentInstanceStorage::new(0),
-            border_task_ids: storage::Storage::new(0),
-            border_segments: storage::Storage::new(0),
             image_border: storage::Storage::new(0),
             clip_mask_instances: Vec::new(),
             debug_items: Vec::new(),
@@ -1019,9 +608,6 @@ impl Default for PrimitiveFrameScratch {
 impl PrimitiveFrameScratch {
     pub fn recycle(&mut self, recycler: &mut Recycler) {
         recycler.recycle_vec(&mut self.draws);
-        self.line_decoration.recycle(recycler);
-        self.normal_border.recycle(recycler);
-        self.backdrop_render.recycle(recycler);
         self.pictures.recycle(recycler);
         self.images.recycle(recycler);
         self.visible_image_tiles.recycle(recycler);
@@ -1029,8 +615,6 @@ impl PrimitiveFrameScratch {
         self.glyph_keys.recycle(recycler);
         self.segments.recycle(recycler);
         self.segment_instances.recycle(recycler);
-        self.border_task_ids.recycle(recycler);
-        self.border_segments.recycle(recycler);
         self.image_border.recycle(recycler);
         recycler.recycle_vec(&mut self.clip_mask_instances);
         recycler.recycle_vec(&mut self.debug_items);
@@ -1039,9 +623,6 @@ impl PrimitiveFrameScratch {
     }
 
     pub fn begin_frame(&mut self) {
-        self.line_decoration.clear();
-        self.normal_border.clear();
-        self.backdrop_render.clear();
         self.pictures.clear();
         self.images.clear();
         self.visible_image_tiles.clear();
@@ -1049,8 +630,6 @@ impl PrimitiveFrameScratch {
         self.glyph_keys.clear();
         self.segments.clear();
         self.segment_instances.clear();
-        self.border_task_ids.clear();
-        self.border_segments.clear();
         self.image_border.clear();
 
         // Clear the clip mask tasks for the beginning of the frame. Append
@@ -1303,6 +882,12 @@ impl Default for PrimitiveStore {
 /// Trait for primitives that are directly internable.
 /// see SceneBuilder::add_primitive<P>
 pub trait InternablePrimitive: intern::Internable<InternData = ()> + Sized {
+    /// Whether this primitive snaps its geometry and clips to the device pixel
+    /// grid. Overridden to `false` for device-space content (text runs), whose
+    /// clips must stay at their exact sub-pixel position (bug 2050692). Used
+    /// when building the primitive's clip leaf.
+    const SNAP_CLIPS: bool = true;
+
     /// Build a new key from self with `info`.
     fn into_key(
         self,

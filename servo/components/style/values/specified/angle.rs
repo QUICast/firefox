@@ -6,7 +6,7 @@
 
 use crate::derives::*;
 use crate::parser::{Parse, ParserContext};
-use crate::typed_om::{NumericValue, ToTyped, TypedValue, UnitValue};
+use crate::typed_om::{NumericType, NumericValue, ToTyped, TypedValue, UnitValue};
 use crate::values::computed::angle::Angle as ComputedAngle;
 use crate::values::computed::{Context, ToComputedValue};
 use crate::values::specified::calc::{CalcNode, CalcNumeric, Leaf};
@@ -46,10 +46,10 @@ impl AngleUnit {
     #[inline]
     pub fn from_str(unit: &str) -> Result<Self, ()> {
         Ok(match_ignore_ascii_case! { unit,
-            "deg" => AngleUnit::Deg,
-            "grad" => AngleUnit::Grad,
-            "turn" => AngleUnit::Turn,
-            "rad" => AngleUnit::Rad,
+            "deg" => Self::Deg,
+            "grad" => Self::Grad,
+            "turn" => Self::Turn,
+            "rad" => Self::Rad,
              _ => return Err(())
         })
     }
@@ -100,9 +100,11 @@ impl ToCss for NoCalcAngle {
 
 impl ToTyped for NoCalcAngle {
     fn to_typed(&self, dest: &mut ThinVec<TypedValue>) -> Result<(), ()> {
+        let numeric_type = NumericType::angle();
         let value = self.unitless_value();
         let unit = CssString::from(self.unit());
         dest.push(TypedValue::Numeric(NumericValue::Unit(UnitValue {
+            numeric_type,
             value,
             unit,
         })));

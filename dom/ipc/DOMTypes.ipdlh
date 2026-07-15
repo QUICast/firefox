@@ -95,7 +95,6 @@ struct ScreenDetails {
   uint16_t orientationAngle;
   bool isPseudoDisplay;
   bool isHDR;
-  bool isVideoHDR;
 };
 
 struct DimensionInfo
@@ -234,6 +233,7 @@ struct TimedChannelInfo
   TimeStamp redirectEnd;
   nsString initiatorType;
   bool allRedirectsSameOrigin;
+  bool allRedirectsSameOriginIgnoringInternal;
   bool allRedirectsPassTimingAllowCheck;
   bool? timingAllowCheckForPrincipal;
   bool renderBlocking;
@@ -257,7 +257,6 @@ struct ReplacementChannelConfigInit
   TimedChannelInfo? timedChannelInfo;
   nullable RemoteLazyInputStream uploadStream;
   uint64_t uploadStreamLength;
-  bool uploadStreamHasHeaders;
   nsCString? contentType;
   nsCString? contentLength;
 };

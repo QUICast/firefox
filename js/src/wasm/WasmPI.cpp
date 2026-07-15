@@ -227,6 +227,7 @@ class SuspendingFunctionModuleFactory {
 
     MutableModuleMetadata moduleMeta = js_new<ModuleMetadata>();
     if (!moduleMeta || !moduleMeta->init(*compileArgs)) {
+      ReportOutOfMemory(cx);
       return nullptr;
     }
     MutableCodeMetadata codeMeta = moduleMeta->codeMeta;
@@ -282,6 +283,7 @@ class SuspendingFunctionModuleFactory {
     }
     MOZ_ASSERT(codeMeta->types->length() == baseTypeIndex_ + ResultsTypeIndex);
     if (!codeMeta->types->addType(std::move(boxedResultType))) {
+      ReportOutOfMemory(cx);
       return nullptr;
     }
 
@@ -294,6 +296,7 @@ class SuspendingFunctionModuleFactory {
     MOZ_ASSERT(codeMeta->types->length() == baseTypeIndex_ + TagFuncTypeIndex);
     if (!codeMeta->types->addType(
             FuncType(std::move(tagParams), std::move(tagResults)))) {
+      ReportOutOfMemory(cx);
       return nullptr;
     }
 
@@ -301,9 +304,11 @@ class SuspendingFunctionModuleFactory {
     MutableTagType tagType = js_new<TagType>();
     if (!tagType || !tagType->initialize(&(
                         *codeMeta->types)[baseTypeIndex_ + TagFuncTypeIndex])) {
+      ReportOutOfMemory(cx);
       return nullptr;
     }
     if (!codeMeta->tags.emplaceBack(TagKind::Exception, tagType)) {
+      ReportOutOfMemory(cx);
       return nullptr;
     }
 
@@ -317,6 +322,7 @@ class SuspendingFunctionModuleFactory {
     MOZ_ASSERT(codeMeta->funcs.length() == WrappedFnIndex);
     if (!moduleMeta->addDefinedFunc(std::move(wrappedParams),
                                     std::move(wrappedResults))) {
+      ReportOutOfMemory(cx);
       return nullptr;
     }
 
@@ -332,16 +338,19 @@ class SuspendingFunctionModuleFactory {
     if (!moduleMeta->addDefinedFuncWithType(funcTypeIndex,
                                             /*declareForRef = */ true,
                                             mozilla::Some(CacheableName()))) {
+      ReportOutOfMemory(cx);
       return nullptr;
     }
 
     if (!moduleMeta->prepareForCompile(compilerEnv.mode())) {
+      ReportOutOfMemory(cx);
       return nullptr;
     }
 
     ModuleGenerator mg(*codeMeta, compilerEnv, compilerEnv.initialState(),
                        nullptr, nullptr, nullptr);
     if (!mg.initializeCompleteTier()) {
+      ReportOutOfMemory(cx);
       return nullptr;
     }
 
@@ -358,15 +367,23 @@ class SuspendingFunctionModuleFactory {
     if (!mg.compileFuncDef(ExportedFnIndex, funcBytecodeOffset,
                            bytecode.begin(),
                            bytecode.begin() + bytecode.length())) {
+      ReportOutOfMemory(cx);
       return nullptr;
     }
 
     if (!mg.finishFuncDefs()) {
+      ReportOutOfMemory(cx);
       return nullptr;
     }
 
-    return mg.finishModule(BytecodeBufferOrSource(), *moduleMeta,
-                           /*maybeCompleteTier2Listener=*/nullptr);
+    SharedModule module =
+        mg.finishModule(BytecodeBufferOrSource(), *moduleMeta,
+                        /*maybeCompleteTier2Listener=*/nullptr);
+    if (!module) {
+      ReportOutOfMemory(cx);
+      return nullptr;
+    }
+    return module;
   }
 };
 
@@ -456,15 +473,14 @@ class PromisingFunctionModuleFactory {
   enum TypeIdx {
     ParamsTypeIndex = 0,
     ResultsTypeIndex = 1,
-    // Type 2: wrapped fn func type (added by addDefinedFunc for WrappedFn)
-    // Type 3: exported fn func type (added by addDefinedFunc for Exported)
-    TrampolineFuncTypeIndex = 4,
-    // Type 5: trampoline fn func type (added by addDefinedFunc, same as 4)
-    ContTypeIndex = 6,
-    TagFuncTypeIndex = 7,
-    SuspendBlockTypeIndex = 8,
-    // Type 9: reaction fn func type (added by addDefinedFunc for Reaction)
-    Count = 10,
+    // Type 2: exported fn func type (added by addDefinedFunc for Exported)
+    TrampolineFuncTypeIndex = 3,
+    // Type 4: trampoline fn func type (added by addDefinedFunc, same as 3)
+    ContTypeIndex = 5,
+    TagFuncTypeIndex = 6,
+    SuspendBlockTypeIndex = 7,
+    // Type 8: reaction fn func type (added by addDefinedFunc for Reaction)
+    Count = 9,
   };
 
   enum TagIdx {
@@ -864,10 +880,11 @@ class PromisingFunctionModuleFactory {
   }
 
  public:
-  SharedModule build(JSContext* cx, HandleFunction fn, ValTypeVector&& params,
-                     ValTypeVector&& results) {
+  SharedModule build(JSContext* cx, HandleFunction fn) {
     const FuncType& fnType = fn->wasmTypeDef()->funcType();
-    size_t paramsSize = params.length();
+    size_t paramsSize = fnType.args().length();
+    uint32_t funcTypeIndex =
+        fn->wasmInstance().codeMeta().funcs[fn->wasmFuncIndex()].typeIndex;
 
     FeatureOptions options;
     // Builtin modules can use special opcodes and get stack switching enabled.
@@ -881,6 +898,7 @@ class PromisingFunctionModuleFactory {
 
     MutableModuleMetadata moduleMeta = js_new<ModuleMetadata>();
     if (!moduleMeta || !moduleMeta->init(*compileArgs)) {
+      ReportOutOfMemory(cx);
       return nullptr;
     }
     MutableCodeMetadata codeMeta = moduleMeta->codeMeta;
@@ -909,79 +927,86 @@ class PromisingFunctionModuleFactory {
 
     // Type baseTypeIndex_ + 0: $params struct
     StructType boxedParamsStruct;
-    if (!StructType::createImmutable(params, &boxedParamsStruct)) {
+    if (!StructType::createImmutable(fnType.args(), &boxedParamsStruct)) {
       ReportOutOfMemory(cx);
       return nullptr;
     }
     MOZ_ASSERT(codeMeta->types->length() == baseTypeIndex_ + ParamsTypeIndex);
     if (!codeMeta->types->addType(std::move(boxedParamsStruct))) {
-      return nullptr;
-    }
-
-    ValTypeVector paramsForWrapper, resultsForWrapper;
-    if (!paramsForWrapper.append(fnType.args().begin(), fnType.args().end()) ||
-        !resultsForWrapper.append(fnType.results().begin(),
-                                  fnType.results().end())) {
       ReportOutOfMemory(cx);
       return nullptr;
     }
 
     // Type baseTypeIndex_ + 1: $results struct
     StructType boxedResultType;
-    if (!StructType::createImmutable(resultsForWrapper, &boxedResultType)) {
+    if (!StructType::createImmutable(fnType.results(), &boxedResultType)) {
       ReportOutOfMemory(cx);
       return nullptr;
     }
     MOZ_ASSERT(codeMeta->types->length() == baseTypeIndex_ + ResultsTypeIndex);
     if (!codeMeta->types->addType(std::move(boxedResultType))) {
+      ReportOutOfMemory(cx);
       return nullptr;
     }
 
     // Func 0 (imported): $promising.wrappedfn
-    // addDefinedFunc creates Type baseTypeIndex_ + 2: wrapped fn func type
+    // Use the wrapped function's actual type index from the cloned type context
+    // so that there is no type mismatch during instantiation.
+    MOZ_ASSERT(funcTypeIndex < baseTypeIndex_);
+    MOZ_ASSERT((*codeMeta->types)[funcTypeIndex].isFuncType());
     MOZ_ASSERT(codeMeta->funcs.length() == WrappedFnIndex);
-    if (!moduleMeta->addDefinedFunc(std::move(paramsForWrapper),
-                                    std::move(resultsForWrapper))) {
+    if (!moduleMeta->addDefinedFuncWithType(funcTypeIndex)) {
+      ReportOutOfMemory(cx);
       return nullptr;
     }
 
     codeMeta->numFuncImports = codeMeta->funcs.length();
 
     // Func 1 (exported): $promising.exported
-    // addDefinedFunc creates Type baseTypeIndex_ + 3: exported fn func type
+    // addDefinedFunc creates Type baseTypeIndex_ + 2: exported fn func type
+    ValTypeVector exportedParams, exportedResults;
+    if (!exportedParams.append(fnType.args().begin(), fnType.args().end()) ||
+        !exportedResults.emplaceBack(RefType::extern_())) {
+      ReportOutOfMemory(cx);
+      return nullptr;
+    }
     MOZ_ASSERT(codeMeta->funcs.length() == ExportedFnIndex);
-    if (!moduleMeta->addDefinedFunc(std::move(params), std::move(results),
-                                    /* declareForRef = */ true,
-                                    mozilla::Some(CacheableName()))) {
+    if (!moduleMeta->addDefinedFunc(
+            std::move(exportedParams), std::move(exportedResults),
+            /* declareForRef = */ true, mozilla::Some(CacheableName()))) {
+      ReportOutOfMemory(cx);
       return nullptr;
     }
 
-    // Type baseTypeIndex_ + 4: trampoline func type () -> ()
+    // Type baseTypeIndex_ + 3: trampoline func type () -> ()
     // This is the func type the cont type will reference.
     MOZ_ASSERT(codeMeta->types->length() ==
                baseTypeIndex_ + TrampolineFuncTypeIndex);
     if (!codeMeta->types->addType(FuncType(ValTypeVector(), ValTypeVector()))) {
+      ReportOutOfMemory(cx);
       return nullptr;
     }
 
     // Func 2: $promising.trampoline () -> ()
-    // addDefinedFunc creates Type baseTypeIndex_ + 5: trampoline func type
+    // addDefinedFunc creates Type baseTypeIndex_ + 4: trampoline func type
     ValTypeVector trampolineParams, trampolineResults;
     MOZ_ASSERT(codeMeta->funcs.length() == TrampolineFnIndex);
     if (!moduleMeta->addDefinedFunc(std::move(trampolineParams),
                                     std::move(trampolineResults),
                                     /* declareForRef = */ true)) {
+      ReportOutOfMemory(cx);
       return nullptr;
     }
 
-    // Type baseTypeIndex_ + 6: $cont = cont(TrampolineFuncTypeIndex)
+    // Type baseTypeIndex_ + 5: $cont = cont(TrampolineFuncTypeIndex)
     MOZ_ASSERT(codeMeta->types->length() == baseTypeIndex_ + ContTypeIndex);
     if (!codeMeta->types->addType(ContType(&codeMeta->types->type(
             baseTypeIndex_ + TrampolineFuncTypeIndex)))) {
+      ReportOutOfMemory(cx);
       return nullptr;
     }
 
-    // Type baseTypeIndex_ + 7: tag func type (param externref)
+    // Type baseTypeIndex_ + 6: tag func type (param externref)
     ValTypeVector tagParams, tagResults;
     if (!tagParams.emplaceBack(RefType::extern_())) {
       ReportOutOfMemory(cx);
@@ -990,10 +1015,11 @@ class PromisingFunctionModuleFactory {
     MOZ_ASSERT(codeMeta->types->length() == baseTypeIndex_ + TagFuncTypeIndex);
     if (!codeMeta->types->addType(
             FuncType(std::move(tagParams), std::move(tagResults)))) {
+      ReportOutOfMemory(cx);
       return nullptr;
     }
 
-    // Type baseTypeIndex_ + 8: suspend block type () -> (externref, (ref
+    // Type baseTypeIndex_ + 7: suspend block type () -> (externref, (ref
     // $cont))
     ValTypeVector suspendBlockParams, suspendBlockResults;
     if (!suspendBlockResults.emplaceBack(RefType::extern_()) ||
@@ -1006,11 +1032,12 @@ class PromisingFunctionModuleFactory {
                baseTypeIndex_ + SuspendBlockTypeIndex);
     if (!codeMeta->types->addType(FuncType(std::move(suspendBlockParams),
                                            std::move(suspendBlockResults)))) {
+      ReportOutOfMemory(cx);
       return nullptr;
     }
 
     // Func 3: $promising.reaction
-    // addDefinedFunc creates Type baseTypeIndex_ + 9: reaction func type
+    // addDefinedFunc creates Type baseTypeIndex_ + 8: reaction func type
     ValTypeVector reactionParams, reactionResults;
     if (!reactionParams.emplaceBack(RefType::fromTypeDef(
             &codeMeta->types->type(baseTypeIndex_ + ContTypeIndex), true)) ||
@@ -1022,6 +1049,7 @@ class PromisingFunctionModuleFactory {
     if (!moduleMeta->addDefinedFunc(std::move(reactionParams),
                                     std::move(reactionResults),
                                     /* declareForRef = */ true)) {
+      ReportOutOfMemory(cx);
       return nullptr;
     }
 
@@ -1029,9 +1057,11 @@ class PromisingFunctionModuleFactory {
     MutableTagType tagType = js_new<TagType>();
     if (!tagType || !tagType->initialize(&(
                         *codeMeta->types)[baseTypeIndex_ + TagFuncTypeIndex])) {
+      ReportOutOfMemory(cx);
       return nullptr;
     }
     if (!codeMeta->tags.emplaceBack(TagKind::Exception, tagType)) {
+      ReportOutOfMemory(cx);
       return nullptr;
     }
 
@@ -1039,6 +1069,7 @@ class PromisingFunctionModuleFactory {
     if (!codeMeta->globals.append(
             GlobalDesc(InitExpr(LitVal(ValType(RefType::extern_()))),
                        /* isMutable = */ true))) {
+      ReportOutOfMemory(cx);
       return nullptr;
     }
 
@@ -1048,16 +1079,19 @@ class PromisingFunctionModuleFactory {
                 &codeMeta->types->type(baseTypeIndex_ + ParamsTypeIndex),
                 true)))),
             /* isMutable = */ true))) {
+      ReportOutOfMemory(cx);
       return nullptr;
     }
 
     if (!moduleMeta->prepareForCompile(compilerEnv.mode())) {
+      ReportOutOfMemory(cx);
       return nullptr;
     }
 
     ModuleGenerator mg(*codeMeta, compilerEnv, compilerEnv.initialState(),
                        nullptr, nullptr, nullptr);
     if (!mg.initializeCompleteTier()) {
+      ReportOutOfMemory(cx);
       return nullptr;
     }
 
@@ -1071,6 +1105,7 @@ class PromisingFunctionModuleFactory {
     if (!mg.compileFuncDef(ExportedFnIndex, funcBytecodeOffset,
                            bytecode.begin(),
                            bytecode.begin() + bytecode.length())) {
+      ReportOutOfMemory(cx);
       return nullptr;
     }
     funcBytecodeOffset += bytecode.length();
@@ -1083,6 +1118,7 @@ class PromisingFunctionModuleFactory {
     if (!mg.compileFuncDef(TrampolineFnIndex, funcBytecodeOffset,
                            bytecode2.begin(),
                            bytecode2.begin() + bytecode2.length())) {
+      ReportOutOfMemory(cx);
       return nullptr;
     }
     funcBytecodeOffset += bytecode2.length();
@@ -1095,15 +1131,21 @@ class PromisingFunctionModuleFactory {
     if (!mg.compileFuncDef(ReactionFnIndex, funcBytecodeOffset,
                            bytecode3.begin(),
                            bytecode3.begin() + bytecode3.length())) {
+      ReportOutOfMemory(cx);
       return nullptr;
     }
 
     if (!mg.finishFuncDefs()) {
+      ReportOutOfMemory(cx);
       return nullptr;
     }
 
     SharedModule m = mg.finishModule(BytecodeBufferOrSource(), *moduleMeta,
                                      /*maybeCompleteTier2Listener=*/nullptr);
+    if (!m) {
+      ReportOutOfMemory(cx);
+      return nullptr;
+    }
     return m;
   }
 };
@@ -1139,24 +1181,9 @@ static bool WasmPromisingFunction(JSContext* cx, unsigned argc, Value* vp) {
 JSFunction* WasmPromisingFunctionCreate(JSContext* cx, HandleObject func) {
   RootedFunction wrappedWasmFunc(cx, &func->as<JSFunction>());
   MOZ_ASSERT(wrappedWasmFunc->isWasm());
-  const FuncType& wrappedWasmFuncType =
-      wrappedWasmFunc->wasmTypeDef()->funcType();
-
-  ValTypeVector results;
-  if (!results.append(RefType::extern_())) {
-    ReportOutOfMemory(cx);
-    return nullptr;
-  }
-  ValTypeVector params;
-  if (!params.append(wrappedWasmFuncType.args().begin(),
-                     wrappedWasmFuncType.args().end())) {
-    ReportOutOfMemory(cx);
-    return nullptr;
-  }
 
   PromisingFunctionModuleFactory moduleFactory;
-  SharedModule module = moduleFactory.build(
-      cx, wrappedWasmFunc, std::move(params), std::move(results));
+  SharedModule module = moduleFactory.build(cx, wrappedWasmFunc);
   if (!module) {
     return nullptr;
   }
@@ -1256,15 +1283,24 @@ void* GetPromiseResults(Instance* instance, void* promiseRef,
   JSContext* cx = instance->cx();
 
   JSObject* promiseObj = &AnyRef::fromCompiledCode(promiseRef).toJSObject();
-  if (IsWrapper(promiseObj)) {
-    promiseObj = UncheckedUnwrap(promiseObj);
-    if (JS_IsDeadWrapper(promiseObj)) {
-      JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
-                                JSMSG_DEAD_OBJECT);
-      return nullptr;
-    }
+  Rooted<PromiseObject*> promise(
+      cx, UnwrapAndDowncastObject<PromiseObject>(cx, promiseObj));
+  if (!promise) {
+    return nullptr;
   }
-  Rooted<PromiseObject*> promise(cx, &promiseObj->as<PromiseObject>());
+
+  // The reaction that resumes the suspended continuation is registered on this
+  // promise and is only meant to run once the promise settles. A debugger can
+  // extract that reaction (Debugger.Object.prototype.getPromiseReactions) and
+  // invoke it (Debugger.Object.prototype.call) while the promise is still
+  // pending, resuming the continuation early. Fail cleanly here instead of
+  // reading the result slot of a pending promise.
+  if (promise->state() == JS::PromiseState::Pending) {
+    JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
+                              JSMSG_JSPI_INVALID_STATE);
+    return nullptr;
+  }
+
   bool promiseRejected = promise->state() == JS::PromiseState::Rejected;
   RootedValue promiseReasonOrValue(cx, promise->valueOrReason());
   if (!cx->compartment()->wrap(cx, &promiseReasonOrValue)) {
@@ -1345,12 +1381,10 @@ int32_t AddPromiseReactions(Instance* instance, void* promiseRef, void* contRef,
   JSContext* cx = instance->cx();
   RootedObject promiseObject(
       cx, &AnyRef::fromCompiledCode(promiseRef).toJSObject());
-  if (IsWrapper(promiseObject)) {
-    if (JS_IsDeadWrapper(UncheckedUnwrap(promiseObject))) {
-      JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
-                                JSMSG_DEAD_OBJECT);
-      return -1;
-    }
+  if (IsProxy(promiseObject) &&
+      JS_IsDeadWrapper(UncheckedUnwrap(promiseObject))) {
+    JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_DEAD_OBJECT);
+    return -1;
   }
   Rooted<ContObject*> contObject(
       cx, &AnyRef::fromCompiledCode(contRef).toJSObject().as<ContObject>());

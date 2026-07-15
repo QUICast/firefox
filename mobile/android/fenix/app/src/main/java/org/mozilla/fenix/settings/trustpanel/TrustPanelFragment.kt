@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.CornerSize
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -38,6 +39,7 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat.Type.systemBars
 import androidx.fragment.compose.content
 import androidx.lifecycle.coroutineScope
+import androidx.lifecycle.lifecycleScope
 import androidx.navigation.fragment.findNavController
 import androidx.navigation.fragment.navArgs
 import com.google.android.material.bottomsheet.BottomSheetBehavior
@@ -53,6 +55,7 @@ import mozilla.components.browser.state.selector.findTabOrCustomTab
 import mozilla.components.browser.state.state.SessionState
 import mozilla.components.browser.state.store.BrowserStore
 import mozilla.components.feature.ipprotection.store.IPProtectionAction
+import mozilla.components.feature.ipprotection.store.state.isEligible
 import mozilla.components.lib.state.ext.consumeFlow
 import mozilla.components.lib.state.ext.observeAsComposableState
 import mozilla.components.lib.state.helpers.StoreProvider.Companion.fragmentStore
@@ -60,14 +63,18 @@ import mozilla.components.support.base.feature.ViewBoundFeatureWrapper
 import mozilla.components.support.base.log.logger.Logger
 import mozilla.components.support.ktx.kotlinx.coroutines.flow.ifAnyChanged
 import org.mozilla.fenix.BuildConfig
+import org.mozilla.fenix.GleanMetrics.Vpn
 import org.mozilla.fenix.R
+import org.mozilla.fenix.components.Components
 import org.mozilla.fenix.components.components
 import org.mozilla.fenix.components.menu.IPProtectionMenuBinding
 import org.mozilla.fenix.components.menu.compose.MenuDialogBottomSheet
 import org.mozilla.fenix.components.menu.compose.MenuHandleState
+import org.mozilla.fenix.components.menu.store.IPProtectionMenuState
 import org.mozilla.fenix.components.menu.store.IPProtectionMenuStatus
 import org.mozilla.fenix.ext.requireComponents
 import org.mozilla.fenix.ext.runIfFragmentIsAttached
+import org.mozilla.fenix.ipprotection.ui.IPProtectionSnackbarBinding
 import org.mozilla.fenix.settings.PhoneFeature
 import org.mozilla.fenix.settings.trustpanel.middleware.TrustPanelMiddleware
 import org.mozilla.fenix.settings.trustpanel.middleware.TrustPanelNavigationMiddleware
@@ -81,6 +88,7 @@ import org.mozilla.fenix.settings.trustpanel.ui.ClearSiteDataDialog
 import org.mozilla.fenix.settings.trustpanel.ui.ProtectionPanel
 import org.mozilla.fenix.settings.trustpanel.ui.TrackerCategoryDetailsPanel
 import org.mozilla.fenix.settings.trustpanel.ui.TrackersBlockedPanel
+import org.mozilla.fenix.snackbar.FenixSnackbarDelegate
 import org.mozilla.fenix.theme.FirefoxTheme
 import org.mozilla.fenix.trackingprotection.ProtectionsDashboardContent
 import org.mozilla.fenix.trackingprotection.TrackersBlockedFeature
@@ -104,6 +112,8 @@ class TrustPanelFragment : BottomSheetDialogFragment() {
     private val args by navArgs<TrustPanelFragmentArgs>()
     private val trackersBlockedFeature = ViewBoundFeatureWrapper<TrackersBlockedFeature>()
     private val ipProtectionMenuBinding = ViewBoundFeatureWrapper<IPProtectionMenuBinding>()
+    private val ipProtectionSnackbarBinding = ViewBoundFeatureWrapper<IPProtectionSnackbarBinding>()
+    private val snackbarHostState = SnackbarHostState()
     private lateinit var permissionsCallback: ((Map<String, Boolean>) -> Unit)
     private val requestPermissionsLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
@@ -202,6 +212,7 @@ class TrustPanelFragment : BottomSheetDialogFragment() {
                     contentDescription = "",
                     visible = !isShowingProtectionsDashboard,
                 ),
+                snackbarHostState = snackbarHostState,
                 cornerShape = if (isShowingProtectionsDashboard) {
                     MaterialTheme.shapes.extraLarge
                 } else {
@@ -224,8 +235,12 @@ class TrustPanelFragment : BottomSheetDialogFragment() {
                     store.stateFlow.map { state -> state.numberOfTrackersBlocked }
                 }.collectAsState(initial = store.state.numberOfTrackersBlocked)
                 val numberOfTrackersBlockedThisWeek by remember {
-                    appStore.stateFlow.map { state -> state.trackersBlockedThisWeek.sumOf { it.count } }
-                }.collectAsState(initial = appStore.state.trackersBlockedThisWeek.sumOf { it.count })
+                    appStore.stateFlow.map { state ->
+                        state.blockedTrackersState.trackersBlockedThisWeek.sumOf { it.count }
+                    }
+                }.collectAsState(
+                    initial = appStore.state.blockedTrackersState.trackersBlockedThisWeek.sumOf { it.count },
+                )
                 val bucketedTrackers by remember {
                     store.stateFlow.map { state -> state.bucketedTrackers }
                 }.collectAsState(initial = store.state.bucketedTrackers)
@@ -239,7 +254,7 @@ class TrustPanelFragment : BottomSheetDialogFragment() {
                     store.stateFlow.map { state -> state.websitePermissionsState.values }
                 }.collectAsState(initial = listOf())
                 val isGlobalTrackingProtectionEnabled = settings.shouldUseTrackingProtection
-                val showIpProtection = settings.isIPProtectionAvailable
+                val showIpProtection = components.ipProtection.store.state.isEligible
                 val ipProtectionMenuState by remember {
                     store.stateFlow.map { state -> state.ipProtectionMenuState }
                 }.collectAsState(initial = store.state.ipProtectionMenuState)
@@ -346,13 +361,12 @@ class TrustPanelFragment : BottomSheetDialogFragment() {
                                     store.dispatch(TrustPanelAction.Navigate.QWAC)
                                 },
                                 onIPProtectionToggle = {
-                                    if (ipProtectionMenuState.status == IPProtectionMenuStatus.AuthRequired) {
-                                        store.dispatch(TrustPanelAction.Navigate.IPProtectionSettings)
-                                    } else {
-                                        components.ipProtection.store.dispatch(IPProtectionAction.Toggle)
-                                    }
+                                    handleIPProtectionToggleAndRecordTelemetry(ipProtectionMenuState, components)
                                 },
                                 onIPProtectionNavigate = {
+                                    Vpn.settingsPageTapped.record(
+                                        Vpn.SettingsPageTappedExtra(entrypoint = "Trust Panel"),
+                                    )
                                     store.dispatch(TrustPanelAction.Navigate.IPProtectionSettings)
                                 },
                             )
@@ -371,6 +385,7 @@ class TrustPanelFragment : BottomSheetDialogFragment() {
                                     contentState = Route.TrackerCategoryDetailsPanel
                                 },
                                 onTrackersBlockedThisWeekClicked = {
+                                    store.dispatch(TrustPanelAction.Navigate.TrackersProtectionDashboard)
                                     contentState = Route.TrackersProtectionDashboard
                                 },
                                 onBackButtonClick = {
@@ -392,12 +407,14 @@ class TrustPanelFragment : BottomSheetDialogFragment() {
 
                         Route.TrackersProtectionDashboard -> {
                             val appStore = requireComponents.appStore
-                            val trackerBlockedThisWeek by appStore.observeAsComposableState { state ->
-                                state.trackersBlockedThisWeek
+                            val blockedTrackersState by appStore.observeAsComposableState { state ->
+                                state.blockedTrackersState
                             }
 
                             ProtectionsDashboardContent(
-                                trackersBlockedThisWeek = trackerBlockedThisWeek,
+                                totalTrackersBlocked = blockedTrackersState.trackersBlockedCount,
+                                trackersBlockedThisWeek = blockedTrackersState.trackersBlockedThisWeek,
+                                earliestTrackingDate = blockedTrackersState.earliestTrackingDate,
                                 onDismiss = {
                                     contentState = Route.TrackersPanel
                                 },
@@ -416,6 +433,33 @@ class TrustPanelFragment : BottomSheetDialogFragment() {
                     }
                 }
             }
+        }
+    }
+
+    private fun handleIPProtectionToggleAndRecordTelemetry(
+        ipProtectionMenuState: IPProtectionMenuState,
+        components: Components,
+    ) {
+        recordIPProtectionTelemetry(ipProtectionMenuState.status)
+
+        when (ipProtectionMenuState.status) {
+            IPProtectionMenuStatus.AuthRequired ->
+                store.dispatch(TrustPanelAction.Navigate.IPProtectionSettings)
+
+            else -> components.ipProtection.store.dispatch(IPProtectionAction.Toggle)
+        }
+    }
+
+    private fun recordIPProtectionTelemetry(status: IPProtectionMenuStatus) {
+        when (status) {
+            IPProtectionMenuStatus.Disabled -> Vpn.trustPanelTurnedOn.record()
+            IPProtectionMenuStatus.Enabled -> Vpn.trustPanelTurnedOff.record()
+            IPProtectionMenuStatus.AuthRequired -> Vpn.trustPanelTryItTapped.record()
+
+            IPProtectionMenuStatus.DataLimitReached,
+            IPProtectionMenuStatus.ConnectionError,
+            IPProtectionMenuStatus.Activating,
+                -> Unit
         }
     }
 
@@ -443,6 +487,19 @@ class TrustPanelFragment : BottomSheetDialogFragment() {
                 },
             ),
             owner = this@TrustPanelFragment,
+            view = view,
+        )
+
+        ipProtectionSnackbarBinding.set(
+            feature = IPProtectionSnackbarBinding(
+                appStore = requireComponents.appStore,
+                snackbarDelegate = FenixSnackbarDelegate(
+                    snackbarHostState = snackbarHostState,
+                    scope = viewLifecycleOwner.lifecycleScope,
+                    context = requireContext(),
+                ),
+            ),
+            owner = this,
             view = view,
         )
     }

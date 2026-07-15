@@ -2,25 +2,24 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "base/basictypes.h"
-
 #include "nsAboutProtocolHandler.h"
-#include "nsIURI.h"
-#include "nsIAboutModule.h"
-#include "nsContentUtils.h"
-#include "nsString.h"
-#include "nsNetCID.h"
+
+#include "base/basictypes.h"
+#include "mozilla/ipc/URIUtils.h"
 #include "nsAboutProtocolUtils.h"
+#include "nsContentUtils.h"
 #include "nsError.h"
-#include "nsNetUtil.h"
+#include "nsIAboutModule.h"
+#include "nsIChannel.h"
+#include "nsIClassInfoImpl.h"
 #include "nsIObjectInputStream.h"
 #include "nsIObjectOutputStream.h"
-#include "nsIWritablePropertyBag2.h"
-#include "nsIChannel.h"
 #include "nsIScriptError.h"
-#include "nsIClassInfoImpl.h"
-
-#include "mozilla/ipc/URIUtils.h"
+#include "nsIURI.h"
+#include "nsIWritablePropertyBag2.h"
+#include "nsNetCID.h"
+#include "nsNetUtil.h"
+#include "nsString.h"
 
 namespace mozilla {
 namespace net {

@@ -5,10 +5,10 @@
 #ifndef GFX_GPU_VIDEO_IMAGE_H
 #define GFX_GPU_VIDEO_IMAGE_H
 
-#include "mozilla/RefPtr.h"
 #include "ImageContainer.h"
-#include "mozilla/layers/GPUVideoTextureClient.h"
+#include "mozilla/RefPtr.h"
 #include "mozilla/layers/CompositableClient.h"
+#include "mozilla/layers/GPUVideoTextureClient.h"
 #include "mozilla/layers/ImageBridgeChild.h"
 
 namespace mozilla {

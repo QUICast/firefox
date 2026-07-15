@@ -18,7 +18,6 @@ import org.junit.runner.RunWith
 import org.mozilla.fenix.GleanMetrics.AppMenu
 import org.mozilla.fenix.GleanMetrics.Events
 import org.mozilla.fenix.GleanMetrics.HomeMenu
-import org.mozilla.fenix.GleanMetrics.Menu
 import org.mozilla.fenix.GleanMetrics.ReaderMode
 import org.mozilla.fenix.GleanMetrics.Translations
 import org.mozilla.fenix.components.menu.middleware.MenuTelemetryMiddleware
@@ -302,6 +301,16 @@ class MenuTelemetryMiddlewareTest {
     }
 
     @Test
+    fun `WHEN navigating to the wallpaper settings THEN record the change wallpaper browser menu telemetry`() {
+        val store = createStore()
+        assertNull(Events.browserMenuAction.testGetValue())
+
+        store.dispatch(MenuAction.Navigate.Wallpaper)
+
+        assertTelemetryRecorded(Events.browserMenuAction, item = "change_wallpaper")
+    }
+
+    @Test
     fun `GIVEN the menu accesspoint is from the home screen WHEN navigating to the settings THEN record the home menu interaction telemetry`() {
         val store = createStore(accessPoint = MenuAccessPoint.Home)
         assertNull(Events.browserMenuAction.testGetValue())
@@ -475,26 +484,6 @@ class MenuTelemetryMiddlewareTest {
         store.dispatch(MenuAction.Navigate.InstalledAddonDetails(Addon("")))
 
         assertTelemetryRecorded(Events.browserMenuAction, item = "installed_addon_details")
-    }
-
-    @Test
-    fun `WHEN CFR is shown THEN record the CFR is shown menu telemetry`() {
-        val store = createStore()
-        assertNull(Menu.showCfr.testGetValue())
-
-        store.dispatch(MenuAction.OnCFRShown)
-
-        assertTelemetryRecorded(Menu.showCfr)
-    }
-
-    @Test
-    fun `WHEN CFR is dismissed THEN record the CFR is dismissed menu telemetry`() {
-        val store = createStore()
-        assertNull(Menu.dismissCfr.testGetValue())
-
-        store.dispatch(MenuAction.OnCFRDismiss)
-
-        assertTelemetryRecorded(Menu.dismissCfr)
     }
 
     @Test

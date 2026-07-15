@@ -687,6 +687,8 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
 
   void UpdateSharedWorkersLanguageOverride(const nsCString& aLanguageOverride);
 
+  void UpdateSharedWorkerTimezoneOverride(const nsAString& aTimezoneOverride);
+
  public:
   void Alert(nsIPrincipal& aSubjectPrincipal, mozilla::ErrorResult& aError);
   void Alert(const nsAString& aMessage, nsIPrincipal& aSubjectPrincipal,
@@ -868,9 +870,11 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
   int32_t GetScrollMinY(mozilla::ErrorResult& aError);
   int32_t GetScrollMaxX(mozilla::ErrorResult& aError);
   int32_t GetScrollMaxY(mozilla::ErrorResult& aError);
-  bool GetFullScreen(mozilla::ErrorResult& aError);
+  bool GetFullScreen(mozilla::dom::CallerType aCallerType,
+                     mozilla::ErrorResult& aError);
   bool GetFullScreen() override;
-  void SetFullScreen(bool aFullscreen, mozilla::ErrorResult& aError);
+  void SetFullScreen(bool aFullscreen, mozilla::dom::CallerType aCallerType,
+                     mozilla::ErrorResult& aError);
   bool Find(const nsAString& aString, bool aCaseSensitive, bool aBackwards,
             bool aWrapAround, bool aWholeWord, bool aSearchInFrames,
             bool aShowDialog, mozilla::ErrorResult& aError);
@@ -1068,17 +1072,16 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
   // Helper to convert a void returning child method into an implicit
   // CallState::Continue value.
   template <typename Return, typename Method, typename... Args>
-  typename std::enable_if<std::is_void<Return>::value, mozilla::CallState>::type
-  CallDescendant(nsGlobalWindowInner* aWindow, Method aMethod,
-                 Args&&... aArgs) {
+  std::enable_if_t<std::is_void_v<Return>, mozilla::CallState> CallDescendant(
+      nsGlobalWindowInner* aWindow, Method aMethod, Args&&... aArgs) {
     (aWindow->*aMethod)(aArgs...);
     return mozilla::CallState::Continue;
   }
 
   // Helper that passes through the CallState value from a child method.
   template <typename Return, typename Method, typename... Args>
-  typename std::enable_if<std::is_same<Return, mozilla::CallState>::value,
-                          mozilla::CallState>::type
+  std::enable_if_t<std::is_same_v<Return, mozilla::CallState>,
+                   mozilla::CallState>
   CallDescendant(nsGlobalWindowInner* aWindow, Method aMethod,
                  Args&&... aArgs) {
     return (aWindow->*aMethod)(aArgs...);
@@ -1540,41 +1543,6 @@ inline nsISupports* ToSupports(nsGlobalWindowInner* p) {
 
 inline nsISupports* ToCanonicalSupports(nsGlobalWindowInner* p) {
   return static_cast<mozilla::dom::EventTarget*>(p);
-}
-
-// XXX: EWW - This is an awful hack - let's not do this
-#include "nsGlobalWindowOuter.h"
-
-inline nsIGlobalObject* nsGlobalWindowInner::GetRelevantGlobal() const {
-  return const_cast<nsGlobalWindowInner*>(this);
-}
-
-inline nsGlobalWindowOuter* nsGlobalWindowInner::GetInProcessTopInternal() {
-  nsGlobalWindowOuter* outer = GetOuterWindowInternal();
-  nsCOMPtr<nsPIDOMWindowOuter> top = outer ? outer->GetInProcessTop() : nullptr;
-  if (top) {
-    return nsGlobalWindowOuter::Cast(top);
-  }
-  return nullptr;
-}
-
-inline nsGlobalWindowOuter*
-nsGlobalWindowInner::GetInProcessScriptableTopInternal() {
-  nsPIDOMWindowOuter* top = GetInProcessScriptableTop();
-  return nsGlobalWindowOuter::Cast(top);
-}
-
-inline nsIScriptContext* nsGlobalWindowInner::GetContextInternal() {
-  if (mOuterWindow) {
-    return GetOuterWindowInternal()->mContext;
-  }
-
-  return nullptr;
-}
-
-inline nsGlobalWindowOuter* nsGlobalWindowInner::GetOuterWindowInternal()
-    const {
-  return nsGlobalWindowOuter::Cast(GetOuterWindow());
 }
 
 #endif /* nsGlobalWindowInner_h_ */

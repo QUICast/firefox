@@ -4,23 +4,22 @@
 
 #include "DrawTargetCairo.h"
 
-#include "SourceSurfaceCairo.h"
-#include "PathCairo.h"
-#include "HelpersCairo.h"
-#include "BorrowedContext.h"
-#include "FilterNodeSoftware.h"
-#include "mozilla/Vector.h"
-#include "mozilla/StaticPrefs_gfx.h"
-#include "mozilla/StaticPrefs_print.h"
-#include "nsPrintfCString.h"
-
-#include "cairo.h"
-#include "cairo-tee.h"
 #include <string.h>
 
 #include "Blur.h"
+#include "BorrowedContext.h"
+#include "FilterNodeSoftware.h"
+#include "HelpersCairo.h"
 #include "Logging.h"
+#include "PathCairo.h"
+#include "SourceSurfaceCairo.h"
 #include "Tools.h"
+#include "cairo-tee.h"
+#include "cairo.h"
+#include "mozilla/StaticPrefs_gfx.h"
+#include "mozilla/StaticPrefs_print.h"
+#include "mozilla/Vector.h"
+#include "nsPrintfCString.h"
 
 #ifdef CAIRO_HAS_QUARTZ_SURFACE
 #  include "cairo-quartz.h"
@@ -1876,8 +1875,7 @@ already_AddRefed<SourceSurface> DrawTargetCairo::CreateSourceSurfaceFromData(
     return nullptr;
   }
 
-  RefPtr<SourceSurfaceCairo> source_surf =
-      new SourceSurfaceCairo(surf, aSize, aFormat);
+  RefPtr source_surf = MakeRefPtr<SourceSurfaceCairo>(surf, aSize, aFormat);
   cairo_surface_destroy(surf);
 
   return source_surf.forget();
@@ -1898,7 +1896,7 @@ DrawTargetCairo::CreateSourceSurfaceFromNativeSurface(
 already_AddRefed<DrawTarget> DrawTargetCairo::CreateSimilarDrawTarget(
     const IntSize& aSize, SurfaceFormat aFormat) const {
   if (cairo_surface_status(cairo_get_group_target(mContext))) {
-    RefPtr<DrawTargetCairo> target = new DrawTargetCairo();
+    RefPtr target = MakeRefPtr<DrawTargetCairo>();
     if (target->Init(aSize, aFormat)) {
       return target.forget();
     }
@@ -1930,7 +1928,7 @@ already_AddRefed<DrawTarget> DrawTargetCairo::CreateSimilarDrawTarget(
   }
 
   if (!cairo_surface_status(similar)) {
-    RefPtr<DrawTargetCairo> target = new DrawTargetCairo();
+    RefPtr target = MakeRefPtr<DrawTargetCairo>();
     if (target->InitAlreadyReferenced(similar, aSize)) {
       return target.forget();
     }
@@ -2026,7 +2024,7 @@ already_AddRefed<DrawTarget> DrawTargetCairo::CreateShadowDrawTarget(
   // If we don't have a blur then we can use the RGBA mask and keep all the
   // operations in graphics memory.
   if (aSigma == 0.0f || aFormat == SurfaceFormat::A8) {
-    RefPtr<DrawTargetCairo> target = new DrawTargetCairo();
+    RefPtr target = MakeRefPtr<DrawTargetCairo>();
     if (target->InitAlreadyReferenced(similar, aSize)) {
       return target.forget();
     } else {
@@ -2051,7 +2049,7 @@ already_AddRefed<DrawTarget> DrawTargetCairo::CreateShadowDrawTarget(
   cairo_tee_surface_add(tee, similar);
   cairo_surface_destroy(similar);
 
-  RefPtr<DrawTargetCairo> target = new DrawTargetCairo();
+  RefPtr target = MakeRefPtr<DrawTargetCairo>();
   if (target->InitAlreadyReferenced(tee, aSize)) {
     return target.forget();
   }

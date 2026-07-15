@@ -4,6 +4,9 @@ run-if = [
   "os != 'android'", # Not supported on GV because we can't add/remove from storage.
 ]
 support-files = ["data/**"]
+# The common head copies a fixture key4.db that is incompatible with at-rest
+# encryption's NSS initialization, so disable SQLite at-rest encryption here.
+prefs = ["security.storage.encryption.sqlite.enabled=false"]
 
 ["test_BreachAlertStore.js"]
 
@@ -104,9 +107,6 @@ run-if = [
 ["test_logins_change.js"]
 
 ["test_logins_decrypt_failure.js"]
-prefs = [
-  "signon.rustMirror.enabled=false",
-]
 skip-if = [
   "os == 'android'", # Bug 1171687: Needs fixing on Android
 ]
@@ -118,6 +118,11 @@ skip-if = [
 ["test_maybeImportLogin.js"]
 run-if = [
   "os != 'android'", # Only used by migrator, which isn't on Android
+]
+
+["test_LoginStorageMigrator.js"]
+run-if = [
+  "os != 'android'", # The migrator only runs on desktop
 ]
 
 ["test_module_LoginCSVImport.js"]
@@ -152,6 +157,8 @@ run-if = [
 ["test_shadowHTTPLogins.js"]
 
 ["test_storage.js"]
+
+["test_storage_rust_shutdown.js"]
 
 ["test_telemetry.js"]
 

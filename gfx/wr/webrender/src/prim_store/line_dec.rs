@@ -3,17 +3,15 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 use api::{
-    ColorF, ColorU, RasterSpace,
-    LineOrientation, LineStyle, PremultipliedColorF, Shadow,
+    ColorF,
+    LineOrientation, LineStyle,
 };
 use api::units::*;
 use euclid::Scale;
-use crate::gpu_types::ImageBrushPrimitiveData;
 use crate::render_task::{RenderTask, RenderTaskKind};
 use crate::render_task_cache::{RenderTaskCacheKey, RenderTaskCacheKeyKind, RenderTaskParent};
 use crate::render_task_graph::RenderTaskId;
-use crate::renderer::GpuBufferAddress;
-use crate::scene_building::{CreateShadow, IsVisible};
+use crate::scene_building::{IsVisible};
 use crate::frame_builder::{FrameBuildingContext, FrameBuildingState};
 use crate::intern;
 use crate::internal_types::LayoutPrimitiveInfo;
@@ -28,14 +26,6 @@ use crate::util::clamp_to_scale_factor;
 /// Maximum resolution in device pixels at which line decorations are rasterized.
 pub const MAX_LINE_DECORATION_RESOLUTION: u32 = 4096;
 
-/// Per-frame scratch data for a LineDecoration primitive.
-#[derive(Copy, Clone, Debug)]
-#[cfg_attr(feature = "capture", derive(Serialize))]
-pub struct LineDecorationScratch {
-    pub task_id: RenderTaskId,
-    pub gpu_address: GpuBufferAddress,
-}
-
 #[derive(Clone, Debug, Hash, MallocSizeOf, PartialEq, Eq)]
 #[cfg_attr(feature = "capture", derive(Serialize))]
 #[cfg_attr(feature = "replay", derive(Deserialize))]
@@ -46,20 +36,9 @@ pub struct LineDecorationCacheKey {
     pub size: LayoutSizeAu,
 }
 
-/// Identifying key for a line decoration. The mask tile size
-/// (`LineDecorationCacheKey`) is intentionally not part of the intern
-/// key — it is a deterministic function of `style`, `orientation`,
-/// `wavy_line_thickness`, and the prim's per-frame local rect, and is
-/// rebuilt during frame building.
-#[derive(Clone, Debug, Hash, MallocSizeOf, PartialEq, Eq)]
-#[cfg_attr(feature = "capture", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
-pub struct LineDecoration {
-    pub style: LineStyle,
-    pub orientation: LineOrientation,
-    pub wavy_line_thickness: Au,
-    pub color: ColorU,
-}
+// `LineDecoration` now lives in `webrender_api::interned_prims` so content-process
+// interning can hold it. Re-exported to keep existing references working.
+pub use api::interned_prims::LineDecoration;
 
 pub type LineDecorationKey = PrimKey<LineDecoration>;
 
@@ -98,7 +77,7 @@ impl LineDecorationData {
         prim_spatial_node_index: SpatialNodeIndex,
         frame_context: &FrameBuildingContext,
         frame_state: &mut FrameBuildingState,
-    ) -> (RenderTaskId, GpuBufferAddress) {
+    ) -> Option<(RenderTaskId, LayoutSize)> {
         let cache_key = get_line_decoration_size(
             &prim_size,
             self.orientation,
@@ -111,35 +90,23 @@ impl LineDecorationData {
             size: size.to_au(),
         });
 
-        let mut writer = frame_state.frame_gpu_data.f32.write_blocks(3);
-        match cache_key.as_ref() {
+        match cache_key {
             Some(cache_key) => {
-                writer.push(&ImageBrushPrimitiveData {
-                    color: self.color.premultiplied(),
-                    background_color: PremultipliedColorF::WHITE,
-                    stretch_size: LayoutSize::new(
-                        cache_key.size.width.to_f32_px(),
-                        cache_key.size.height.to_f32_px(),
-                    ),
-                });
+                let size = LayoutSize::new(
+                    cache_key.size.width.to_f32_px(),
+                    cache_key.size.height.to_f32_px(),
+                );
+                let task = self.allocate_render_task(
+                    cache_key,
+                    prim_spatial_node_index,
+                    frame_context,
+                    frame_state,
+                );
+
+                Some((task, size))
             }
-            None => {
-                writer.push_one(self.color.premultiplied());
-            }
+            None => None,
         }
-        let gpu_address = writer.finish();
-
-        let task_id = match cache_key {
-            Some(cache_key) => self.allocate_render_task(
-                cache_key,
-                prim_spatial_node_index,
-                frame_context,
-                frame_state,
-            ),
-            None => RenderTaskId::INVALID,
-        };
-
-        (task_id, gpu_address)
     }
 
     fn allocate_render_task(
@@ -263,21 +230,6 @@ impl InternablePrimitive for LineDecoration {
     }
 }
 
-impl CreateShadow for LineDecoration {
-    fn create_shadow(
-        &self,
-        shadow: &Shadow,
-        _: bool,
-        _: RasterSpace,
-    ) -> Self {
-        LineDecoration {
-            style: self.style,
-            orientation: self.orientation,
-            wavy_line_thickness: self.wavy_line_thickness,
-            color: shadow.color.into(),
-        }
-    }
-}
 
 impl IsVisible for LineDecoration {
     fn is_visible(&self) -> bool {
@@ -364,6 +316,6 @@ fn test_struct_sizes() {
     // (b) You made a structure larger. This is not necessarily a problem, but should only
     //     be done with care, and after checking if talos performance regresses badly.
     assert_eq!(mem::size_of::<LineDecoration>(), 12, "LineDecoration size changed");
-    assert_eq!(mem::size_of::<LineDecorationTemplate>(), 32, "LineDecorationTemplate size changed");
+    assert_eq!(mem::size_of::<LineDecorationTemplate>(), 28, "LineDecorationTemplate size changed");
     assert_eq!(mem::size_of::<LineDecorationKey>(), 16, "LineDecorationKey size changed");
 }

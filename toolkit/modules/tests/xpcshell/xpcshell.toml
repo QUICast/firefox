@@ -35,6 +35,8 @@ support-files = [
 
 ["test_CreditCard.js"]
 
+["test_DateNormalizationUtils.js"]
+
 ["test_DeferredTask.js"]
 skip-if = [
   "os == 'android'",
@@ -170,6 +172,7 @@ tags = "os_integration"
 ["test_servicerequest_xhr.js"]
 
 ["test_sqlite.js"]
+prefs = ["security.storage.encryption.sqlite.enabled=false"]
 skip-if = [
   "os == 'android'",
 ]

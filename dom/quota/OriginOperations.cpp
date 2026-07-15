@@ -29,6 +29,7 @@
 #include "mozilla/ResultExtensions.h"
 #include "mozilla/StaticPrefs_dom.h"
 #include "mozilla/dom/Nullable.h"
+#include "mozilla/dom/quota/AssertionsImpl.h"
 #include "mozilla/dom/quota/Client.h"
 #include "mozilla/dom/quota/CommonMetadata.h"
 #include "mozilla/dom/quota/Constants.h"
@@ -1712,7 +1713,10 @@ void GetUsageOp::ProcessOriginInternal(QuotaManager* aQuotaManager,
     originUsage->mPersisted = aPersisted;
   }
 
-  originUsage->mUsage = originUsage->mUsage + aUsage;
+  // Ignore usage values which have underflowed (workaround for bug 1585978)
+  if (aUsage < INT64_MAX) [[likely]] {
+    originUsage->mUsage += aUsage;
+  }
 
   originUsage->mLastAccessTime =
       std::max<int64_t>(originUsage->mLastAccessTime, aTimestamp);

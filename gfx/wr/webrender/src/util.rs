@@ -373,6 +373,15 @@ pub trait MatrixHelpers<Src, Dst> {
     /// Defined in the SkMatrix44 class.
     fn preserves_2d_axis_alignment(&self) -> bool;
     fn has_perspective_component(&self) -> bool;
+    /// Returns true only if the perspective divide varies across the z=0 plane
+    /// (`m14`/`m24` non-zero), i.e. a coplanar 2D surface is mapped with a
+    /// non-constant `w` (a true keystone). A perspective matrix whose only
+    /// perspective terms are `m34`/`m44` still maps a z=0 surface affinely
+    /// (constant `w`), so it returns false here even though
+    /// `has_perspective_component` is true. Used to decide whether coplanar
+    /// content (e.g. text) can still be rasterized and snapped in device space
+    /// (bug 2052019).
+    fn has_2d_plane_perspective(&self) -> bool;
     fn has_2d_inverse(&self) -> bool;
     /// Check if the matrix post-scaling on either the X or Y axes could cause geometry
     /// transformed by this matrix to have scaling exceeding the supplied limit.
@@ -382,6 +391,15 @@ pub trait MatrixHelpers<Src, Dst> {
     fn is_simple_translation(&self) -> bool;
     fn is_simple_2d_translation(&self) -> bool;
     fn is_2d_scale_translation(&self) -> bool;
+    /// If this transform is a rotation or reflection by a multiple of 90 degrees
+    /// (with unit scale, no z-coupling and no perspective), decompose it into a
+    /// `ScaleOffset` plus whether the x and y axes are swapped (the 90/270-degree
+    /// case, where the `ScaleOffset` applies after the swap). Returns `None`
+    /// otherwise. Such a transform keeps content on the same pixel grid, so a
+    /// rect can be snapped across it losslessly. Unlike
+    /// `preserves_2d_axis_alignment`, this also rejects perspective (`m34`) and
+    /// rescaling.
+    fn as_grid_aligned_rotation(&self) -> Option<(ScaleOffset, bool)>;
     /// Return the determinant of the 2D part of the matrix.
     fn determinant_2d(&self) -> f32;
     /// Turn Z transformation into identity. This is useful when crossing "flat"
@@ -427,6 +445,11 @@ impl<Src, Dst> MatrixHelpers<Src, Dst> for Transform3D<f32, Src, Dst> {
          self.m24.abs() > NEARLY_ZERO ||
          self.m34.abs() > NEARLY_ZERO ||
          (self.m44 - 1.0).abs() > NEARLY_ZERO
+    }
+
+    fn has_2d_plane_perspective(&self) -> bool {
+         self.m14.abs() > NEARLY_ZERO ||
+         self.m24.abs() > NEARLY_ZERO
     }
 
     fn has_2d_inverse(&self) -> bool {
@@ -503,6 +526,32 @@ impl<Src, Dst> MatrixHelpers<Src, Dst> for Transform3D<f32, Src, Dst> {
             self.m43.abs() < NEARLY_ZERO
     }
 
+    fn as_grid_aligned_rotation(&self) -> Option<(ScaleOffset, bool)> {
+        let is_zero = |v: f32| v.abs() < NEARLY_ZERO;
+        let is_one = |v: f32| (v - 1.0).abs() < NEARLY_ZERO;
+        let is_unit = |v: f32| (v.abs() - 1.0).abs() < NEARLY_ZERO;
+
+        // Must be a flat 2D transform: no z coupling and no perspective.
+        // Translation (m41, m42) is unconstrained; tz (m43) must be zero.
+        if !(is_zero(self.m13) && is_zero(self.m14) && is_zero(self.m23) && is_zero(self.m24) &&
+            is_zero(self.m31) && is_zero(self.m32) && is_one(self.m33) && is_zero(self.m34) &&
+            is_zero(self.m43) && is_one(self.m44)) {
+            return None;
+        }
+
+        // The remaining 2x2 must only rotate/flip by a right angle, never scale.
+        // A 0/180-degree rotation or axis flip (entries on the diagonal) maps to
+        // a `ScaleOffset` directly; a 90/270-degree rotation (entries off the
+        // diagonal) maps to the same `ScaleOffset` applied after swapping x and y.
+        if is_unit(self.m11) && is_unit(self.m22) && is_zero(self.m12) && is_zero(self.m21) {
+            Some((ScaleOffset::new(self.m11, self.m22, self.m41, self.m42), false))
+        } else if is_unit(self.m12) && is_unit(self.m21) && is_zero(self.m11) && is_zero(self.m22) {
+            Some((ScaleOffset::new(self.m21, self.m12, self.m41, self.m42), true))
+        } else {
+            None
+        }
+    }
+
     fn determinant_2d(&self) -> f32 {
         self.m11 * self.m22 - self.m12 * self.m21
     }
@@ -521,22 +570,6 @@ impl<Src, Dst> MatrixHelpers<Src, Dst> for Transform3D<f32, Src, Dst> {
             self.m21, self.m22, self.m23, self.m24,
             self.m31, self.m32, self.m33, self.m34,
             self.m41, self.m42, self.m43, self.m44,
-        )
-    }
-}
-
-pub trait PointHelpers<U>
-where
-    Self: Sized,
-{
-    fn snap(&self) -> Self;
-}
-
-impl<U> PointHelpers<U> for Point2D<f32, U> {
-    fn snap(&self) -> Self {
-        Point2D::new(
-            self.x.round(),
-            self.y.round(),
         )
     }
 }

@@ -298,7 +298,7 @@ async function doDismissTest({
   details = await UrlbarTestUtils.getDetailsOfResultAt(window, resultIndex);
   Assert.equal(
     details.type,
-    UrlbarUtils.RESULT_TYPE.TIP,
+    UrlbarShared.RESULT_TYPE.TIP,
     "Row should be a tip after dismissal"
   );
   Assert.equal(
@@ -372,7 +372,7 @@ async function doDismissTest({
   for (let i = 0; i < UrlbarTestUtils.getResultCount(window); i++) {
     details = await UrlbarTestUtils.getDetailsOfResultAt(window, i);
     Assert.ok(
-      details.type != UrlbarUtils.RESULT_TYPE.TIP &&
+      details.type != UrlbarShared.RESULT_TYPE.TIP &&
         details.result.providerName != gTestProvider.name,
       "Tip result and test result should not be present"
     );
@@ -396,19 +396,19 @@ class TestProvider extends UrlbarTestUtils.TestProvider {
       {
         name: FEEDBACK_COMMAND,
         l10n: {
-          id: "urlbar-result-menu-report-inaccurate-location",
+          id: "urlbar-result-menu-report-inaccurate-location2",
         },
       },
       {
         name: DISMISS_ONE_COMMAND,
         l10n: {
-          id: "firefox-suggest-command-not-interested",
+          id: "firefox-suggest-command-not-interested2",
         },
       },
       {
         name: DISMISS_ALL_COMMAND,
         l10n: {
-          id: "firefox-suggest-command-not-interested",
+          id: "firefox-suggest-command-not-interested2",
         },
       },
     ];
@@ -473,8 +473,8 @@ async function checkRowLabel(resultIndex, expectedLabel) {
 
 function makeResult(resultParams) {
   return new UrlbarResult({
-    type: UrlbarUtils.RESULT_TYPE.URL,
-    source: UrlbarUtils.RESULT_SOURCE.OTHER_LOCAL,
+    type: UrlbarShared.RESULT_TYPE.URL,
+    source: UrlbarShared.RESULT_SOURCE.OTHER_LOCAL,
     payload: {
       url: "https://example.com/",
       isBlockable: true,

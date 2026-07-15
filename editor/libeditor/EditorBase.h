@@ -243,6 +243,13 @@ class EditorBase : public nsIEditor,
   Element* GetExposedRoot() const;
 
   /**
+   * Compute EditContext which this editor is currently attached to.
+   * While handling an edit action, use GetEditActionEditContext instead,
+   * in case the active EditContext changed since the edit action started.
+   */
+  virtual dom::EditContext* ComputeEditContext() const { return nullptr; }
+
+  /**
    * Set or unset TextInputListener.  If setting non-nullptr when the editor
    * already has a TextInputListener, this will crash in debug build.
    */
@@ -1152,6 +1159,11 @@ class EditorBase : public nsIEditor,
     nsIPrincipal* GetPrincipal() const { return mPrincipal; }
     EditAction GetEditAction() const { return mEditAction; }
 
+    dom::EditContext* GetEditContext() const { return mEditContext; }
+    bool EditContextHasBeenChanged() const {
+      return mEditContext != mEditorBase.ComputeEditContext();
+    }
+
     template <typename PT, typename CT>
     void SetSpellCheckRestartPoint(const EditorDOMPointBase<PT, CT>& aPoint) {
       MOZ_ASSERT(aPoint.IsSet());
@@ -1484,6 +1496,9 @@ class EditorBase : public nsIEditor,
     // by TextEditor.
     EditorDOMPoint mSpellCheckRestartPoint;
 
+    // EditContext which this edit action is targeting.
+    RefPtr<dom::EditContext> mEditContext;
+
     // Different from mTopLevelEditSubAction, its data should be stored only
     // in the most ancestor AutoEditActionDataSetter instance since we don't
     // want to pay the copying cost and sync cost.
@@ -1634,6 +1649,16 @@ class EditorBase : public nsIEditor,
   nsIPrincipal* GetEditActionPrincipal() const {
     MOZ_ASSERT(mEditActionData);
     return mEditActionData->GetPrincipal();
+  }
+
+  dom::EditContext* GetEditActionEditContext() const {
+    MOZ_ASSERT(mEditActionData);
+    return mEditActionData->GetEditContext();
+  }
+
+  bool EditContextChangedSinceStartOfEditAction() const {
+    MOZ_ASSERT(mEditActionData);
+    return mEditActionData->EditContextHasBeenChanged();
   }
 
   /**
@@ -2185,6 +2210,16 @@ class EditorBase : public nsIEditor,
     AutoCaretBidiLevelManager(const EditorBase& aEditorBase,
                               nsIEditor::EDirection aDirectionAndAmount,
                               const EditorDOMPointBase<PT, CT>& aPointAtCaret);
+    /**
+     * Initialize for use with EditContext.
+     * @param aEditorBase         The editor.
+     * @param aDirectionAndAmount The direction and amount to delete.
+     */
+    AutoCaretBidiLevelManager(const EditorBase& aEditorBase,
+                              nsIEditor::EDirection aDirectionAndAmount,
+                              const dom::EditContext& aEditContext) {
+      InitForEditContext(aEditorBase, aDirectionAndAmount, aEditContext);
+    }
 
     /**
      * Failed() returns true if the constructor failed to handle the bidi
@@ -2206,6 +2241,13 @@ class EditorBase : public nsIEditor,
     void MaybeUpdateCaretBidiLevel(const EditorBase& aEditorBase) const;
 
    private:
+    template <typename PT, typename CT>
+    void Init(const EditorBase& aEditorBase,
+              nsIEditor::EDirection aDirectionAndAmount,
+              const EditorDOMPointBase<PT, CT>& aPointAtCaret);
+    void InitForEditContext(const EditorBase& aEditorBase,
+                            nsIEditor::EDirection aDirectionAndAmount,
+                            const dom::EditContext&);
     Maybe<mozilla::intl::BidiEmbeddingLevel> mNewCaretBidiLevel;
     bool mFailed = false;
     bool mCanceled = false;
@@ -2657,8 +2699,6 @@ class EditorBase : public nsIEditor,
   };
   MOZ_CAN_RUN_SCRIPT void NotifyEditorObservers(
       NotificationForEditorObservers aNotification);
-
-  virtual dom::EditContext* GetEditContext() const { return nullptr; }
 
   /**
    * HowToHandleCollapsedRange indicates how collapsed range should be treated.

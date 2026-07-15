@@ -435,6 +435,45 @@ describe("MultiStageAboutWelcome module", () => {
       assert.ok(wrapper.find(WelcomeScreen).exists());
     });
 
+    it("should not render multi select container if all multiselect item targeting is false", async () => {
+      const screens = [
+        {
+          id: "TEST_SCREEN_FILTERED_TILES",
+          content: {
+            title: "test title",
+            tiles: {
+              type: "multiselect",
+              data: [
+                { id: "checkbox-1", targeting: "false" },
+                { id: "checkbox-2", targeting: "false" },
+              ],
+            },
+          },
+        },
+      ];
+
+      // Simulate the parent targeting pass filtering out every checkbox
+      //  which should removes the single multiselect tile entirely
+      globals.set("AWEvaluateScreenTargeting", () => {
+        const filtered = JSON.parse(JSON.stringify(screens));
+        delete filtered[0].content.tiles;
+        return Promise.resolve(filtered);
+      });
+
+      const wrapper = mount(
+        <MultiStageAboutWelcome
+          {...DEFAULT_PROPS}
+          gateInitialPaint={true}
+          defaultScreens={screens}
+        />
+      );
+      await spinEventLoop();
+      wrapper.update();
+
+      assert.ok(wrapper.find(WelcomeScreen).exists());
+      assert.isFalse(wrapper.find(".multi-select-container").exists());
+    });
+
     it("does not send telemetry before first paint is ready, but does afterwards", async () => {
       let resolveTargeting;
       const targetingPromise = new Promise(r => (resolveTargeting = r));
@@ -461,12 +500,145 @@ describe("MultiStageAboutWelcome module", () => {
 
       sendEventStub.restore();
     });
+
+    it("fires a screen's impression_action on impression before recording the impression", async () => {
+      const impression_action = {
+        type: "PIN_FIREFOX_TO_TASKBAR",
+        once: true,
+      };
+      const screens = [
+        {
+          id: "TEST_SCREEN_AB",
+          content: {
+            title: "test title",
+            impression_action,
+          },
+        },
+      ];
+      const handleImpressionStub = sandbox.stub(
+        MultiStageUtils,
+        "handleImpressionAction"
+      );
+      const addScreenImpressionStub = globals.set(
+        "AWAddScreenImpression",
+        sandbox.stub()
+      );
+
+      const wrapper = mount(
+        <MultiStageAboutWelcome {...DEFAULT_PROPS} defaultScreens={screens} />
+      );
+      await spinEventLoop();
+      wrapper.update();
+
+      assert.calledOnce(handleImpressionStub);
+      assert.calledWith(
+        handleImpressionStub,
+        impression_action,
+        sinon.match.string,
+        "TEST_SCREEN_AB"
+      );
+      // The action must fire before the impression is recorded so the parent's
+      // `once` check sees the impression count from before this view.
+      assert.calledOnce(addScreenImpressionStub);
+      assert.ok(
+        handleImpressionStub.calledBefore(addScreenImpressionStub),
+        "Expected impression action to be dispatched before AWAddScreenImpression"
+      );
+    });
+
+    it("does not fire an impression_action when a screen doesn't have one", async () => {
+      const screens = [
+        {
+          id: "TEST_SCREEN_NO_ACTION",
+          content: { title: "test title" },
+        },
+      ];
+      const handleImpressionStub = sandbox.stub(
+        MultiStageUtils,
+        "handleImpressionAction"
+      );
+
+      const wrapper = mount(
+        <MultiStageAboutWelcome {...DEFAULT_PROPS} defaultScreens={screens} />
+      );
+      await spinEventLoop();
+      wrapper.update();
+
+      assert.notCalled(handleImpressionStub);
+    });
+  });
+
+  describe("MultiStageUtils.handleImpressionAction", () => {
+    it("no-ops and sends no telemetry when AWSendImpressionAction is unavailable", async () => {
+      // AWSendImpressionAction is only exported on about:welcome. When it is undefined elsewhere
+      // the impression action should silently not dispatch without error.
+      const telemetryStub = sandbox.stub(
+        MultiStageUtils,
+        "sendActionTelemetry"
+      );
+
+      await MultiStageUtils.handleImpressionAction(
+        { type: "PIN_FIREFOX_TO_TASKBAR" },
+        "MSG_1",
+        "SCREEN_1"
+      );
+
+      assert.notCalled(telemetryStub);
+    });
+
+    it("dispatches the wrapped action when on about:welcome", () => {
+      const action = { type: "PIN_FIREFOX_TO_TASKBAR", once: true };
+      const sendStub = globals.set("AWSendImpressionAction", sandbox.stub());
+
+      MultiStageUtils.handleImpressionAction(action, "MSG_1", "SCREEN_1");
+
+      assert.calledOnce(sendStub);
+      assert.calledWithMatch(sendStub, {
+        action,
+        message_id: "MSG_1",
+        screen_id: "SCREEN_1",
+      });
+    });
+
+    it("sends action telemetry when the parent confirms the action fired", async () => {
+      const action = { type: "PIN_FIREFOX_TO_TASKBAR" };
+      globals.set("AWSendImpressionAction", () => Promise.resolve(true));
+      const telemetryStub = sandbox.stub(
+        MultiStageUtils,
+        "sendActionTelemetry"
+      );
+
+      await MultiStageUtils.handleImpressionAction(action, "MSG_1", "SCREEN_1");
+
+      assert.calledOnceWithExactly(
+        telemetryStub,
+        "MSG_1",
+        "PIN_FIREFOX_TO_TASKBAR",
+        "IMPRESSION_ACTION"
+      );
+    });
+
+    it("does not send action telemetry when the action did not fire", async () => {
+      globals.set("AWSendImpressionAction", () => Promise.resolve(false));
+      const telemetryStub = sandbox.stub(
+        MultiStageUtils,
+        "sendActionTelemetry"
+      );
+
+      await MultiStageUtils.handleImpressionAction(
+        { type: "PIN_FIREFOX_TO_TASKBAR" },
+        "MSG_1",
+        "SCREEN_1"
+      );
+
+      assert.notCalled(telemetryStub);
+    });
   });
 
   describe("WelcomeScreen component", () => {
     describe("easy setup screen", () => {
       const easySetupScreen = AboutWelcomeDefaults.getDefaults().screens.find(
-        s => s.id === "AW_EASY_SETUP_NEEDS_DEFAULT_AND_PIN"
+        s => s.id === "AW_EASY_SETUP"
       );
       let EASY_SETUP_SCREEN_PROPS;
 

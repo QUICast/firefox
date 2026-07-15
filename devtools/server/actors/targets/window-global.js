@@ -771,6 +771,8 @@ class WindowGlobalTargetActor extends BaseTargetActor {
         watchpoints: true,
         // Supports back and forward navigation
         navigation: true,
+        // Supports navigation by index
+        navigationByIndex: true,
       },
     };
 
@@ -1352,6 +1354,24 @@ class WindowGlobalTargetActor extends BaseTargetActor {
     return {};
   }
 
+  gotoIndex(index) {
+    // Wait a tick so that the response packet can be dispatched before the
+    // subsequent navigation event packet.
+    Services.tm.dispatchToMainThread(
+      DevToolsUtils.makeInfallible(() => {
+        // This won't work while the browser is shutting down and we don't really
+        // care.
+        if (Services.startup.shuttingDown) {
+          return;
+        }
+
+        this.webNavigation.gotoIndex(index, true);
+      }, "WindowGlobalTargetActor.prototype.gotoIndex's delayed body")
+    );
+
+    return {};
+  }
+
   /**
    * Reload the page in this window global.
    *
@@ -1457,7 +1477,10 @@ class WindowGlobalTargetActor extends BaseTargetActor {
       this.isRootActor &&
       typeof options.animationsPlayBackRateMultiplier !== "undefined"
     ) {
-      this.browsingContext.animationsPlayBackRateMultiplier =
+      // animationsPlayBackRateMultiplier can only be set on the top browsing
+      // context (this.browsingContext isn't top when an iframe is selected as
+      // the targeted document in the Browser Toolbox).
+      this.browsingContext.top.animationsPlayBackRateMultiplier =
         options.animationsPlayBackRateMultiplier;
     }
 
@@ -1513,7 +1536,7 @@ class WindowGlobalTargetActor extends BaseTargetActor {
     }
 
     if (this.isRootActor && !this.browsingContext.isDiscarded) {
-      this.browsingContext.animationsPlayBackRateMultiplier = 1;
+      this.browsingContext.top.animationsPlayBackRateMultiplier = 1;
     }
   }
 

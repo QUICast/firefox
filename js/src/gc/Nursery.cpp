@@ -1654,7 +1654,9 @@ void js::Nursery::traceRoots(AutoGCSession& session, TenuringTracer& mover) {
     // Trace the store buffer, which must happen first.
 
     // Create an empty store buffer on the stack and swap it with the main store
-    // buffer, clearing it.
+    // buffer, clearing it. Preserve the 'mayHavePointersToDeadCells' flag over
+    // semispace collections that may not clear these entries.
+
     StoreBuffer sb(gc);
     {
       AutoEnterOOMUnsafeRegion oomUnsafe;
@@ -1662,7 +1664,13 @@ void js::Nursery::traceRoots(AutoGCSession& session, TenuringTracer& mover) {
         oomUnsafe.crash("Nursery::traceRoots");
       }
     }
+
+    bool hadPointersToDeadCells =
+        gc->storeBuffer().mayHavePointersToDeadCells();
     std::swap(sb, gc->storeBuffer());
+    if (hadPointersToDeadCells && !tenuredEverything) {
+      gc->storeBuffer().setMayHavePointersToDeadCells();
+    }
     MOZ_ASSERT(gc->storeBuffer().isEnabled());
     MOZ_ASSERT(gc->storeBuffer().isEmpty());
 
@@ -2133,8 +2141,14 @@ void js::Nursery::poisonAndInitCurrentChunk() {
 void js::Nursery::setCurrentEnd() { toSpace.setCurrentEnd(this); }
 
 void js::Nursery::Space::setCurrentEnd(Nursery* nursery) {
+  size_t chunkBytesToUse = ChunkSize;
+
+  // To avoid problems with inline object elements abutting the end of a chunk,
+  // reduce the size used slightly. This wastes 8 bytes per chunk.
+  chunkBytesToUse -= gc::CellAlignBytes;
+
   currentEnd_ = uintptr_t(chunks_[currentChunk_]) +
-                std::min(nursery->capacity(), ChunkSize);
+                std::min(nursery->capacity(), chunkBytesToUse);
 }
 
 bool js::Nursery::allocateNextChunk(AutoLockGCBgAlloc& lock) {

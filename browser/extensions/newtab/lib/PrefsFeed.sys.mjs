@@ -22,6 +22,7 @@ import {
   PREF_DEFAULT_VALUE_TOPSTORIES_ENABLED,
   PREF_DEFAULT_VALUE_TOPSITES_ENABLED,
 } from "resource://newtab/lib/ActivityStream.sys.mjs";
+import { WIDGET_REGISTRY } from "resource://newtab/common/WidgetsRegistry.mjs";
 
 // eslint-disable-next-line mozilla/use-static-import
 const { AppConstants } = ChromeUtils.importESModule(
@@ -88,6 +89,8 @@ export class PrefsFeed {
   constructor(prefMap) {
     this._prefMap = prefMap;
     this._prefs = new Prefs();
+    // Buffers broadcast prefs during a SET_MULTIPLE_PREFS transaction; null otherwise.
+    this._prefsTransaction = null;
     this.onExperimentUpdated = this.onExperimentUpdated.bind(this);
     this.onTrainhopExperimentUpdated =
       this.onTrainhopExperimentUpdated.bind(this);
@@ -129,12 +132,22 @@ export class PrefsFeed {
         }
       }
 
-      this.store.dispatch(
-        ac[action]({
-          type: at.PREF_CHANGED,
-          data: { name, value },
-        })
-      );
+      // Buffer broadcast prefs into one MULTIPLE_PREFS_CHANGED for content, but still
+      // emit a main-only PREF_CHANGED so feeds (e.g. WeatherFeed) react per pref.
+      // skipBroadcast prefs keep their individual routing.
+      if (this._prefsTransaction && action === "BroadcastToContent") {
+        this._prefsTransaction[name] = value;
+        this.store.dispatch(
+          ac.OnlyToMain({ type: at.PREF_CHANGED, data: { name, value } })
+        );
+      } else {
+        this.store.dispatch(
+          ac[action]({
+            type: at.PREF_CHANGED,
+            data: { name, value },
+          })
+        );
+      }
     }
 
     if (isUserChange && this.inActivationWindowState) {
@@ -288,6 +301,43 @@ export class PrefsFeed {
         "newtabWallpapers.initialWallpaper",
         valueObj.wallpaper.initialWallpaper
       );
+    }
+
+    // Override per-widget default enabled values from widgetsSettings. Writing
+    // to the default branch lets a trainhop flip a widget's default (e.g. ship
+    // it off) while an explicit user toggle (user branch) still wins. Toggle
+    // VISIBILITY is handled separately by the widgetsSettings.*Visible terms in
+    // WidgetsRegistry — this only affects the on/off default value.
+    if (valueObj.widgetsSettings) {
+      const defaultBranch = Services.prefs.getDefaultBranch(
+        this._prefs._branchStr
+      );
+      for (const widget of WIDGET_REGISTRY) {
+        const value =
+          valueObj.widgetsSettings[widget.widgetsSettingsEnabledKey];
+        if (typeof value === "boolean") {
+          defaultBranch.setBoolPref(widget.enabledPref, value);
+        }
+      }
+    }
+
+    // A widget with a dedicated trainhop namespace ships its whole config in one
+    // object (trainhopConfig.<namespace>). Its `enabled` overrides the default
+    // value of the widget's user-facing enabled pref on the default branch (an
+    // explicit user toggle still wins), the same effect widgetsSettings.*Enabled
+    // has but isolated to this widget's payload. Revealing the widget is a
+    // separate concern handled by the `visible` field in isWidgetAddable; the
+    // remaining fields are read directly from trainhopConfig by their consumers.
+    // Adding another widget only takes a trainhopNamespace on its registry entry.
+    for (const widget of WIDGET_REGISTRY) {
+      const enabled = widget.trainhopNamespace
+        ? valueObj[widget.trainhopNamespace]?.enabled
+        : undefined;
+      if (typeof enabled === "boolean") {
+        Services.prefs
+          .getDefaultBranch(this._prefs._branchStr)
+          .setBoolPref(widget.enabledPref, enabled);
+      }
     }
 
     return valueObj;
@@ -874,6 +924,29 @@ export class PrefsFeed {
       case at.SET_PREF:
         this._prefs.set(action.data.name, action.data.value);
         break;
+      case at.SET_MULTIPLE_PREFS: {
+        // Set all prefs in a transaction, then flush one combined MULTIPLE_PREFS_CHANGED.
+        this._prefsTransaction = {};
+        try {
+          for (const [name, value] of Object.entries(
+            action.data.values ?? {}
+          )) {
+            this._prefs.set(name, value);
+          }
+        } finally {
+          const values = this._prefsTransaction;
+          this._prefsTransaction = null;
+          if (Object.keys(values).length) {
+            this.store.dispatch(
+              ac.BroadcastToContent({
+                type: at.MULTIPLE_PREFS_CHANGED,
+                data: { values },
+              })
+            );
+          }
+        }
+        break;
+      }
       case at.NEW_TAB_STATE_REQUEST: {
         this.checkForActivationWindow();
         break;

@@ -55,6 +55,7 @@ function registerActors() {
     },
     allFrames: true,
     includeChrome: true,
+    safeForUntrustedWebProcess: true,
   });
 
   ChromeUtils.registerWindowActor("ContentEventListener", {
@@ -72,6 +73,7 @@ function registerActors() {
       },
     },
     allFrames: true,
+    safeForUntrustedWebProcess: true,
   });
 }
 
@@ -1700,19 +1702,21 @@ export var BrowserTestUtils = {
    * @param {object}  options   The options to pass to MutationObserver.observe();
    * @param {function} checkFn  Function that returns true when it wants the promise to be
    * resolved.
+   * @returns {Promise<any>}    The value returned by `checkFn`.
    */
   waitForMutationCondition(target, options, checkFn) {
-    if (checkFn()) {
-      return Promise.resolve();
+    let retVal;
+    if ((retVal = checkFn())) {
+      return Promise.resolve(retVal);
     }
     return new Promise(resolve => {
       // @backward-compat { version 152 }
       // Get rid of the documentGlobal fallback once 152 makes it to release.
       let win = target.documentGlobal || target.ownerGlobal;
       let obs = new win.MutationObserver(function () {
-        if (checkFn()) {
+        if ((retVal = checkFn())) {
           obs.disconnect();
-          resolve();
+          resolve(retVal);
         }
       });
       obs.observe(target, options);
@@ -2328,8 +2332,9 @@ export var BrowserTestUtils = {
    *        The attribute to wait for
    * @param {Element} element
    *        The element which should gain the attribute
-   * @param {string} value (optional)
-   *        Optional, the value the attribute should have.
+   * @param {string|boolean} value (optional)
+   *        Optional, the value the attribute should have. Pass a boolean to
+   *        wait for a boolean attribute to be present (true) or absent (false).
    *
    * @returns {Promise}
    */
@@ -2341,6 +2346,7 @@ export var BrowserTestUtils = {
     return new Promise(resolve => {
       let mut = new MutationObserver(() => {
         if (
+          (typeof value == "boolean" && element.hasAttribute(attr) == value) ||
           (!value && element.hasAttribute(attr)) ||
           (value && element.getAttribute(attr) === value)
         ) {
@@ -2467,9 +2473,6 @@ export var BrowserTestUtils = {
       event,
     });
   },
-
-  // TODO: Fix consumers and remove me.
-  waitForCondition: TestUtils.waitForCondition,
 
   /**
    * Waits for a <xul:notification> with a particular value to appear

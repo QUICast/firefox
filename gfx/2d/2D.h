@@ -5,15 +5,16 @@
 #ifndef MOZILLA_GFX_2D_H
 #define MOZILLA_GFX_2D_H
 
-#include "Types.h"
-#include "Point.h"
-#include "Rect.h"
-#include "Matrix.h"
-#include "Quaternion.h"
-#include "UserData.h"
-#include "FontVariation.h"
 #include <functional>
 #include <vector>
+
+#include "FontVariation.h"
+#include "Matrix.h"
+#include "Point.h"
+#include "Quaternion.h"
+#include "Rect.h"
+#include "Types.h"
+#include "UserData.h"
 
 // GenericRefCountedBase allows us to hold on to refcounted objects of any type
 // (contrary to RefCounted<T> which requires knowing the type T) and, in
@@ -26,12 +27,11 @@
 // This RefPtr class isn't ideal for usage in Azure, as it doesn't allow T**
 // outparams using the &-operator. But it will have to do as there's no easy
 // solution.
+#include "mozilla/Atomics.h"
 #include "mozilla/RefPtr.h"
 #include "mozilla/StaticMutex.h"
 #include "mozilla/StaticPtr.h"
 #include "mozilla/ThreadSafeWeakPtr.h"
-#include "mozilla/Atomics.h"
-
 #include "nsRegionFwd.h"
 
 #if defined(MOZ_WIDGET_ANDROID) || defined(MOZ_WIDGET_GTK)

@@ -5,6 +5,24 @@
 const DOH_DOORHANGER_DECISION_PREF = "doh-rollout.doorhanger-decision";
 const NETWORK_TRR_MODE_PREF = "network.trr.mode";
 
+// Allowlist of about page IDs that OPEN_ABOUT_PAGE is permitted to open.
+// Sourced from pages listened in AboutRedirector.
+const ALLOWED_ABOUT_PAGES = new Set([
+  "addons",
+  "profiles",
+  "translations",
+  "keyboard",
+  "logins",
+  "preferences",
+  "privatebrowsing",
+  "protections",
+  "settings",
+  "welcome",
+  "newtab",
+  "home",
+  "robots",
+]);
+
 const lazy = {};
 
 ChromeUtils.defineESModuleGetters(lazy, {
@@ -158,13 +176,11 @@ export const SpecialMessageActions = {
     };
 
     try {
-      const result = await lazy.TaskbarTabs.findOrCreateTaskbarTab(uri, 0, {
+      await lazy.TaskbarTabs.findOrCreateTaskbarTab(uri, 0, {
         manifest,
+        ensurePinned: true,
       });
-      if (result.created) {
-        return true;
-      }
-      return null;
+      return true;
     } catch (e) {
       console.error("Failed to pin Taskbar Tab:", e);
       return false;
@@ -185,8 +201,34 @@ export const SpecialMessageActions = {
    *
    * @param {Window} window Reference to a window object
    */
-  async setDefaultPDFHandler(window, onlyIfKnownBrowser = false) {
-    await window.getShellService().setAsDefaultPDFHandler(onlyIfKnownBrowser);
+  async setDefaultPDFHandler(
+    window,
+    onlyIfKnownBrowser = false,
+    openInFirefox = false
+  ) {
+    await window
+      .getShellService()
+      .setAsDefaultPDFHandler(onlyIfKnownBrowser, openInFirefox);
+  },
+
+  /**
+   * Set browser as the default handler for a protocol (scheme).
+   *
+   * @param {Window} window Reference to a window object
+   * @param {string} protocol The protocol to claim, e.g. "mailto"
+   * @param {string} [url] URL passed to the OS default-app picker
+   * @param {boolean} [openInFirefox] Whether to open the protocol's default URL
+   *   in Firefox after the user picks it
+   */
+  async setDefaultProtocolHandler(
+    window,
+    protocol,
+    url,
+    openInFirefox = false
+  ) {
+    await window
+      .getShellService()
+      .setAsDefaultProtocolHandler(protocol, url, openInFirefox);
   },
 
   /**
@@ -405,6 +447,21 @@ export const SpecialMessageActions = {
           `Special message action with type SET_PREF, pref of "${pref.name}" is an unsupported type.`
         );
     }
+  },
+
+  /**
+   * Destroy UI widgets with special message actions
+   *
+   * @param {string} widgetId - The ID of the widget to be destroyed.
+   */
+  destroyUIWidget(widgetId) {
+    const allowedWidgetIds = ["fxms-bmb-button"];
+
+    if (!allowedWidgetIds.includes(widgetId)) {
+      return;
+    }
+
+    lazy.CustomizableUI.destroyWidget(widgetId);
   },
 
   /**
@@ -747,6 +804,11 @@ export const SpecialMessageActions = {
         break;
       case "OPEN_ABOUT_PAGE": {
         let aboutPageURL = new URL(`about:${action.data.args}`);
+        if (!ALLOWED_ABOUT_PAGES.has(aboutPageURL.pathname)) {
+          throw new Error(
+            `SpecialMessageActions: OPEN_ABOUT_PAGE disallows about:${action.data.args}`
+          );
+        }
         if (action.data.entrypoint) {
           aboutPageURL.search = action.data.entrypoint;
         }
@@ -815,7 +877,8 @@ export const SpecialMessageActions = {
       case "SET_DEFAULT_PDF_HANDLER":
         await this.setDefaultPDFHandler(
           window,
-          action.data?.onlyIfKnownBrowser ?? false
+          action.data?.onlyIfKnownBrowser ?? false,
+          action.data?.openInFirefox ?? false
         );
         break;
       case "DECLINE_DEFAULT_PDF_HANDLER":
@@ -824,11 +887,26 @@ export const SpecialMessageActions = {
           true
         );
         break;
+      case "SET_DEFAULT_PROTOCOL_HANDLER":
+        await this.setDefaultProtocolHandler(
+          window,
+          action.data?.protocol,
+          action.data?.url,
+          action.data?.openInFirefox ?? false
+        );
+        break;
       case "CONFIRM_LAUNCH_ON_LOGIN": {
         const { WindowsLaunchOnLogin } = ChromeUtils.importESModule(
           "resource://gre/modules/WindowsLaunchOnLogin.sys.mjs"
         );
         await WindowsLaunchOnLogin.createLaunchOnLogin();
+        break;
+      }
+      case "REMOVE_LAUNCH_ON_LOGIN": {
+        const { WindowsLaunchOnLogin } = ChromeUtils.importESModule(
+          "resource://gre/modules/WindowsLaunchOnLogin.sys.mjs"
+        );
+        await WindowsLaunchOnLogin.removeLaunchOnLogin();
         break;
       }
       case "CREATE_GROUP_FROM_CURRENT_TAB": {
@@ -846,8 +924,9 @@ export const SpecialMessageActions = {
             let newTab = window.gBrowser.getTabForBrowser(newBrowser);
             window.gBrowser.addTabGroup([newTab], {
               insertBefore: tab.group.nextElementSibling,
-              isUserTriggered: true,
-              telemetryUserCreateSource: "messaging",
+              metricsContext: window.gBrowser.TabMetrics.userTriggeredContext(
+                window.gBrowser.TabMetrics.METRIC_SOURCE.MESSAGING
+              ),
             });
           }
           Services.obs.addObserver(observer, "browser-open-newtab-start");
@@ -856,8 +935,9 @@ export const SpecialMessageActions = {
           // Add the current tab to a new tab group in place.
           window.gBrowser.addTabGroup([tab], {
             insertBefore: tab,
-            isUserTriggered: true,
-            telemetryUserCreateSource: "messaging",
+            metricsContext: window.gBrowser.TabMetrics.userTriggeredContext(
+              window.gBrowser.TabMetrics.METRIC_SOURCE.MESSAGING
+            ),
           });
         }
         break;
@@ -934,6 +1014,9 @@ export const SpecialMessageActions = {
       case "BLOCK_MESSAGE":
         await this.blockMessageById(action.data.id);
         break;
+      case "DESTROY_UIWIDGET":
+        this.destroyUIWidget(action.data.widget_id);
+        break;
       case "SET_PREF":
         this.setPref(action.data.pref, action.data.onImpression);
         break;
@@ -944,10 +1027,6 @@ export const SpecialMessageActions = {
           action.data.orderedExecution
         );
         break;
-      default:
-        throw new Error(
-          `Special message action with type ${action.type} is unsupported.`
-        );
       case "RELOAD_BROWSER":
         browser.reload();
         break;
@@ -1016,6 +1095,10 @@ export const SpecialMessageActions = {
       case "IPPROTECTION_ENROLL":
         await lazy.IPProtection.getPanel(window)?.enroll();
         break;
+      default:
+        throw new Error(
+          `Special message action with type ${action.type} is unsupported.`
+        );
     }
     return undefined;
   },

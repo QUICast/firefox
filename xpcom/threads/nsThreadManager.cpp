@@ -3,14 +3,9 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsThreadManager.h"
-#include "nsThread.h"
-#include "nsThreadPool.h"
-#include "nsThreadUtils.h"
-#include "nsIClassInfoImpl.h"
-#include "nsExceptionHandler.h"
-#include "nsTArray.h"
-#include "nsXULAppAPI.h"
-#include "nsExceptionHandler.h"
+
+#include "TaskController.h"
+#include "ThreadEventTarget.h"
 #include "mozilla/AbstractThread.h"
 #include "mozilla/AppShutdown.h"
 #include "mozilla/ClearOnShutdown.h"
@@ -28,8 +23,13 @@
 #include "mozilla/ThreadEventQueue.h"
 #include "mozilla/ThreadLocal.h"
 #include "mozilla/ipc/SharedMemoryMapping.h"
-#include "TaskController.h"
-#include "ThreadEventTarget.h"
+#include "nsExceptionHandler.h"
+#include "nsIClassInfoImpl.h"
+#include "nsTArray.h"
+#include "nsThread.h"
+#include "nsThreadPool.h"
+#include "nsThreadUtils.h"
+#include "nsXULAppAPI.h"
 #ifdef MOZ_CANARY
 #  include <fcntl.h>
 #  include <unistd.h>

@@ -42,8 +42,8 @@ import org.mozilla.fenix.crashes.CrashFactCollector
 import org.mozilla.fenix.crashes.NimbusExperimentDataProvider
 import org.mozilla.fenix.crashes.ReleaseRuntimeTagProvider
 import org.mozilla.fenix.crashes.crashReportOption
-import org.mozilla.fenix.ext.settings
 import org.mozilla.fenix.perf.lazyMonitored
+import org.mozilla.fenix.utils.Settings
 import org.mozilla.geckoview.BuildConfig.MOZ_APP_BUILDID
 import org.mozilla.geckoview.BuildConfig.MOZ_APP_VENDOR
 import org.mozilla.geckoview.BuildConfig.MOZ_APP_VERSION
@@ -54,6 +54,7 @@ import org.mozilla.geckoview.BuildConfig.MOZ_UPDATE_CHANNEL
  */
 class Analytics(
     private val context: Context,
+    private val settings: Settings,
     private val nimbusComponents: NimbusComponents,
     private val runWhenReadyQueue: RunWhenReadyQueue,
 ) {
@@ -128,7 +129,7 @@ class Analytics(
                     appChannel = MOZ_UPDATE_CHANNEL,
                     appVersion = MOZ_APP_VERSION,
                     appBuildId = MOZ_APP_BUILDID,
-                    isUploadEnabled = context.settings().isTelemetryEnabled,
+                    isUploadEnabled = settings.isTelemetryEnabled,
                 ),
             ),
             shouldPrompt = CrashReporter.Prompt.ALWAYS,
@@ -138,9 +139,7 @@ class Analytics(
             ),
             enabled = true,
             nonFatalCrashIntent = pendingIntent,
-            useLegacyReporting =
-                context.settings().crashReportOption() != CrashReportOption.Auto &&
-                !context.settings().useNewCrashReporterFlow,
+            useLegacyReporting = settings.crashReportOption() != CrashReportOption.Auto,
             runtimeTagProviders = listOf(
                 ReleaseRuntimeTagProvider(),
                 BuildRuntimeTagProvider(context.versionInfoProvider),
@@ -161,7 +160,7 @@ class Analytics(
     val metricsStorage: MetricsStorage by lazyMonitored {
         DefaultMetricsStorage(
             context = context,
-            settings = context.settings(),
+            settings = settings,
             checkDefaultBrowser = { Browsers.isDefaultBrowser(context) },
         )
     }
@@ -176,15 +175,15 @@ class Analytics(
                     crashReporter = crashReporter,
                 ),
                 FirstSessionMetricsService(context),
-                InstallReferrerMetricsService(context),
+                InstallReferrerMetricsService(context, settings),
                 GleanUsageReportingMetricsService(gleanProfileIdStore = GleanProfileIdPreferenceStore(context)),
             ),
-            isDataTelemetryEnabled = { context.settings().isTelemetryEnabled },
+            isDataTelemetryEnabled = { settings.isTelemetryEnabled },
             isMarketingDataTelemetryEnabled = {
-                context.settings().isMarketingTelemetryEnabled && context.settings().hasMadeMarketingTelemetrySelection
+                settings.isMarketingTelemetryEnabled && settings.hasMadeMarketingTelemetrySelection
             },
-            isUsageTelemetryEnabled = { context.settings().isDailyUsagePingEnabled },
-            context.settings(),
+            isUsageTelemetryEnabled = { settings.isDailyUsagePingEnabled },
+            settings,
         )
     }
 }

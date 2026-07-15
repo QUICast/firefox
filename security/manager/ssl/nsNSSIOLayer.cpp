@@ -41,7 +41,6 @@
 #include "nsISocketProvider.h"
 #include "nsIWebProgressListener.h"
 #include "nsNSSComponent.h"
-#include "nsNSSHelper.h"
 #include "nsPrintfCString.h"
 #include "nsServiceManagerUtils.h"
 #include "prmem.h"
@@ -543,52 +542,42 @@ static_assert((mozilla::pkix::ERROR_BASE - mozilla::pkix::END_OF_LIST) < 31,
 static void reportHandshakeResult(int32_t bytesTransferred, bool wasReading,
                                   PRErrorCode err,
                                   NSSSocketControl* socketInfo) {
-  uint32_t bucket;
+  nsAutoCString result;
 
   // A negative bytesTransferred or a 0 read are errors.
   if (bytesTransferred > 0) {
-    bucket = 0;
+    result.Assign("Success");
   } else if ((bytesTransferred == 0) && !wasReading) {
     // PR_Write() is defined to never return 0, but let's make sure.
     // https://developer.mozilla.org/en-US/docs/Mozilla/Projects/NSPR/Reference/PR_Write.
     MOZ_ASSERT(false);
-    bucket = 671;
-  } else if (IS_SSL_ERROR(err)) {
-    bucket = err - SSL_ERROR_BASE;
-    MOZ_ASSERT(bucket > 0);  // SSL_ERROR_EXPORT_ONLY_SERVER isn't used.
-  } else if (IS_SEC_ERROR(err)) {
-    bucket = (err - SEC_ERROR_BASE) + 256;
-  } else if ((err >= PR_NSPR_ERROR_BASE) && (err < PR_MAX_ERROR)) {
-    bucket = (err - PR_NSPR_ERROR_BASE) + 512;
-  } else if ((err >= mozilla::pkix::ERROR_BASE) &&
-             (err < mozilla::pkix::ERROR_LIMIT)) {
-    bucket = (err - mozilla::pkix::ERROR_BASE) + 640;
+    result.Assign("PR_Write_returned_0");
   } else {
-    bucket = 671;
+    result.Assign(PR_ErrorToName(err));
   }
 
   uint32_t flags = socketInfo->GetProviderFlags();
   if (!(flags & nsISocketProvider::IS_RETRY)) {
-    glean::ssl_handshake::result_first_try.AccumulateSingleSample(bucket);
+    glean::tls_handshake::result.Get("first_try"_ns, result).Add();
   }
 
   if (flags & nsISocketProvider::BE_CONSERVATIVE) {
-    glean::ssl_handshake::result_conservative.AccumulateSingleSample(bucket);
+    glean::tls_handshake::result.Get("conservative"_ns, result).Add();
   }
 
   switch (socketInfo->GetEchExtensionStatus()) {
     case EchExtensionStatus::kGREASE:
-      glean::ssl_handshake::result_ech_grease.AccumulateSingleSample(bucket);
+      glean::tls_handshake::result.Get("ech_grease"_ns, result).Add();
       break;
     case EchExtensionStatus::kReal:
-      glean::ssl_handshake::result_ech.AccumulateSingleSample(bucket);
+      glean::tls_handshake::result.Get("ech"_ns, result).Add();
       break;
     default:
       break;
   }
-  glean::ssl_handshake::result.AccumulateSingleSample(bucket);
+  glean::tls_handshake::result.Get("all"_ns, result).Add();
 
-  if (bucket == 0) {
+  if (bytesTransferred > 0) {
     nsCOMPtr<nsITransportSecurityInfo> securityInfo;
     if (NS_FAILED(socketInfo->GetSecurityInfo(getter_AddRefs(securityInfo))) ||
         !securityInfo) {
@@ -620,7 +609,10 @@ static void reportHandshakeResult(int32_t bytesTransferred, bool wasReading,
       TLSPrivacyResult |= usedPrivateDNS << 2;
       TLSPrivacyResult |= usedECH << 3;
 
-      glean::ssl_handshake::privacy.AccumulateSingleSample(TLSPrivacyResult);
+      glean::tls_handshake::privacy
+          .EnumGet(
+              static_cast<glean::tls_handshake::PrivacyLabel>(TLSPrivacyResult))
+          .Add();
     }
   }
 }

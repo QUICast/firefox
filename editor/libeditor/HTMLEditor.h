@@ -170,6 +170,9 @@ class HTMLEditor final : public EditorBase,
 
   bool IsEmpty() const final;
 
+  dom::EditContext* ComputeEditContext() const final;
+  bool IsFiringTextUpdate() const;
+
   bool CanPaste(nsIClipboard::ClipboardType aClipboardType) const final;
   using EditorBase::CanPaste;
 
@@ -426,9 +429,12 @@ class HTMLEditor final : public EditorBase,
   bool IsCSSEnabled() const { return mIsCSSPrefChecked; }
 
   /**
-   * Return true when editing host is not plaintext-only.
+   * Return true when editing host is not plaintext-only/EditContext.
+   *
+   * @param aEditingHost Pass editing host to avoid recomputing it.
    */
-  [[nodiscard]] bool IsStyleEditable() const;
+  [[nodiscard]] bool IsStyleEditable(
+      const Element* aEditingHost = nullptr) const;
 
   /**
    * Enable/disable object resizers for <img> elements, <table> elements,
@@ -747,8 +753,6 @@ class HTMLEditor final : public EditorBase,
    */
   bool IsTabbable() const { return IsInteractionAllowed(); }
 
-  dom::EditContext* GetEditContext() const override final;
-
   /**
    * NotifyEditingHostMaybeChanged() is called when new element becomes
    * contenteditable when the document already had contenteditable elements.
@@ -763,8 +767,8 @@ class HTMLEditor final : public EditorBase,
    * @parem aNodeInserted  Return the node which was inserted.
    */
   MOZ_CAN_RUN_SCRIPT  // USED_BY_COMM_CENTRAL
-      nsresult
-      InsertAsQuotation(const nsAString& aQuotedText, nsINode** aNodeInserted);
+      nsresult InsertAsQuotation(const nsAString& aQuotedText,
+                                 nsINode** aNodeInserted);
 
   MOZ_CAN_RUN_SCRIPT nsresult InsertHTMLAsAction(
       const nsAString& aInString, nsIPrincipal* aPrincipal = nullptr);

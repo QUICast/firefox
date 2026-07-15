@@ -179,6 +179,7 @@ class Registers {
 
   static const SetType NonAllocatableMask =
       (1U << Registers::zero) |  // Always be zero.
+      (1U << Registers::t6) |    // Scratch register.
       (1U << Registers::t7) |    // Scratch register.
       (1U << Registers::t8) |    // Scratch register.
       (1U << Registers::s8) |    // Saved scratch register.
@@ -504,9 +505,6 @@ inline FloatRegister::SetType
 FloatRegister::LiveAsIndexableSet<RegTypeName::Any>(SetType set) {
   return set;
 }
-
-// LoongArch doesn't have double registers that cannot be treated as float32.
-inline bool hasUnaliasedDouble() { return false; }
 
 // LoongArch doesn't have double registers that alias multiple floats.
 inline bool hasMultiAlias() { return false; }

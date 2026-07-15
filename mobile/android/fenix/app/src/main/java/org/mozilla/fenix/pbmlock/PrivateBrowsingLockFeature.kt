@@ -217,6 +217,13 @@ class PrivateBrowsingLockFeature(
         // this feature, because system dialogs (like permission requests) will trigger the
         // 'onPause' lifecycle event, but not the 'onStop'.
         openInFirefoxRequested = false
+
+        if (!isFeatureEnabled) return
+
+        // Lock when switching from private to normal mode
+        if (owner is Activity && !appStore.state.mode.isPrivate) {
+            maybeLockPrivateMode()
+        }
     }
 
     override fun onStop(owner: LifecycleOwner) {
@@ -227,7 +234,7 @@ class PrivateBrowsingLockFeature(
         // Lock when the activity hits onStop unless it's a config-change restart or comes from
         // a custom tab.
         if (owner is Activity && !owner.isChangingConfigurations && !openInFirefoxRequested) {
-            maybeLockPrivateModeOnStop()
+            maybeLockPrivateMode()
         }
     }
 
@@ -236,8 +243,7 @@ class PrivateBrowsingLockFeature(
         storage.startObservingSharedPrefs()
     }
 
-    private fun maybeLockPrivateModeOnStop() {
-        // When the app gets inactive with opened tabs, we lock the private mode.
+    private fun maybeLockPrivateMode() {
         if (browserStore.state.privateTabs.isNotEmpty()) {
             appStore.dispatch(
                 PrivateBrowsingLockAction.UpdatePrivateBrowsingLock(

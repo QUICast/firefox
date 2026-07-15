@@ -51,7 +51,7 @@ class IMEContentObserver final : public nsStubMutationObserver,
 
   IMEContentObserver();
 
-  NS_DECL_CYCLE_COLLECTING_ISUPPORTS
+  NS_DECL_CYCLE_COLLECTING_ISUPPORTS_FINAL
   NS_DECL_CYCLE_COLLECTION_CLASS_AMBIGUOUS(IMEContentObserver,
                                            nsIReflowObserver)
   NS_DECL_NSIMUTATIONOBSERVER_CHARACTERDATAWILLCHANGE
@@ -69,6 +69,11 @@ class IMEContentObserver final : public nsStubMutationObserver,
    * OnSelectionChange() is called when selection is changed in the editor.
    */
   void OnSelectionChange(dom::Selection& aSelection);
+
+  void EditContextTextChanged(uint32_t aRangeStart, uint32_t aRangeEnd,
+                              const nsAString& aText);
+  void EditContextSelectionChanged();
+  void EditContextPositionChanged();
 
   MOZ_CAN_RUN_SCRIPT bool OnMouseButtonEvent(nsPresContext& aPresContext,
                                              WidgetMouseEvent& aMouseEvent);
@@ -157,6 +162,7 @@ class IMEContentObserver final : public nsStubMutationObserver,
     return mEditorBase == &aEditorBase;
   }
   bool IsEditorHandlingEventForComposition() const;
+  bool IsPreparingTextEditor() const;
   bool KeepAliveDuringDeactive() const {
     return mIMENotificationRequests &&
            mIMENotificationRequests->contains(
@@ -185,7 +191,7 @@ class IMEContentObserver final : public nsStubMutationObserver,
    * MaybeNotifyCompositionEventHandled() posts composition event handled
    * notification into the pseudo queue.
    */
-  void MaybeNotifyCompositionEventHandled();
+  void MaybeNotifyCompositionEventHandled(EventMessage);
 
   /**
    * Following methods are called when the editor:
@@ -196,6 +202,14 @@ class IMEContentObserver final : public nsStubMutationObserver,
   void OnEditActionHandled();
   void BeforeEditAction();
   void CancelEditAction();
+
+  /**
+   * Return true if this is initialized for design mode.
+   */
+  [[nodiscard]] bool IsForDesignMode() const {
+    return mRootEditableNodeOrTextControlElement &&
+           mRootEditableNodeOrTextControlElement->IsDocument();
+  }
 
   /**
    * Return an Element if and only if this instance is observing the element.
@@ -245,6 +259,8 @@ class IMEContentObserver final : public nsStubMutationObserver,
                       EditorBase& aEditorBase);
   void OnIMEReceivedFocus();
   void Clear();
+
+  dom::Element* ComputeRootElement(PresShell* aPresShell) const;
 
   /**
    * Return true if aElement is observed by this instance.
@@ -485,7 +501,7 @@ class IMEContentObserver final : public nsStubMutationObserver,
     }
 
     NS_DECL_CYCLE_COLLECTION_CLASS(DocumentObserver)
-    NS_DECL_CYCLE_COLLECTING_ISUPPORTS
+    NS_DECL_CYCLE_COLLECTING_ISUPPORTS_FINAL
     NS_DECL_NSIDOCUMENTOBSERVER_BEGINUPDATE
     NS_DECL_NSIDOCUMENTOBSERVER_ENDUPDATE
 

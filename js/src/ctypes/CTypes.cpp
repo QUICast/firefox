@@ -3171,7 +3171,7 @@ static bool ConvertToJS(JSContext* cx, HandleObject typeObj,
 #define FLOAT_CASE(name, type, ffiType)     \
   case TYPE_##name: {                       \
     type value = *static_cast<type*>(data); \
-    result.setDouble(double(value));        \
+    result.setNumber(double(value));        \
     break;                                  \
   }
       CTYPES_FOR_EACH_FLOAT_TYPE(FLOAT_CASE)

@@ -845,6 +845,15 @@ JS_PUBLIC_API void js::gc::UnlockSweepingLock(JSRuntime* runtime) {
   runtime->gc.unlockSweepingLock();
 }
 
+bool js::IsGCParameterFuzzingSafe(JSGCParamKey key) {
+  switch (key) {
+    case JSGC_SEMISPACE_NURSERY_ENABLED:
+      return false;
+    default:
+      return true;
+  }
+}
+
 #ifdef JS_GC_ZEAL
 JS_PUBLIC_API void JS::GetGCZealBits(JSContext* cx, uint32_t* zealBits,
                                      uint32_t* frequency,

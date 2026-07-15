@@ -5,6 +5,7 @@
 #ifndef LAYOUT_STYLE_TYPEDOM_CSSMATHVALUE_H_
 #define LAYOUT_STYLE_TYPEDOM_CSSMATHVALUE_H_
 
+#include "mozilla/UniquePtr.h"
 #include "mozilla/dom/CSSMathClampBindingFwd.h"
 #include "mozilla/dom/CSSMathInvertBindingFwd.h"
 #include "mozilla/dom/CSSMathMaxBindingFwd.h"
@@ -22,8 +23,8 @@ class nsISupports;
 namespace mozilla {
 
 struct CSSPropertyId;
-template <class T>
-class Maybe;
+template <typename T>
+class MovingNotNull;
 struct StyleMathValue;
 
 namespace dom {
@@ -33,7 +34,6 @@ enum class CSSMathOperator : uint8_t;
 class CSSMathValue : public CSSNumericValue {
  public:
   enum class MathValueType {
-    Uninitialized,  // TODO: Remove once the implementation is complete.
     MathSum,
     MathProduct,
     MathNegate,
@@ -43,9 +43,11 @@ class CSSMathValue : public CSSNumericValue {
     MathClamp,
   };
 
-  explicit CSSMathValue(nsCOMPtr<nsISupports> aParent);
-
   CSSMathValue(nsCOMPtr<nsISupports> aParent, MathValueType aMathValueType);
+
+  CSSMathValue(nsCOMPtr<nsISupports> aParent,
+               MovingNotNull<UniquePtr<StyleNumericType>> aNumericType,
+               MathValueType aMathValueType);
 
   static RefPtr<CSSMathValue> Create(nsCOMPtr<nsISupports> aParent,
                                      const StyleMathValue& aMathValue);
@@ -118,9 +120,7 @@ class CSSMathValue : public CSSNumericValue {
                              const SerializationContext& aContext,
                              nsACString& aDest) const;
 
-  // TODO: This can be changed to return StyleMathValue directly once the
-  // Unitialized type is removed.
-  Maybe<StyleMathValue> ToStyleMathValue() const;
+  StyleMathValue ToStyleMathValue() const;
 
  protected:
   virtual ~CSSMathValue() = default;

@@ -12,9 +12,9 @@
 #define nsSimpleNestedURI_h_
 
 #include "nsCOMPtr.h"
-#include "nsSimpleURI.h"
 #include "nsINestedURI.h"
 #include "nsIURIMutator.h"
+#include "nsSimpleURI.h"
 
 namespace mozilla {
 namespace net {

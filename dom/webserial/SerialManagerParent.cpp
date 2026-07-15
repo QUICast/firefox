@@ -17,15 +17,20 @@
 #include "mozilla/dom/SerialPortParent.h"
 #include "mozilla/dom/WindowGlobalParent.h"
 #include "mozilla/ipc/Endpoint.h"
+#include "nsContentUtils.h"
 #include "nsIObserverService.h"
+#include "nsIScriptError.h"
 #include "nsThreadUtils.h"
 
 namespace mozilla::dom {
 
 NS_IMPL_ISUPPORTS(SerialDeviceChangeProxy, nsIObserver)
 
-SerialDeviceChangeProxy::SerialDeviceChangeProxy(uint64_t aBrowserId)
-    : mBrowserId(aBrowserId) {}
+SerialDeviceChangeProxy::SerialDeviceChangeProxy(
+    uint64_t aBrowserId, RefPtr<SerialPlatformService> aPlatformService)
+    : mBrowserId(aBrowserId), mPlatformService(std::move(aPlatformService)) {
+  MOZ_ASSERT(mPlatformService);
+}
 
 SerialDeviceChangeProxy::~SerialDeviceChangeProxy() = default;
 
@@ -58,12 +63,11 @@ void SerialDeviceChangeProxy::RevokeAllPorts() {
     actors.SwapElements(mPortActors);
   }
 
-  RefPtr<SerialPlatformService> service = SerialPlatformService::GetInstance();
-  if (!service || actors.IsEmpty()) {
+  if (actors.IsEmpty()) {
     return;
   }
 
-  service->IOThread()->Dispatch(
+  mPlatformService->IOThread()->Dispatch(
       NS_NewRunnableFunction("SerialDeviceChangeProxy::RevokeAllPorts",
                              [actors = std::move(actors)]() {
                                for (const auto& actor : actors) {
@@ -76,14 +80,9 @@ void SerialDeviceChangeProxy::RevokeAllPorts() {
 
 void SerialDeviceChangeProxy::OnPortConnected(
     const IPCSerialPortInfo& aPortInfo) {
-  RefPtr<SerialPlatformService> service = SerialPlatformService::GetInstance();
-  if (!service) {
-    return;
-  }
-
   auto actors = ActorsById(aPortInfo.id());
   if (!actors.IsEmpty()) {
-    service->IOThread()->Dispatch(
+    mPlatformService->IOThread()->Dispatch(
         NS_NewRunnableFunction("SerialDeviceChangeProxy::OnPortDisconnected",
                                [actors = std::move(actors)]() {
                                  for (const auto& actor : actors) {
@@ -94,14 +93,9 @@ void SerialDeviceChangeProxy::OnPortConnected(
 }
 
 void SerialDeviceChangeProxy::OnPortDisconnected(const nsAString& aPortId) {
-  RefPtr<SerialPlatformService> service = SerialPlatformService::GetInstance();
-  if (!service) {
-    return;
-  }
-
   auto actors = ActorsById(aPortId);
   if (!actors.IsEmpty()) {
-    service->IOThread()->Dispatch(
+    mPlatformService->IOThread()->Dispatch(
         NS_NewRunnableFunction("SerialDeviceChangeProxy::OnPortDisconnected",
                                [actors = std::move(actors)]() {
                                  for (const auto& actor : actors) {
@@ -153,8 +147,9 @@ void SerialManagerParent::Init(uint64_t aBrowserId) {
     (void)PSerialManagerParent::Send__delete__(this);
     return;
   }
-  mProxy = MakeRefPtr<SerialDeviceChangeProxy>(mBrowserId);
-  platformService->AddDeviceChangeObserver(mProxy);
+  mPlatformService = platformService;
+  mProxy = MakeRefPtr<SerialDeviceChangeProxy>(mBrowserId, mPlatformService);
+  mPlatformService->AddDeviceChangeObserver(mProxy);
   nsCOMPtr<nsIObserverService> obs = mozilla::services::GetObserverService();
   if (obs) {
     obs->AddObserver(mProxy, "serial-permission-revoked", false);
@@ -219,13 +214,12 @@ SerialManagerParent::CreateAndBindPortActor(const nsAString& aPortId) {
     return {};
   }
 
-  RefPtr<SerialPlatformService> service = SerialPlatformService::GetInstance();
   RefPtr<SerialDeviceChangeProxy> proxy = mProxy;
-  if (!service || !proxy) {
+  if (!proxy) {
     return {};
   }
 
-  service->IOThread()->Dispatch(NS_NewRunnableFunction(
+  mPlatformService->IOThread()->Dispatch(NS_NewRunnableFunction(
       "SerialPortParent::Bind",
       [portId = nsString(aPortId), browserId = mBrowserId, proxy = proxy,
        endpoint = std::move(parentEndpoint)]() mutable {
@@ -240,6 +234,14 @@ SerialManagerParent::CreateAndBindPortActor(const nsAString& aPortId) {
 
   return childEndpoint;
 }
+
+namespace {
+struct EnumeratePortsResult {
+  SerialPortList mPorts;
+  bool mLikelyAccessDenied = false;
+};
+using EnumeratePortsPromise = MozPromise<EnumeratePortsResult, nsresult, true>;
+}  // namespace
 
 mozilla::ipc::IPCResult SerialManagerParent::RecvRequestPort(
     nsTArray<IPCSerialPortFilter>&& aFilters, bool aAutoselect,
@@ -263,12 +265,6 @@ mozilla::ipc::IPCResult SerialManagerParent::RecvRequestPort(
 
   if (mChooserRequestInFlight) {
     // Only one chooser at a time per PSerialManager.
-    return IPC_OK();
-  }
-
-  RefPtr<SerialPlatformService> platformService =
-      SerialPlatformService::GetInstance();
-  if (!platformService) {
     return IPC_OK();
   }
 
@@ -296,26 +292,24 @@ mozilla::ipc::IPCResult SerialManagerParent::RecvRequestPort(
   // thread boundaries. Once the enumeration is done we hop back to the main
   // thread to construct the SerialPermissionRequest (which holds main-
   // thread-only Element/Principal references).
-  nsCOMPtr<nsISerialEventTarget> ioThread = platformService->IOThread();
+  nsCOMPtr<nsISerialEventTarget> ioThread = mPlatformService->IOThread();
 
-  InvokeAsync(
-      ioThread, __func__,
-      [service = RefPtr{platformService}] {
-        SerialPortList enumerated;
-        nsresult rv = service->EnumeratePorts(enumerated);
-        if (NS_WARN_IF(NS_FAILED(rv))) {
-          return MozPromise<SerialPortList, nsresult, true>::CreateAndReject(
-              rv, __func__);
-        }
-        return MozPromise<SerialPortList, nsresult, true>::CreateAndResolve(
-            std::move(enumerated), __func__);
-      })
+  InvokeAsync(ioThread, __func__,
+              [service = RefPtr{mPlatformService}] {
+                EnumeratePortsResult enumerated;
+                nsresult rv = service->EnumeratePorts(
+                    enumerated.mPorts, &enumerated.mLikelyAccessDenied);
+                if (NS_WARN_IF(NS_FAILED(rv))) {
+                  return EnumeratePortsPromise::CreateAndReject(rv, __func__);
+                }
+                return EnumeratePortsPromise::CreateAndResolve(
+                    std::move(enumerated), __func__);
+              })
       ->Then(
           GetCurrentSerialEventTarget(), __func__,
           [self = RefPtr{this}, filters = std::move(aFilters), aAutoselect,
            resolver = std::move(aResolver)](
-              MozPromise<SerialPortList, nsresult, true>::ResolveOrRejectValue&&
-                  aValue) mutable {
+              EnumeratePortsPromise::ResolveOrRejectValue&& aValue) mutable {
             if (aValue.IsReject()) {
               self->mChooserRequestInFlight = false;
               IPCRequestPortResult result;
@@ -325,9 +319,22 @@ mozilla::ipc::IPCResult SerialManagerParent::RecvRequestPort(
                                   mozilla::ipc::Endpoint<PSerialPortChild>()));
               return;
             }
-            SerialPortList ports = std::move(aValue.ResolveValue());
-            ApplyPortFilters(ports, filters);
-            self->StartChooserRequest(aAutoselect, std::move(ports),
+            EnumeratePortsResult enumerated = std::move(aValue.ResolveValue());
+            if (enumerated.mLikelyAccessDenied) {
+              uint64_t innerWindowId =
+                  static_cast<WindowGlobalParent*>(self->Manager())
+                      ->InnerWindowId();
+              nsContentUtils::ReportToConsoleByWindowID(
+                  u"WebSerial: No serial ports could be accessed. On "
+                  u"Linux this may mean the current user does not have "
+                  u"permission to access serial devices (for example, "
+                  u"is not in the \"dialout\" group), or the browser is "
+                  u"running in a Snap or Flatpak sandbox without "
+                  u"serial port access."_ns,
+                  nsIScriptError::warningFlag, "WebSerial"_ns, innerWindowId);
+            }
+            ApplyPortFilters(enumerated.mPorts, filters);
+            self->StartChooserRequest(aAutoselect, std::move(enumerated.mPorts),
                                       std::move(resolver));
           });
 
@@ -392,20 +399,14 @@ mozilla::ipc::IPCResult SerialManagerParent::DispatchTestOperation(
     return IPC_FAIL(this, "Testing not enabled");
   }
 
-  RefPtr<SerialPlatformService> platformService =
-      SerialPlatformService::GetInstance();
-  if (!platformService) {
-    aResolver(NS_ERROR_FAILURE);
-    return IPC_OK();
-  }
   RefPtr<TestSerialPlatformService> testService =
-      platformService->AsTestService();
+      mPlatformService->AsTestService();
   if (!testService) {
     aResolver(NS_ERROR_FAILURE);
     return IPC_OK();
   }
 
-  platformService->IOThread()->Dispatch(
+  mPlatformService->IOThread()->Dispatch(
       NS_NewRunnableFunction(aName, [testService, aWork, aResolver]() {
         aWork(testService);
         NS_DispatchToMainThread(NS_NewRunnableFunction(
@@ -466,11 +467,7 @@ void SerialManagerParent::ActorDestroy(ActorDestroyReason aWhy) {
   RefPtr<SerialDeviceChangeProxy> proxy = mProxy.forget();
   if (proxy) {
     proxy->RevokeAllPorts();
-    RefPtr<SerialPlatformService> platformService =
-        SerialPlatformService::GetInstance();
-    if (platformService) {
-      platformService->RemoveDeviceChangeObserver(proxy);
-    }
+    mPlatformService->RemoveDeviceChangeObserver(proxy);
 
     nsCOMPtr<nsIObserverService> obs = mozilla::services::GetObserverService();
     if (obs) {

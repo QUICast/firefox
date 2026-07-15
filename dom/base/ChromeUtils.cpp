@@ -75,6 +75,7 @@
 #include "nsIURIFixup.h"
 #include "nsIWidget.h"
 #include "nsNativeTheme.h"
+#include "nsPIDOMWindowInlines.h"
 #include "nsRFPTargetSetIDL.h"
 #include "nsString.h"
 #include "nsThreadUtils.h"
@@ -97,6 +98,10 @@
 
 #ifdef MOZ_WIDGET_ANDROID
 #  include "mozilla/java/GeckoAppShellWrappers.h"
+#endif
+
+#ifdef MOZ_WAYLAND
+#  include "mozilla/WidgetUtilsGtk.h"
 #endif
 
 namespace mozilla::dom {
@@ -2205,6 +2210,31 @@ already_AddRefed<Promise> ChromeUtils::RequestProcInfo(GlobalObject& aGlobal,
 
   // sending back the promise instance
   return domPromise.forget();
+}
+
+/* static */
+already_AddRefed<Promise> ChromeUtils::RequestXDGActivationToken(
+    GlobalObject& aGlobal, ErrorResult& aRv) {
+  nsCOMPtr<nsIGlobalObject> global = do_QueryInterface(aGlobal.GetAsSupports());
+  MOZ_ASSERT(global);
+
+  RefPtr<Promise> promise = Promise::Create(global, aRv);
+  if (aRv.Failed()) {
+    return nullptr;
+  }
+
+#ifdef MOZ_WAYLAND
+  if (RefPtr tokenPromise = widget::RequestWaylandFocusPromise()) {
+    tokenPromise->Then(
+        GetCurrentSerialEventTarget(), __func__,
+        [promise](const nsCString& aToken) { promise->MaybeResolve(aToken); },
+        [promise](bool) { promise->MaybeResolve(JS::NullHandleValue); });
+    return promise.forget();
+  }
+#endif
+
+  promise->MaybeResolve(JS::NullHandleValue);
+  return promise.forget();
 }
 
 /* static */

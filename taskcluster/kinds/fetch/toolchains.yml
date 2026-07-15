@@ -218,12 +218,12 @@ nsis-3.07-win:
         add-prefix: nsis/
 
 upx:
-    description: upx 5.1.1 source
+    description: upx 5.2.0 source
     fetch:
         type: static-url
-        url: https://github.com/upx/upx/releases/download/v5.1.1/upx-5.1.1-src.tar.xz
-        sha256: 8eb914115b306fd9fd2110bd3d27ddb8ae7c5a03bb965f7d10f046a3a4ff9dfe
-        size: 1435728
+        url: https://github.com/upx/upx/releases/download/v5.2.0/upx-5.2.0-src.tar.xz
+        sha256: af99e526d5759de94412aea1104d5e4ca406cb725295f8633ecc9e843dc1ce1c
+        size: 1764768
         artifact-name: upx-src.tar.zst
         strip-components: 1
         add-prefix: upx/
@@ -232,9 +232,9 @@ wine:
     description: wine source code
     fetch:
         type: static-url
-        url: https://dl.winehq.org/wine/source/11.x/wine-11.6.tar.xz
-        sha256: d49d166975478f609e6a9cdbda0a07c65a3b795e061fc454d3f1034c828d19e0
-        size: 43700900
+        url: https://dl.winehq.org/wine/source/11.x/wine-11.10.tar.xz
+        sha256: e4c35ebe26f4f8eef5f2143e24a1fb9fd103f1d46132ad4755479227d086b8e7
+        size: 45603064
         gpg-signature:
             sig-url: "{url}.sign"
             key-path: build/unix/build-gcc/DA23579A74D4AD9AF9D3F945CEFAC8EAAF17519D.key
@@ -242,12 +242,12 @@ wine:
         strip-components: 1
         add-prefix: wine-source/
 
-cbindgen-0.29.1:
-    description: cbindgen 0.29.1 source code
+cbindgen-0.29.4:
+    description: cbindgen 0.29.4 source code
     fetch:
         type: git
         repo: https://github.com/mozilla/cbindgen
-        revision: eef17769e2739ebb425fee0bbd88e6a52ac2a4e1
+        revision: b826cb8911488fe8a209d2b693492c0c673e8cca
     fetch-alias: cbindgen
 
 cctools-port:
@@ -322,7 +322,7 @@ gn:
     fetch:
         type: git
         repo: https://gn.googlesource.com/gn
-        revision: f98b6d7275c2e823e0983fa7f874facfe6980778
+        revision: 6f8c0328ee29c76e3566a216f2f0cf2992daa6ed
 
 grcov:
     description: grcov source code
@@ -337,8 +337,8 @@ sccache:
     fetch:
         type: git
         repo: https://github.com/mozilla/sccache
-        # 0.11.0 release
-        revision: 5709f069514a775ddb6604a6e9f5f5c91c0e9821
+        # 0.15.0 release
+        revision: c2e4b4ca035f91f8b63978afc8e2c71f174fe306
 
 fxc2:
     description: fxc2 source code
@@ -352,7 +352,7 @@ mingw-w64:
     fetch:
         type: git
         repo: https://git.code.sf.net/p/mingw-w64/mingw-w64
-        revision: 0636d42e1a9ee944e51170bd84701ef114d418ff
+        revision: 00349888007fef589c2604bf60d0ea14c0e2d606
 
 mingw-w64-trunk:
     description: mingw-w64 master branch source code
@@ -390,19 +390,12 @@ clang-14:
         repo: https://github.com/llvm/llvm-project
         revision: 4bc1d0b51c8e488d78ab69c8b19cfbcd1f7db6a4
 
-clang-17:
-    description: clang 17.0.6 source code
+clang-19:
+    description: clang 19.1.7 source code
     fetch:
         type: git
         repo: https://github.com/llvm/llvm-project
-        revision: 6009708b4367171ccdbf4b5905cb6a803753fe18
-
-clang-20:
-    description: clang 20.1.8 source code
-    fetch:
-        type: git
-        repo: https://github.com/llvm/llvm-project
-        revision: 87f0227cb60147a26a1eeb4fb06e3b505e9c7261
+        revision: cd708029e0b2869e80abe31ddb175f7c35361f90
 
 clang-21:
     description: clang 21.1.8 source code
@@ -412,11 +405,11 @@ clang-21:
         revision: 2078da43e25a4623cab2d0d60decddf709aaea28
 
 clang-22:
-    description: clang 22.1.6 source code
+    description: clang 22.1.8 source code
     fetch:
         type: git
         repo: https://github.com/llvm/llvm-project
-        revision: fc4aad7b5db3fff421df9a9637605b9ca5667881
+        revision: ca7933e47d3a3451d81e72ac174dcb5aa28b59d1
 
 clang-trunk:
     description: clang main branch source code
@@ -430,13 +423,13 @@ clang-trunk:
 # We build stable rust from source so the resulting compiler acts as a nightly
 # rust compiler, allowing to use unstable features like -Zbuild-std and
 # sanitizers.
-rust-1.92.0:
-    description: Rust 1.92.0 source code
+rust-1.94.1:
+    description: Rust 1.94.1 source code
     fetch:
         type: git
         include-dot-git: true
         repo: https://github.com/rust-lang/rust/
-        revision: ded5c06cf21d2b93bffd5d884aa6e96934ee4234
+        revision: e408947bfd200af42db322daf0fadfe7e26d3bd1
 
 rust-nightly:
     description: Rust nightly source code
@@ -476,23 +469,23 @@ win64-ninja:
         add-prefix: ninja/bin/
 
 macosx64-cmake:
-    description: cmake 4.2.3
+    description: cmake 4.3.3
     fetch:
         type: static-url
-        url: https://github.com/Kitware/CMake/releases/download/v4.3.1/cmake-4.3.1-macos-universal.tar.gz
-        sha256: c21fe4ade82a6a236aae0b9fbd8263c7ac6824a3fb32d03594456e30b06f3b7f
-        size: 87032455
+        url: https://github.com/Kitware/CMake/releases/download/v4.3.3/cmake-4.3.3-macos-universal.tar.gz
+        sha256: 5221a13450c7a0219a2a0d1b6c9085eb06489721fafd8488ccebc1584175d2fb
+        size: 87452640
         artifact-name: cmake.tar.zst
         strip-components: 3
         add-prefix: cmake/
 
 cmake:
-    description: cmake 4.3.1 source code
+    description: cmake 4.3.3 source code
     fetch:
         type: static-url
-        url: https://github.com/Kitware/CMake/releases/download/v4.3.1/cmake-4.3.1.tar.gz
-        sha256: 0798f4be7a1a406a419ac32db90c2956936fecbf50db3057d7af47d69a2d7edb
-        size: 12966559
+        url: https://github.com/Kitware/CMake/releases/download/v4.3.3/cmake-4.3.3.tar.gz
+        sha256: cba4bb7a44edf2877bb6f059932896383babe435b3a8c3b5df48b4aa41c9bb85
+        size: 12971567
         artifact-name: cmake.tar.zst
         strip-components: 1
         add-prefix: cmake/
@@ -519,12 +512,12 @@ fix-stacks:
         revision: 1fb1bcc8cb4dd65fbe342853954651563a0a88e7
 
 7zz:
-    description: 7-zip 26.00 source code
+    description: 7-zip 26.01 source code
     fetch:
         type: static-url
-        url: https://www.7-zip.org/a/7z2600-src.tar.xz
-        sha256: 3e596155744af055a77fc433c703d54e3ea9212246287b5b1436a6beac060f16
-        size: 1538112
+        url: https://github.com/ip7z/7zip/releases/download/26.01/7z2601-src.tar.xz
+        sha256: b2389e0e930b2f9a348cf0fe7d9870a46482a8ec044ee0bdf42e2136db31c3d6
+        size: 1543032
         artifact-name: 7z-src.tar.zst
         add-prefix: 7zz/
 
@@ -581,7 +574,7 @@ samply:
     fetch:
         type: git
         repo: https://github.com/mstange/samply
-        revision: c947d6339a9bea6c5659c6317796c5061d0fd7e6
+        revision: 49c072db1a88165c9ba92b7b0ee0d425bb6e7231
 
 nodejs-12-linux64:
     description: nodejs 12 for x64 linux
@@ -700,12 +693,12 @@ pkgconf:
         strip-components: 1
         add-prefix: pkgconf/
 
-afl-plus-plus-4.0:
-    description: AFL++ 4.x source
+afl-plus-plus:
+    description: AFL++ 5.x source
     fetch:
         type: git
         repo: https://github.com/AFLplusplus/AFLplusplus
-        revision: e5a8ba39ecf97d05e286fdd4e01da96554dbf64f
+        revision: 4d0ec73b3eaad851402f18d63ea8344e9890d458
 
 cargo-vet:
     description: cargo-vet source
@@ -719,7 +712,7 @@ symbol-scrapers:
     fetch:
         type: git
         repo: https://github.com/mozilla/symbol-scrapers
-        revision: 54402d045d400f79f10de9163c0071d64c449f3e
+        revision: 7070f9a4fa7a71413d84c80b3a53ae233e72ee55
 
 xz:
     description: xz 5.8.3 source code
@@ -823,18 +816,75 @@ dxc-src:
         revision: 9c26d96149925760ca86cd43610d9d32b6ec70c2
 
 jj:
+    # Keep minimum supported version in sync:
+    # https://searchfox.org/firefox-main/rev/d154a3eb431156b2bd63d3d5f96c82655b4e782d/python/mozversioncontrol/mozversioncontrol/repo/jj.py#20
     description: jj 0.38.0 source code
     fetch:
         type: git
         repo: https://github.com/jj-vcs/jj
         revision: 2508982cde5c7e4db0933e0b6469f9e778e71e28
 
+searchfox-cli:
+    description: searchfox-cli 0.18.0 source code
+    fetch:
+        type: static-url
+        url: https://crates.io/api/v1/crates/searchfox-cli/0.18.0/download
+        sha256: e284bf3dddb000af548c5651f0f62be2c1a1c8edb25590319f185f8032b0b6be
+        size: 26771
+        artifact-name: searchfox-cli.tar.zst
+        strip-components: 1
+        add-prefix: searchfox-cli/
+
+socorro-cli:
+    description: socorro-cli 0.6.0 source code
+    fetch:
+        type: static-url
+        url: https://crates.io/api/v1/crates/socorro-cli/0.6.0/download
+        sha256: 44536ae58eb5a3c612becd0859f1e83ed0d0c4345f429e0380aed17995aecaf4
+        size: 72287
+        artifact-name: socorro-cli.tar.zst
+        strip-components: 1
+        add-prefix: socorro-cli/
+
+stmo-cli:
+    description: stmo-cli 0.8.0 source code
+    fetch:
+        type: static-url
+        url: https://crates.io/api/v1/crates/stmo-cli/0.8.0/download
+        sha256: 32b826cfbf6a29801a4fe2c46d113650ea79ca73ce8040cab60e89d0bec9e4e0
+        size: 73054
+        artifact-name: stmo-cli.tar.zst
+        strip-components: 1
+        add-prefix: stmo-cli/
+
+treeherder-cli:
+    description: treeherder-cli 0.2.13 source code
+    fetch:
+        type: static-url
+        url: https://crates.io/api/v1/crates/treeherder-cli/0.2.13/download
+        sha256: 05ddb3b2954bf5441b167e2057c98f81c536af5ccf89aa61e21093b39cbafbe1
+        size: 49498
+        artifact-name: treeherder-cli.tar.zst
+        strip-components: 1
+        add-prefix: treeherder-cli/
+
+webspec-index:
+    description: webspec-index 0.10.0 source code
+    fetch:
+        type: static-url
+        url: https://crates.io/api/v1/crates/webspec-index/0.10.0/download
+        sha256: 5b89be8299e086f740e30e6bf028df3501ea7ce219cf49e32b987f902aa68645
+        size: 146433
+        artifact-name: webspec-index.tar.zst
+        strip-components: 1
+        add-prefix: webspec-index/
+
 firefox-profiler:
     description: firefox profiler source code
     fetch:
         type: git
         repo: https://github.com/firefox-devtools/profiler
-        revision: 8c0afb1f47190487b08ea2561ae3cc0f7a5d31e9
+        revision: 03c34e0b5931ea8e25b89e038c6e3be87763747d
 
 # See https://learn.microsoft.com/en-us/windows/apps/windows-app-sdk/downloads
 # We can't catch regressions from these updates in CI. Testing should focus on
@@ -844,7 +894,7 @@ windowsappsdk-redist:
     description: Windows App SDK Redistributable
     fetch:
         type: static-url
-        url: https://aka.ms/windowsappsdk/2.1/2.1.3/Microsoft.WindowsAppRuntime.Redist.2.1.zip
-        sha256: fe5d0ce5f329f4c242da878220f7bb52310501b0f8a980b72743fdb1415ac89a
-        size: 470169456
+        url: https://aka.ms/windowsappsdk/2.2/2.2.0/Microsoft.WindowsAppRuntime.Redist.2.2.zip
+        sha256: ab078d5b1d730f093ed4e1a33d0e709d1dbca85fa4a10f546cc6824e3b48057f
+        size: 478796379
         artifact-name: Microsoft.WindowsAppRuntime.Redist.tar.zst

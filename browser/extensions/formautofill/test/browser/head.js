@@ -353,10 +353,13 @@ async function ensureCreditCardDialogNotClosed(win) {
   win.removeEventListener("unload", unloadHandler);
 }
 
-function getDisplayedPopupItems(
-  browser,
-  selector = ".autocomplete-richlistitem"
-) {
+function getDisplayedPopupItems(browser, selector = ".autocomplete-row-item") {
+  const baseSelector = ".autocomplete-row-item";
+  const originalType = selector.includes("[originaltype=")
+    ? selector.replace(".autocomplete-richlistitem", "").trim()
+    : "";
+  selector = baseSelector + originalType;
+
   info("getDisplayedPopupItems");
   const {
     autoCompletePopup: { richlistbox: itemsBox },
@@ -364,6 +367,18 @@ function getDisplayedPopupItems(
   const listItemElems = itemsBox.querySelectorAll(selector);
 
   return [...listItemElems].filter(item => !item.hasAttribute("collapsed"));
+}
+
+function getACItemLabel(item) {
+  return item.querySelector("autocomplete-row-item").label;
+}
+
+function getACItemValue(item) {
+  return item.querySelector("autocomplete-row-item").value;
+}
+
+function getACItemIcon(item) {
+  return item.querySelector("autocomplete-row-item").icon;
 }
 
 async function sleep(ms = 500) {
@@ -698,7 +713,9 @@ async function waitForPopupEnabled(browser) {
   await BrowserTestUtils.waitForMutationCondition(
     itemsBox,
     { subtree: true, attributes: true, attributeFilter: ["disabled"] },
-    () => !itemsBox.querySelectorAll(".autocomplete-richlistitem")[0].disabled
+    () => {
+      return !itemsBox.querySelectorAll(".autocomplete-row-item")[0].disabled;
+    }
   );
 }
 
@@ -879,7 +896,7 @@ async function clickDoorhangerButton(buttonType, index = 0) {
   } else if (buttonType == MENU_BUTTON) {
     // Click the dropmarker arrow and wait for the menu to show up.
     info("expecting notification menu button present");
-    await BrowserTestUtils.waitForCondition(() => getNotification().menubutton);
+    await TestUtils.waitForCondition(() => getNotification().menubutton);
     await sleep(2000); // menubutton needs extra time for binding
     let notification = getNotification();
 
@@ -1688,7 +1705,7 @@ async function add_heuristic_tests(
       info(`Waiting for expected section count`);
       const actor =
         browser.browsingContext.currentWindowGlobal.getActor("FormAutofill");
-      await BrowserTestUtils.waitForCondition(() => {
+      await TestUtils.waitForCondition(() => {
         const sections = Array.from(actor.sectionsByRootId.values()).flat();
         return sections.length == testPattern.expectedResult.length;
       }, "Expected section count.");

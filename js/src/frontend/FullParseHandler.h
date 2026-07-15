@@ -691,20 +691,12 @@ class FullParseHandler {
                                  moduleSpec, importAttributeList);
   }
 
-  BinaryNodeResult newImportDeclaration(Node importSpecSet, Node moduleRequest,
+  BinaryNodeResult newImportDeclaration(Node importClause, Node moduleRequest,
+                                        ImportPhase phase,
                                         const TokenPos& pos) {
-    return newResult<BinaryNode>(ParseNodeKind::ImportDecl, pos, importSpecSet,
-                                 moduleRequest);
+    return newResult<ImportDeclarationNode>(pos, importClause, moduleRequest,
+                                            phase);
   }
-
-#ifdef ENABLE_SOURCE_PHASE_IMPORTS
-  BinaryNodeResult newImportSourceDeclaration(Node importedBinding,
-                                              Node moduleRequest,
-                                              const TokenPos& pos) {
-    return newResult<BinaryNode>(ParseNodeKind::ImportSourceDecl, pos,
-                                 importedBinding, moduleRequest);
-  }
-#endif
 
   BinaryNodeResult newImportSpec(Node importNameNode, Node bindingName) {
     return newBinary(ParseNodeKind::ImportSpec, importNameNode, bindingName);
@@ -758,8 +750,8 @@ class FullParseHandler {
   }
 
   BinaryNodeResult newCallImport(NullaryNodeType importHolder, Node singleArg,
-                                 ParseNodeKind kind) {
-    return newResult<BinaryNode>(kind, importHolder, singleArg);
+                                 ImportPhase phase) {
+    return newResult<CallImportNode>(importHolder, singleArg, phase);
   }
 
   BinaryNodeResult newCallImportSpec(Node specifierArg, Node optionalArg) {
@@ -958,7 +950,6 @@ class FullParseHandler {
   }
   void setFunctionBox(FunctionNodeType funNode, FunctionBox* funbox) {
     funNode->setFunbox(funbox);
-    funbox->functionNode = funNode;
   }
   void addFunctionFormalParameter(FunctionNodeType funNode, Node argpn) {
     addList(/* list = */ funNode->body(), /* kid = */ argpn);

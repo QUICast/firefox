@@ -5,20 +5,19 @@
 #ifndef TSFTextStoreBase_h
 #define TSFTextStoreBase_h
 
-#include "nsIWidget.h"
-#include "nsWindow.h"
+#include <msctf.h>
+#include <textstor.h>
+
 #include "TSFUtils.h"  // for inputscope.h with the hack for MinGW
 #include "WinUtils.h"
 #include "WritingModes.h"
-
 #include "mozilla/Maybe.h"
 #include "mozilla/RefPtr.h"
 #include "mozilla/TextEventDispatcher.h"
 #include "mozilla/WritingModes.h"
 #include "mozilla/widget/IMEData.h"
-
-#include <msctf.h>
-#include <textstor.h>
+#include "nsIWidget.h"
+#include "nsWindow.h"
 
 struct ITfDocumentMgr;
 class nsWindow;

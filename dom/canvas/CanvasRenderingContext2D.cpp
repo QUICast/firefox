@@ -5,6 +5,7 @@
 #include "CanvasRenderingContext2D.h"
 
 #include <algorithm>
+#include <numbers>
 
 #include "CanvasImageCache.h"
 #include "CanvasUtils.h"
@@ -1024,14 +1025,12 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(CanvasRenderingContext2D)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mCanvasElement)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mOffscreenCanvas)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mDocShell)
-  for (uint32_t i = 0; i < tmp->mStyleStack.Length(); i++) {
-    ImplCycleCollectionUnlink(tmp->mStyleStack[i].patternStyles[Style::STROKE]);
-    ImplCycleCollectionUnlink(tmp->mStyleStack[i].patternStyles[Style::FILL]);
-    ImplCycleCollectionUnlink(
-        tmp->mStyleStack[i].gradientStyles[Style::STROKE]);
-    ImplCycleCollectionUnlink(tmp->mStyleStack[i].gradientStyles[Style::FILL]);
-    if (auto* autoSVGFiltersObserver =
-            tmp->mStyleStack[i].autoSVGFiltersObserver.get()) {
+  for (ContextState& state : tmp->mStyleStack) {
+    ImplCycleCollectionUnlink(state.patternStyles[Style::STROKE]);
+    ImplCycleCollectionUnlink(state.patternStyles[Style::FILL]);
+    ImplCycleCollectionUnlink(state.gradientStyles[Style::STROKE]);
+    ImplCycleCollectionUnlink(state.gradientStyles[Style::FILL]);
+    if (auto* autoSVGFiltersObserver = state.autoSVGFiltersObserver.get()) {
       /*
        * XXXjwatt: I don't think this is doing anything useful.  All we do under
        * this function is clear a raw C-style (i.e. not strong) pointer.  That's
@@ -1042,7 +1041,7 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(CanvasRenderingContext2D)
        */
       autoSVGFiltersObserver->Detach();
     }
-    ImplCycleCollectionUnlink(tmp->mStyleStack[i].autoSVGFiltersObserver);
+    ImplCycleCollectionUnlink(state.autoSVGFiltersObserver);
   }
   NS_IMPL_CYCLE_COLLECTION_UNLINK_PRESERVED_WRAPPER
   NS_IMPL_CYCLE_COLLECTION_UNLINK_WEAK_PTR
@@ -1052,20 +1051,16 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(CanvasRenderingContext2D)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mCanvasElement)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mOffscreenCanvas)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mDocShell)
-  for (uint32_t i = 0; i < tmp->mStyleStack.Length(); i++) {
-    ImplCycleCollectionTraverse(
-        cb, tmp->mStyleStack[i].patternStyles[Style::STROKE],
-        "Stroke CanvasPattern");
-    ImplCycleCollectionTraverse(cb,
-                                tmp->mStyleStack[i].patternStyles[Style::FILL],
+  for (ContextState& state : tmp->mStyleStack) {
+    ImplCycleCollectionTraverse(cb, state.patternStyles[Style::STROKE],
+                                "Stroke CanvasPattern");
+    ImplCycleCollectionTraverse(cb, state.patternStyles[Style::FILL],
                                 "Fill CanvasPattern");
-    ImplCycleCollectionTraverse(
-        cb, tmp->mStyleStack[i].gradientStyles[Style::STROKE],
-        "Stroke CanvasGradient");
-    ImplCycleCollectionTraverse(cb,
-                                tmp->mStyleStack[i].gradientStyles[Style::FILL],
+    ImplCycleCollectionTraverse(cb, state.gradientStyles[Style::STROKE],
+                                "Stroke CanvasGradient");
+    ImplCycleCollectionTraverse(cb, state.gradientStyles[Style::FILL],
                                 "Fill CanvasGradient");
-    ImplCycleCollectionTraverse(cb, tmp->mStyleStack[i].autoSVGFiltersObserver,
+    ImplCycleCollectionTraverse(cb, state.autoSVGFiltersObserver,
                                 "RAII SVG Filters Observer");
   }
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
@@ -1236,6 +1231,12 @@ CanvasRenderingContext2D::~CanvasRenderingContext2D() {
   RemovePostRefreshObserver();
   RemoveShutdownObserver();
   ResetBitmap();
+
+  for (ContextState& state : mStyleStack) {
+    if (auto* obs = state.autoSVGFiltersObserver.get()) {
+      obs->Detach();
+    }
+  }
 
   sNumLivingContexts.set(sNumLivingContexts.get() - 1);
   if (sNumLivingContexts.get() == 0 && sErrorTarget.get()) {
@@ -2594,7 +2595,7 @@ already_AddRefed<CanvasGradient> CanvasRenderingContext2D::CreateRadialGradient(
 
 already_AddRefed<CanvasGradient> CanvasRenderingContext2D::CreateConicGradient(
     double aAngle, double aCx, double aCy) {
-  double adjustedStartAngle = aAngle + M_PI / 2.0;
+  double adjustedStartAngle = aAngle + std::numbers::pi / 2.0;
   return MakeAndAddRef<CanvasConicGradient>(this, adjustedStartAngle,
                                             Point(aCx, aCy));
 }
@@ -4546,12 +4547,14 @@ bool CanvasRenderingContext2D::SetFontInternalDisconnected(
 }
 
 void CanvasRenderingContext2D::UpdateSpacing() {
-  const auto& state = CurrentState();
-  if (!state.letterSpacingStr.IsEmpty()) {
-    SetLetterSpacing(state.letterSpacingStr);
+  // Make local copies because the calls that follow can flush.
+  auto letterSpacingStr = CurrentState().letterSpacingStr;
+  auto wordSpacingStr = CurrentState().wordSpacingStr;
+  if (!letterSpacingStr.IsEmpty()) {
+    SetLetterSpacing(letterSpacingStr);
   }
-  if (!state.wordSpacingStr.IsEmpty()) {
-    SetWordSpacing(state.wordSpacingStr);
+  if (!wordSpacingStr.IsEmpty()) {
+    SetWordSpacing(wordSpacingStr);
   }
 }
 
@@ -4684,7 +4687,7 @@ struct MOZ_STACK_CLASS CanvasBidiProcessor final
     }
   }
 
-  class PropertyProvider : public gfxTextRun::PropertyProvider {
+  class PropertyProvider final : public gfxTextRun::PropertyProvider {
    public:
     explicit PropertyProvider(const CanvasBidiProcessor& aProcessor)
         : mProcessor(aProcessor) {}
@@ -4724,6 +4727,10 @@ struct MOZ_STACK_CLASS CanvasBidiProcessor final
 
     mozilla::StyleHyphens GetHyphensOption() const {
       return mozilla::StyleHyphens::None;
+    }
+
+    nscoord LetterSpacing() const {
+      return NSToCoordRound(mProcessor.mLetterSpacing);
     }
 
     // Methods only used when hyphenation is active, not relevant to canvas2d:
@@ -4962,14 +4969,15 @@ struct MOZ_STACK_CLASS CanvasBidiProcessor final
       strokeOpts.mMiterLimit = state.miterLimit;
       strokeOpts.mDashLength = state.dash.Length();
       strokeOpts.mDashPattern =
-          (strokeOpts.mDashLength > 0) ? state.dash.Elements() : 0;
+          (strokeOpts.mDashLength > 0) ? state.dash.Elements() : nullptr;
       strokeOpts.mDashOffset = state.dashOffset;
 
       params.drawMode = DrawMode::GLYPH_STROKE;
       params.strokeOpts = &strokeOpts;
     }
 
-    mTextRun->Draw(gfxTextRun::Range(mTextRun.get()), point, params);
+    imgDrawingParams dummy;
+    mTextRun->Draw(gfxTextRun::Range(mTextRun.get()), point, params, dummy);
   }
 
   // current text run
@@ -5759,7 +5767,7 @@ static Matrix ComputeRotationMatrix(gfxFloat aRotatedWidth,
       aDegrees == VideoRotation::kDegree_270) {
     std::swap(shiftVideoCenterToOrigin.x, shiftVideoCenterToOrigin.y);
   }
-  auto angle = static_cast<double>(aDegrees) / 180.0 * M_PI;
+  auto angle = static_cast<double>(aDegrees) / 180.0 * std::numbers::pi;
   Matrix rotation = Matrix::Rotation(static_cast<gfx::Float>(angle));
   Point shiftLeftTopToOrigin(aRotatedWidth / 2.0, aRotatedHeight / 2.0);
   return rotation.PreTranslate(shiftVideoCenterToOrigin)
@@ -6255,19 +6263,18 @@ void CanvasRenderingContext2D::DrawDirectlyToCanvas(
 
   if (mContextProperties != CanvasContextProperties::None &&
       aImage.mImgContainer->GetType() == imgIContainer::TYPE_VECTOR) {
-    SVGEmbeddingContextPaint* contextPaint =
-        svgContext.GetOrCreateContextPaint();
+    Maybe<nscolor> fill, stroke;
     const ContextState& state = CurrentState();
 
     if (mContextProperties != CanvasContextProperties::Fill &&
         state.StyleIsColor(Style::STROKE)) {
-      contextPaint->SetStroke(state.colorStyles[Style::STROKE]);
+      stroke = Some(state.colorStyles[Style::STROKE]);
     }
-
     if (mContextProperties != CanvasContextProperties::Stroke &&
         state.StyleIsColor(Style::FILL)) {
-      contextPaint->SetFill(state.colorStyles[Style::FILL]);
+      fill = Some(state.colorStyles[Style::FILL]);
     }
+    svgContext.SetContextPaint(fill, stroke);
   }
 
   auto result = aImage.mImgContainer->Draw(

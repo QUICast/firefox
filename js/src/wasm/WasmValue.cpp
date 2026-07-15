@@ -829,14 +829,14 @@ bool ToJSValue_i64(JSContext* cx, int64_t src, MutableHandleValue dst) {
 
 template <typename Debug = NoDebug>
 bool ToJSValue_f32(JSContext* cx, float src, MutableHandleValue dst) {
-  dst.set(JS::CanonicalizedDoubleValue(src));
+  dst.set(DoubleValue(src));
   Debug::print(src);
   return true;
 }
 
 template <typename Debug = NoDebug>
 bool ToJSValue_f64(JSContext* cx, double src, MutableHandleValue dst) {
-  dst.set(JS::CanonicalizedDoubleValue(src));
+  dst.set(DoubleValue(src));
   Debug::print(src);
   return true;
 }
@@ -977,7 +977,11 @@ Value wasm::UnboxFuncRef(FuncRef val) {
 
 #ifdef DEBUG
 void wasm::AssertEdgeSourceNotInsideNursery(void* vp) {
-  Nursery& nursery = TlsContext.get()->runtime()->gc.nursery();
-  MOZ_ASSERT(!nursery.isInside(vp));
+  JSContext* cx = TlsContext.get();
+  if (cx) {
+    // We can't check this when called off thread.
+    Nursery& nursery = cx->runtime()->gc.nursery();
+    MOZ_ASSERT(!nursery.isInside(vp));
+  }
 }
 #endif

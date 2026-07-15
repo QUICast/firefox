@@ -12,7 +12,6 @@
 #include "gc/GCContext.h"
 #include "gc/PublicIterators.h"
 #include "jit/AliasAnalysis.h"
-#include "jit/AlignmentMaskAnalysis.h"
 #include "jit/AutoWritableJitCode.h"
 #include "jit/BacktrackingAllocator.h"
 #include "jit/BaselineFrame.h"
@@ -226,6 +225,14 @@ bool JitRuntime::generateTrampolines(JSContext* cx) {
   JitSpew(JitSpew_Codegen, "# Emitting Ion generic construct stub");
   generateIonGenericCallStub(masm, IonGenericCallKind::Construct);
   rangeRecorder.recordOffset("Trampoline: IonGenericConstruct");
+
+  JitSpew(JitSpew_Codegen, "# Emitting megamorphic load stub");
+  generateMegamorphicLoadStub(masm);
+  rangeRecorder.recordOffset("Trampoline: MegamorphicLoad");
+
+  JitSpew(JitSpew_Codegen, "# Emitting permissive megamorphic load stub");
+  generateMegamorphicLoadStubPermissive(masm);
+  rangeRecorder.recordOffset("Trampoline: MegamorphicLoadPermissive");
 
   JitSpew(JitSpew_Codegen, "# Emitting trampoline natives");
   TrampolineNativeJitEntryOffsets nativeOffsets;
@@ -845,7 +852,7 @@ void IonScript::copyICEntries(const uint32_t* icEntries) {
 }
 
 const SafepointIndex* IonScript::getSafepointIndex(uint32_t disp) const {
-  MOZ_ASSERT(numSafepointIndices() > 0);
+  MOZ_RELEASE_ASSERT(numSafepointIndices() > 0);
 
   const SafepointIndex* table = safepointIndices();
   if (numSafepointIndices() == 1) {
@@ -859,7 +866,7 @@ const SafepointIndex* IonScript::getSafepointIndex(uint32_t disp) const {
   uint32_t max = table[maxEntry].displacement();
 
   // Raise if the element is not in the list.
-  MOZ_ASSERT(min <= disp && disp <= max);
+  MOZ_RELEASE_ASSERT(min <= disp && disp <= max);
 
   // Approximate the location of the FrameInfo.
   size_t guess = (disp - min) * (maxEntry - minEntry) / (max - min) + minEntry;
@@ -1149,19 +1156,6 @@ bool OptimizeMIR(MIRGenerator* mir) {
     }
   }
 
-  if (mir->optimizationInfo().amaEnabled()) {
-    AlignmentMaskAnalysis ama(graph);
-    if (!ama.analyze()) {
-      return false;
-    }
-    mir->spewPass("Alignment Mask Analysis");
-    AssertExtendedGraphCoherency(graph);
-
-    if (mir->shouldCancel("Alignment Mask Analysis")) {
-      return false;
-    }
-  }
-
   ValueNumberer gvn(mir, graph);
 
   // Alias analysis is required for LICM and GVN so that we don't move
@@ -1223,6 +1217,18 @@ bool OptimizeMIR(MIRGenerator* mir) {
     AssertExtendedGraphCoherency(graph);
 
     if (mir->shouldCancel("GVN")) {
+      return false;
+    }
+  }
+
+  if (!JitOptions.disableCanonicalizeNaNAtUses && !mir->compilingWasm()) {
+    if (!CanonicalizeNaNAtUses(mir, graph)) {
+      return false;
+    }
+    mir->spewPass("CanonicalizeNaN");
+    AssertExtendedGraphCoherency(graph);
+
+    if (mir->shouldCancel("CanonicalizeNaN")) {
       return false;
     }
   }
@@ -1369,7 +1375,7 @@ bool OptimizeMIR(MIRGenerator* mir) {
 
   // EAA, but only for wasm; it appears to be of minimal benefit for JS inputs.
   if (mir->compilingWasm() && mir->optimizationInfo().eaaEnabled()) {
-    EffectiveAddressAnalysis eaa(mir, graph);
+    EffectiveAddressAnalysis eaa(graph);
     JitSpew(JitSpew_EAA, "\n");
     if (!eaa.analyze()) {
       return false;
@@ -1469,6 +1475,13 @@ bool OptimizeMIR(MIRGenerator* mir) {
       if (!gvn.run(ValueNumberer::DontUpdateAliasAnalysis)) {
         return false;
       }
+
+      if (!EliminatePhis(mir, graph, ConservativeObservability)) {
+        return false;
+      }
+
+      AssertExtendedGraphCoherency(graph);
+
       // And tidy up any empty blocks.
       bool blocksFolded;
       if (!FoldEmptyBlocks(graph, &blocksFolded)) {

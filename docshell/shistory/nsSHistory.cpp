@@ -5,6 +5,7 @@
 #include "nsSHistory.h"
 
 #include <algorithm>
+#include <numbers>
 
 #include "nsContentUtils.h"
 #include "nsCOMArray.h"
@@ -22,6 +23,7 @@
 #include "nsISHistoryListener.h"
 #include "nsIURI.h"
 #include "nsIXULRuntime.h"
+#include "nsPIDOMWindowInlines.h"
 #include "nsNetUtil.h"
 #include "nsTHashMap.h"
 #include "SessionHistoryEntry.h"
@@ -329,7 +331,7 @@ uint32_t nsSHistory::CalcMaxTotalViewers() {
   // except that we divide the final memory calculation by 4, since
   // we assume each DocumentViewer takes on average 4MB
   uint32_t viewers = 0;
-  double x = std::log(kBytesD) / std::log(2.0) - MAX_TOTAL_VIEWERS_BIAS;
+  double x = std::log(kBytesD) / std::numbers::ln2 - MAX_TOTAL_VIEWERS_BIAS;
   if (x > 0) {
     viewers = (uint32_t)(x * x - x + 2.001);  // add .001 for rounding
     viewers /= 4;
@@ -1052,10 +1054,10 @@ static void LogEntry(SessionHistoryEntry* aEntry, int32_t aIndex,
            uri->GetSpecOrDefault().get()));
   MOZ_LOG(gSHLog, LogLevel::Debug,
           (" %s%s  Title = %s\n", prefix.get(), childCount > 0 ? "|" : " ",
-           NS_LossyConvertUTF16toASCII(title).get()));
+           NS_ConvertUTF16toUTF8(title).get()));
   MOZ_LOG(gSHLog, LogLevel::Debug,
           (" %s%s  Name = %s\n", prefix.get(), childCount > 0 ? "|" : " ",
-           NS_LossyConvertUTF16toASCII(name).get()));
+           NS_ConvertUTF16toUTF8(name).get()));
   MOZ_LOG(gSHLog, LogLevel::Debug,
           (" %s%s  Transient = %s\n", prefix.get(), childCount > 0 ? "|" : " ",
            aEntry->IsTransient() ? "true" : "false"));
@@ -1619,13 +1621,15 @@ bool nsSHistory::MaybeCheckUnloadingIsCanceled(
   windowGlobalParent->CheckIfUnloadingIsCanceledForTraversable(
       maybeInterceptedLoadState, action,
       [action, loadResults = CopyableTArray(aLoadResults), windowGlobalParent,
-       aResolver = std::move(aResolver), id = traversable->Id(),
-       maybeInterceptedLoadState](
+       aResolver = std::move(aResolver), maybeInterceptedLoadState,
+       traversableId = traversable->Id(),
+       contentParent = RefPtr{traversable->GetContentParent()}](
           nsIDocumentViewer::PermitUnloadResult aResult) mutable {
         if (aResult != nsIDocumentViewer::PermitUnloadResult::eContinue) {
-          loadResults.RemoveElementsBy([id](const auto& result) {
-            return result.mBrowsingContext->Id() == id;
-          });
+          loadResults.RemoveElementsBy(
+              [id = traversableId](const auto& result) {
+                return result.mBrowsingContext->Id() == id;
+              });
 
           aResolver(loadResults, aResult);
           return;
@@ -1633,8 +1637,8 @@ bool nsSHistory::MaybeCheckUnloadingIsCanceled(
 
         // If we didn't intercept the navigation, the load state wasn't used so
         // we can take it out of pending.
-        if (ContentParent* cp = windowGlobalParent->GetContentParent()) {
-          RefPtr clearedPendingState = cp->TakePendingLoadStateForId(
+        if (contentParent) {
+          RefPtr clearedPendingState = contentParent->TakePendingLoadStateForId(
               maybeInterceptedLoadState->GetLoadIdentifier());
           MOZ_DIAGNOSTIC_ASSERT(!clearedPendingState ||
                                 clearedPendingState ==

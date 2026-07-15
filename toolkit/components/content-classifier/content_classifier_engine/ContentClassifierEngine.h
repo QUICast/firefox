@@ -57,11 +57,14 @@ class ContentClassifierRequest {
   bool mThirdParty = false;
   bool mPrivateBrowsing = false;
   bool mValid = false;
+  bool mIsNonRecommendedAddon = false;
 
  public:
   bool Valid() const { return mValid; }
   const nsCString& Url() const { return mUrl; }
+  bool ThirdParty() const { return mThirdParty; }
   bool PrivateBrowsing() const { return mPrivateBrowsing; }
+  bool IsNonRecommendedAddon() const { return mIsNonRecommendedAddon; }
 
   explicit ContentClassifierRequest(nsIChannel* aChannel);
 };
@@ -87,7 +90,7 @@ class ContentClassifierEngine final {
   const ContentClassifierFeature& Feature() const { return mFeature; }
 
   ContentClassifierEngineResult CheckNetworkRequest(
-      const ContentClassifierRequest& aRequest);
+      const ContentClassifierRequest& aRequest, bool aPreviouslyMatched);
 
  private:
   ~ContentClassifierEngine() {

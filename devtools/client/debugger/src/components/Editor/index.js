@@ -70,6 +70,7 @@ import { scrollList } from "../../utils/result-list";
 import { updateEditorSizeCssVariables } from "../../utils/ui";
 
 const { debounce } = require("resource://devtools/shared/debounce.js");
+const { throttle } = require("resource://devtools/shared/throttle.js");
 const classnames = require("resource://devtools/client/shared/classnames.js");
 const SourceEditor = require("resource://devtools/client/shared/sourceeditor/editor.js");
 
@@ -124,6 +125,7 @@ class Editor extends PureComponent {
       selectLocation: PropTypes.func.isRequired,
       showEditorContextMenu: PropTypes.func.isRequired,
       showEditorGutterContextMenu: PropTypes.func.isRequired,
+      updateStyleSheetContent: PropTypes.func.isRequired,
     };
   }
 
@@ -185,8 +187,25 @@ class Editor extends PureComponent {
   }
 
   onEditorUpdated = viewUpdate => {
+    const { editor } = this.state;
     if (viewUpdate.docChanged || viewUpdate.geometryChanged) {
       updateEditorSizeCssVariables(viewUpdate.view.dom);
+      const { selectedLocation } = this.props;
+      // The updates made to the  stylesheet contents are
+      // only sent when these conditions are satisfied.
+      if (
+        // When a source is selected
+        selectedLocation &&
+        // When it is actually a stylesheet
+        selectedLocation.source.isStyleSheet &&
+        // When a user changes the doc content
+        editor.isViewUpdateFromUserInput(viewUpdate)
+      ) {
+        this.updateStyleSheetText(
+          selectedLocation.sourceActor,
+          viewUpdate.state.doc.toString()
+        );
+      }
       this.props.updateViewport();
     } else if (viewUpdate.selectionSet) {
       this.onCursorChange();
@@ -433,6 +452,8 @@ class Editor extends PureComponent {
   }
 
   onEditorScroll = debounce(this.props.updateViewport, 75);
+
+  updateStyleSheetText = throttle(this.props.updateStyleSheetContent, 500);
 
   /*
    * The default Esc command is overridden in the CodeMirror keymap to allow
@@ -698,10 +719,13 @@ class Editor extends PureComponent {
     if (selectedSource.isStyleSheet) {
       await editor.setMode(SourceEditor.modes.css);
     }
-
     await editor.setText(selectedSourceTextContent.value.value, {
       documentId: selectedSource.id,
     });
+    const isReadOnly =
+      !selectedSource.isStyleSheet ||
+      (selectedSource.isOriginal && !selectedSource.isPrettyPrinted);
+    await editor.setReadOnly(isReadOnly);
   }
 
   showErrorMessage(msg) {
@@ -935,6 +959,7 @@ const mapDispatchToProps = dispatch => ({
       closeFileSearch: actions.closeFileSearch,
       querySearchWorker: actions.querySearchWorker,
       setSearchOptions: actions.setSearchOptions,
+      updateStyleSheetContent: actions.updateStyleSheetContent,
     },
     dispatch
   ),

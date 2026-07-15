@@ -25,44 +25,24 @@ import mozilla.components.ui.colors.PhotonColors
 @Suppress("LongParameterList")
 @Stable
 class AcornColors(
-    layerGradientStart: Color,
-    layerGradientEnd: Color,
     formDefault: Color,
-    textOnColorPrimary: Color,
-    iconOnColor: Color,
     information: Color,
+    onInformation: Color,
     informationContainer: Color,
     onInformationContainer: Color,
     success: Color,
+    onSuccess: Color,
     warning: Color,
+    onWarning: Color,
     warningContainer: Color,
     onWarningContainer: Color,
     surfaceDimVariant: Color,
     autofillText: Color,
     selectedText: Color,
+    iconPrivate: Color,
 ) {
-    // Tooltip
-    var layerGradientStart by mutableStateOf(layerGradientStart)
-        private set
-
-    // Tooltip
-    var layerGradientEnd by mutableStateOf(layerGradientEnd)
-        private set
-
     // Checkbox default, Radio button default
     var formDefault by mutableStateOf(formDefault)
-        private set
-
-    // Text
-
-    // Text Inverted/On Color
-    var textOnColorPrimary by mutableStateOf(textOnColorPrimary)
-        private set
-
-    // Icon
-
-    // Icon inverted (on color)
-    var iconOnColor by mutableStateOf(iconOnColor)
         private set
 
     /*
@@ -74,6 +54,12 @@ class AcornColors(
      * indicating neutral information.
      */
     internal var information by mutableStateOf(information)
+        private set
+
+    /**
+     * Text and icons against information.
+     */
+    internal var onInformation by mutableStateOf(onInformation)
         private set
 
     /**
@@ -96,10 +82,22 @@ class AcornColors(
         private set
 
     /**
+     * Text and icons against success.
+     */
+    internal var onSuccess by mutableStateOf(onSuccess)
+        private set
+
+    /**
      * Attention-grabbing color against surface for fills, icons, and text, indicating
      * warning information.
      */
     internal var warning by mutableStateOf(warning)
+        private set
+
+    /**
+     * Text and icons against warning.
+     */
+    internal var onWarning by mutableStateOf(onWarning)
         private set
 
     /**
@@ -133,98 +131,104 @@ class AcornColors(
         private set
 
     /**
+     * Private mode icon.
+     */
+    internal var iconPrivate by mutableStateOf(iconPrivate)
+        private set
+
+    /**
      * Updates the existing colors with the provided [AcornColors].
      */
     fun update(other: AcornColors) {
-        layerGradientStart = other.layerGradientStart
-        layerGradientEnd = other.layerGradientEnd
         formDefault = other.formDefault
-        textOnColorPrimary = other.textOnColorPrimary
-        iconOnColor = other.iconOnColor
         information = other.information
+        onInformation = other.onInformation
         informationContainer = other.informationContainer
         onInformationContainer = other.onInformationContainer
         success = other.success
+        onSuccess = other.onSuccess
         warning = other.warning
+        onWarning = other.onWarning
         warningContainer = other.warningContainer
         onWarningContainer = other.onWarningContainer
         surfaceDimVariant = other.surfaceDimVariant
         autofillText = other.autofillText
         selectedText = other.selectedText
+        iconPrivate = other.iconPrivate
     }
 
     /**
      * Return a copy of this [AcornColors] and optionally overriding any of the provided values.
      */
     fun copy(
-        layerGradientStart: Color = this.layerGradientStart,
-        layerGradientEnd: Color = this.layerGradientEnd,
         formDefault: Color = this.formDefault,
-        textOnColorPrimary: Color = this.textOnColorPrimary,
-        iconOnColor: Color = this.iconOnColor,
         information: Color = this.information,
+        onInformation: Color = this.onInformation,
         informationContainer: Color = this.informationContainer,
         onInformationContainer: Color = this.onInformationContainer,
         success: Color = this.success,
+        onSuccess: Color = this.onSuccess,
         warning: Color = this.warning,
+        onWarning: Color = this.onWarning,
         warningContainer: Color = this.warningContainer,
         onWarningContainer: Color = this.onWarningContainer,
         surfaceDimVariant: Color = this.surfaceDimVariant,
         autofillText: Color = this.autofillText,
         selectedText: Color = this.selectedText,
+        iconPrivate: Color = this.iconPrivate,
     ): AcornColors = AcornColors(
-        layerGradientStart = layerGradientStart,
-        layerGradientEnd = layerGradientEnd,
         formDefault = formDefault,
-        textOnColorPrimary = textOnColorPrimary,
-        iconOnColor = iconOnColor,
         information = information,
+        onInformation = onInformation,
         informationContainer = informationContainer,
         onInformationContainer = onInformationContainer,
         success = success,
+        onSuccess = onSuccess,
         warning = warning,
+        onWarning = onWarning,
         warningContainer = warningContainer,
         onWarningContainer = onWarningContainer,
         surfaceDimVariant = surfaceDimVariant,
         autofillText = autofillText,
         selectedText = selectedText,
+        iconPrivate = iconPrivate,
     )
 }
 
 val darkColorPalette = AcornColors(
-    layerGradientStart = PhotonColors.Violet70,
-    layerGradientEnd = PhotonColors.Violet60,
     formDefault = PhotonColors.LightGrey05,
-    textOnColorPrimary = PhotonColors.LightGrey05,
-    iconOnColor = PhotonColors.LightGrey05,
     information = NovaColors.Blue30,
+    onInformation = NovaColors.Gray80,
     informationContainer = NovaColors.Blue70,
     onInformationContainer = NovaColors.VioletDesaturated0,
     success = NovaColors.Green30,
+    onSuccess = NovaColors.Gray80,
     warning = NovaColors.Yellow30,
+    onWarning = NovaColors.Gray80,
     warningContainer = NovaColors.Yellow70,
     onWarningContainer = NovaColors.VioletDesaturated0,
-    surfaceDimVariant = NovaColors.Gray85,
+    surfaceDimVariant = NovaColors.Gray80,
     autofillText = NovaColors.VioletDesaturated30A55,
     selectedText = NovaColors.Gray45A80,
+    iconPrivate = NovaColors.Violet50,
 )
 
 val lightColorPalette = AcornColors(
-    layerGradientStart = PhotonColors.Violet70,
-    layerGradientEnd = PhotonColors.Violet60,
     formDefault = PhotonColors.DarkGrey90,
-    textOnColorPrimary = PhotonColors.LightGrey05,
-    iconOnColor = PhotonColors.LightGrey05,
     information = NovaColors.Blue50,
+    onInformation = NovaColors.White,
     informationContainer = NovaColors.Blue10,
     onInformationContainer = NovaColors.VioletDesaturated90,
     success = NovaColors.Green50,
+    onSuccess = NovaColors.White,
     warning = NovaColors.Yellow50,
+    onWarning = NovaColors.White,
     warningContainer = NovaColors.Yellow10,
     onWarningContainer = NovaColors.VioletDesaturated90,
     surfaceDimVariant = NovaColors.Gray10,
     autofillText = NovaColors.VioletDesaturated30,
     selectedText = NovaColors.Gray35,
+    iconPrivate = NovaColors.Violet50,
 )
 
 val privateColorPalette = darkColorPalette.copy(
@@ -249,11 +253,11 @@ fun acornDarkColorScheme(): ColorScheme = darkColorScheme(
     onTertiary = NovaColors.Gray80,
     tertiaryContainer = NovaColors.VioletDesaturated90,
     onTertiaryContainer = NovaColors.VioletDesaturated0,
-    background = NovaColors.Gray80,
+    background = NovaColors.Gray75,
     onBackground = NovaColors.VioletDesaturated0,
-    surface = NovaColors.Gray80,
+    surface = NovaColors.Gray75,
     onSurface = NovaColors.VioletDesaturated0,
-    surfaceVariant = NovaColors.Gray70,
+    surfaceVariant = NovaColors.Gray65,
     onSurfaceVariant = NovaColors.VioletDesaturated0A70,
     surfaceTint = NovaColors.Gray50,
     inverseSurface = NovaColors.Gray30,
@@ -263,15 +267,15 @@ fun acornDarkColorScheme(): ColorScheme = darkColorScheme(
     errorContainer = NovaColors.Red70,
     onErrorContainer = NovaColors.VioletDesaturated0,
     outline = NovaColors.Gray45,
-    outlineVariant = NovaColors.Gray65,
-    scrim = NovaColors.BlackA32,
-    surfaceBright = NovaColors.Gray70,
-    surfaceDim = NovaColors.Gray90,
-    surfaceContainer = NovaColors.Gray80,
-    surfaceContainerHigh = NovaColors.Gray75,
-    surfaceContainerHighest = NovaColors.Gray70,
-    surfaceContainerLow = NovaColors.Gray85,
-    surfaceContainerLowest = NovaColors.Gray90,
+    outlineVariant = NovaColors.Gray60,
+    scrim = NovaColors.BlackA50,
+    surfaceBright = NovaColors.Gray65,
+    surfaceDim = NovaColors.Gray85,
+    surfaceContainer = NovaColors.Gray75,
+    surfaceContainerHigh = NovaColors.Gray70,
+    surfaceContainerHighest = NovaColors.Gray65,
+    surfaceContainerLow = NovaColors.Gray80,
+    surfaceContainerLowest = NovaColors.Gray85,
 )
 
 /**
@@ -306,7 +310,7 @@ fun acornLightColorScheme(): ColorScheme = lightColorScheme(
     onErrorContainer = NovaColors.VioletDesaturated90,
     outline = NovaColors.Gray45,
     outlineVariant = NovaColors.Gray15,
-    scrim = NovaColors.BlackA32,
+    scrim = NovaColors.BlackA50,
     surfaceBright = NovaColors.White,
     surfaceDim = NovaColors.Gray15,
     surfaceContainer = NovaColors.Gray5,
@@ -347,8 +351,8 @@ fun acornPrivateColorScheme(): ColorScheme = darkColorScheme(
     errorContainer = NovaColors.Red70,
     onErrorContainer = NovaColors.VioletDesaturated0,
     outline = NovaColors.Gray45,
-    outlineVariant = Color(0xFF30254C),
-    scrim = NovaColors.BlackA32,
+    outlineVariant = Color(0xFF332752),
+    scrim = NovaColors.BlackA50,
     surfaceBright = NovaColors.VioletDesaturated80,
     surfaceDim = Color(0xFF0D0321),
     surfaceContainer = NovaColors.VioletDesaturated90,
@@ -367,6 +371,14 @@ val ColorScheme.information: Color
     @Composable
     @ReadOnlyComposable
     get() = AcornTheme.colors.information
+
+/**
+ * @see AcornColors.onInformation
+ */
+val ColorScheme.onInformation: Color
+    @Composable
+    @ReadOnlyComposable
+    get() = AcornTheme.colors.onInformation
 
 /**
  * @see AcornColors.informationContainer
@@ -393,12 +405,28 @@ val ColorScheme.success: Color
     get() = AcornTheme.colors.success
 
 /**
+ * @see AcornColors.onSuccess
+ */
+val ColorScheme.onSuccess: Color
+    @Composable
+    @ReadOnlyComposable
+    get() = AcornTheme.colors.onSuccess
+
+/**
  * @see AcornColors.warning
  */
 val ColorScheme.warning: Color
     @Composable
     @ReadOnlyComposable
     get() = AcornTheme.colors.warning
+
+/**
+ * @see AcornColors.onWarning
+ */
+val ColorScheme.onWarning: Color
+    @Composable
+    @ReadOnlyComposable
+    get() = AcornTheme.colors.onWarning
 
 /**
  * @see AcornColors.warningContainer
@@ -439,3 +467,11 @@ val ColorScheme.selectedText: Color
     @Composable
     @ReadOnlyComposable
     get() = AcornTheme.colors.selectedText
+
+/**
+ * @see AcornColors.iconPrivate
+ */
+val ColorScheme.iconPrivate: Color
+    @Composable
+    @ReadOnlyComposable
+    get() = AcornTheme.colors.iconPrivate

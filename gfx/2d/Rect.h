@@ -5,15 +5,17 @@
 #ifndef MOZILLA_GFX_RECT_H_
 #define MOZILLA_GFX_RECT_H_
 
-#include "BaseRect.h"
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <iterator>
+
 #include "BaseMargin.h"
+#include "BaseRect.h"
 #include "NumericTools.h"
 #include "Point.h"
 #include "Tools.h"
 #include "mozilla/Maybe.h"
-
-#include <cmath>
-#include <cstdint>
 
 namespace mozilla {
 
@@ -59,7 +61,7 @@ struct MOZ_EMPTY_BASES IntMarginTyped
 typedef IntMarginTyped<UnknownUnits> IntMargin;
 
 template <class Units, class F = Float>
-struct MarginTyped
+struct MOZ_EMPTY_BASES MarginTyped
     : public BaseMargin<F, MarginTyped<Units, F>, CoordTyped<Units, F> >,
       public Units {
   static_assert(IsPixel<Units>::value,
@@ -400,6 +402,7 @@ Maybe<Rect> UnionMaybeRects(const Maybe<Rect>& a, const Maybe<Rect>& b) {
 template <typename Coord, typename Size, typename Margin>
 struct BaseRectCornerRadii {
   Size radii[eCornerCount];
+  float mShapeK[eCornerCount] = {1.0f, 1.0f, 1.0f, 1.0f};
 
   BaseRectCornerRadii() = default;
 
@@ -447,7 +450,15 @@ struct BaseRectCornerRadii {
   bool operator==(const BaseRectCornerRadii& aOther) const {
     return TopLeft() == aOther.TopLeft() && TopRight() == aOther.TopRight() &&
            BottomRight() == aOther.BottomRight() &&
-           BottomLeft() == aOther.BottomLeft();
+           BottomLeft() == aOther.BottomLeft() &&
+           std::equal(std::begin(mShapeK), std::end(mShapeK),
+                      std::begin(aOther.mShapeK));
+  }
+
+  // True if every corner uses the default round (K=1) shape.
+  bool AreShapesAllRound() const {
+    return std::all_of(std::begin(mShapeK), std::end(mShapeK),
+                       [](float k) { return k == 1.0f; });
   }
 
   bool AreRadiiSame() const {

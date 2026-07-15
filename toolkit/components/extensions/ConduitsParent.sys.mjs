@@ -295,7 +295,10 @@ export class BroadcastConduit extends BaseConduit {
    */
   _send(method, query, target, arg = {}) {
     if (!this.open) {
-      throw new Error(`send${method} on closed conduit ${this.id}`);
+      throw new Error(
+        `Cannot send "${method}" because conduit ${this.id} is already closed ` +
+          `(this usually means the extension context was unloaded)`
+      );
     }
 
     let sender = this.id;
@@ -339,6 +342,15 @@ export class BroadcastConduit extends BaseConduit {
         remote.extensionId === arg.extensionId &&
         remote.actor.manager.browsingContext?.top.id === arg.topBC &&
         (arg.frameId == null || remote.frameId === arg.frameId) &&
+        remote.recv.includes(method),
+
+      // Target Messengers by extensionId and documentId (innerWindowId).
+      // Note: Messenger checks context.active before dispatching events,
+      // resulting in the desired filtering of events for non-matching windows.
+      // There is no filtering of innerWindowId at the Conduits layer.
+      frame: remote =>
+        remote.extensionId === arg.extensionId &&
+        remote.actor.manager.innerWindowId === arg.innerWindowId &&
         remote.recv.includes(method),
 
       // Target Messengers by extensionId.
@@ -415,7 +427,7 @@ export class ConduitsParent extends JSWindowActorParent {
    * Group webRequest events to send them as a batch, reducing IPC overhead.
    *
    * @param {string} name
-   * @param {import("ConduitsChild.sys.mjs").MessageData} data
+   * @param {import("./ConduitsChild.sys.mjs").MessageData} data
    * @returns {Promise<object>}
    */
   batch(name, data) {
@@ -453,7 +465,7 @@ export class ConduitsParent extends JSWindowActorParent {
    *
    * @param {object} options
    * @param {string} options.name
-   * @param {import("ConduitsChild.sys.mjs").MessageData} options.data
+   * @param {import("./ConduitsChild.sys.mjs").MessageData} options.data
    * @returns {Promise?}
    */
   async receiveMessage({ name, data: { arg, query, sender } }) {

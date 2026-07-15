@@ -2,22 +2,22 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "nsString.h"
+#include "gfxHarfBuzzShaper.h"
+
+#include <algorithm>
+
 #include "gfxContext.h"
 #include "gfxFontConstants.h"
-#include "gfxHarfBuzzShaper.h"
 #include "gfxFontUtils.h"
 #include "gfxTextRun.h"
+#include "harfbuzz/hb-ot.h"
+#include "harfbuzz/hb.h"
 #include "mozilla/Sprintf.h"
 #include "mozilla/intl/String.h"
 #include "mozilla/intl/UnicodeProperties.h"
 #include "mozilla/intl/UnicodeScriptCodes.h"
+#include "nsString.h"
 #include "nsUnicodeProperties.h"
-
-#include "harfbuzz/hb.h"
-#include "harfbuzz/hb-ot.h"
-
-#include <algorithm>
 
 extern "C" {
 hb_unicode_funcs_t* mozilla_harfbuzz_glue_set_up_unicode_funcs();
@@ -992,7 +992,8 @@ hb_position_t gfxHarfBuzzShaper::GetHKerning(uint16_t aFirstGlyph,
       const KernTableSubtableHeaderVersion0* st0 =
           reinterpret_cast<const KernTableSubtableHeaderVersion0*>(base + offs);
       uint16_t subtableLen = uint16_t(st0->length);
-      if (offs + subtableLen > len) {
+      if (subtableLen < sizeof(KernTableSubtableHeaderVersion0) ||
+          subtableLen > len - offs) {
         break;
       }
       offs += subtableLen;
@@ -1047,6 +1048,10 @@ hb_position_t gfxHarfBuzzShaper::GetHKerning(uint16_t aFirstGlyph,
             reinterpret_cast<const KernTableSubtableHeaderVersion1*>(base +
                                                                      offs);
         uint32_t subtableLen = uint32_t(st1->length);
+        if (subtableLen < sizeof(KernTableSubtableHeaderVersion1) ||
+            subtableLen > len - offs) {
+          break;
+        }
         offs += subtableLen;
         uint16_t coverage = st1->coverage;
         if (coverage & (KERN1_COVERAGE_VERTICAL | KERN1_COVERAGE_CROSS_STREAM |

@@ -5,6 +5,7 @@
 import { html } from "chrome://global/content/vendor/lit.all.mjs";
 import { MozLitElement } from "chrome://global/content/lit-utils.mjs";
 import { SettingPaneManager } from "chrome://browser/content/preferences/config/SettingPaneManager.mjs";
+import { SettingGroupManager } from "chrome://browser/content/preferences/config/SettingGroupManager.mjs";
 
 /**
  * @import { MozPageHeader } from "chrome://global/content/elements/moz-page-header.mjs"
@@ -164,9 +165,18 @@ export class SettingPane extends MozLitElement {
    * @param {CustomEvent} e
    */
   handlePaneShown = e => {
-    if (this.isSubPane && e.detail.category === this.name) {
-      // preventScroll so that a previously saved scroll position (restored
-      // by ScrollOffsets just before the paneshown event) is preserved.
+    if (
+      this.isSubPane &&
+      e.detail.category === this.name &&
+      !this.contains(document.activeElement)
+    ) {
+      /**
+       * Default focus for a freshly entered sub-pane lands on the back
+       * arrow. Skipped when FocusHistory has already restored focus to a
+       * control inside this pane (e.g. after navigating back into a
+       * sub-pane from a sub-sub-pane). preventScroll keeps the saved
+       * scroll position intact.
+       */
       this.pageHeaderEl.backButtonEl.focus({ preventScroll: true });
     }
   };
@@ -188,8 +198,12 @@ export class SettingPane extends MozLitElement {
       `${this.config.id}-pane-loaded`
     );
 
+    // Skip groups not yet registered, like the Home groups. A setting-group
+    // initializes itself only when its config is registered (bug 2051119).
     for (let groupId of this.config.groupIds) {
-      window.initSettingGroup(groupId);
+      if (SettingGroupManager.has(groupId)) {
+        window.initSettingGroup(groupId);
+      }
     }
   }
 

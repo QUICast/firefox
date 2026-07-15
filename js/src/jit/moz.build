@@ -13,7 +13,6 @@ include("../js-cxxflags.mozbuild")
 
 UNIFIED_SOURCES += [
     "AliasAnalysis.cpp",
-    "AlignmentMaskAnalysis.cpp",
     "BacktrackingAllocator.cpp",
     "Bailouts.cpp",
     "BaselineBailouts.cpp",
@@ -245,6 +244,9 @@ elif CONFIG["JS_CODEGEN_RISCV64"]:
         "riscv64/extension/extension-riscv-f.cc",
         "riscv64/extension/extension-riscv-m.cc",
         "riscv64/extension/extension-riscv-v.cc",
+        "riscv64/extension/extension-riscv-zfa.cc",
+        "riscv64/extension/extension-riscv-zfh.cc",
+        "riscv64/extension/extension-riscv-zicond.cc",
         "riscv64/extension/extension-riscv-zicsr.cc",
         "riscv64/extension/extension-riscv-zifencei.cc",
         "riscv64/Lowering-riscv64.cpp",

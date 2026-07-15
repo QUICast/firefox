@@ -6,7 +6,7 @@
 
 ChromeUtils.defineESModuleGetters(this, {
   ContextualIdentityService:
-    "resource://gre/modules/ContextualIdentityService.sys.mjs",
+    "moz-src:///toolkit/components/contextualidentity/ContextualIdentityService.sys.mjs",
 });
 XPCOMUtils.defineLazyPreferenceGetter(
   this,
@@ -180,6 +180,7 @@ this.contextualIdentities = class extends ExtensionAPIPersistent {
         },
 
         async getSupportedColors() {
+          checkAPIEnabled();
           return ContextualIdentityService.containerColors.map(color => ({
             color,
             colorCode: getContainerColor(color),
@@ -187,6 +188,7 @@ this.contextualIdentities = class extends ExtensionAPIPersistent {
         },
 
         async getSupportedIcons() {
+          checkAPIEnabled();
           return ContextualIdentityService.containerIcons.map(icon => ({
             icon,
             iconUrl: getContainerIcon(icon),

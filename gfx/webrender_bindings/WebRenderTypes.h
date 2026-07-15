@@ -5,21 +5,21 @@
 #ifndef GFX_WEBRENDERTYPES_H
 #define GFX_WEBRENDERTYPES_H
 
+#include <tuple>
+
 #include "ImageTypes.h"
-#include "mozilla/webrender/webrender_ffi.h"
+#include "Units.h"
 #include "mozilla/Maybe.h"
-#include "mozilla/gfx/Matrix.h"
-#include "mozilla/gfx/Types.h"
-#include "mozilla/gfx/Tools.h"
-#include "mozilla/gfx/Rect.h"
-#include "mozilla/layers/LayersTypes.h"
 #include "mozilla/PodOperations.h"
 #include "mozilla/Range.h"
 #include "mozilla/ScrollGeneration.h"
-#include "Units.h"
+#include "mozilla/gfx/Matrix.h"
+#include "mozilla/gfx/Rect.h"
+#include "mozilla/gfx/Tools.h"
+#include "mozilla/gfx/Types.h"
+#include "mozilla/layers/LayersTypes.h"
+#include "mozilla/webrender/webrender_ffi.h"
 #include "nsIWidgetListener.h"
-
-#include <tuple>
 
 namespace mozilla {
 
@@ -99,61 +99,51 @@ inline Maybe<wr::ImageFormat> SurfaceFormatToImageFormat(
   }
 }
 
+inline OpacityType ToOpacityType(gfx::SurfaceFormat aFormat) {
+  return gfx::IsOpaque(aFormat) ? OpacityType::Opaque
+                                : OpacityType::HasAlphaChannel;
+}
+
 inline gfx::SurfaceFormat ImageFormatToSurfaceFormat(ImageFormat aFormat) {
   switch (aFormat) {
+    case ImageFormat::RGBA8:
+      return gfx::SurfaceFormat::R8G8B8A8;
     case ImageFormat::BGRA8:
       return gfx::SurfaceFormat::B8G8R8A8;
     case ImageFormat::R8:
       return gfx::SurfaceFormat::A8;
     case ImageFormat::R16:
       return gfx::SurfaceFormat::A16;
+    case ImageFormat::RG8:
+      return gfx::SurfaceFormat::R8G8;
+    case ImageFormat::RG16:
+      return gfx::SurfaceFormat::R16G16;
     default:
       return gfx::SurfaceFormat::UNKNOWN;
   }
 }
 
-struct ImageDescriptor : public wr::WrImageDescriptor {
-  // We need a default constructor for ipdl serialization.
-  ImageDescriptor() {
-    format = (ImageFormat)0;
-    width = 0;
-    height = 0;
-    stride = 0;
-    opacity = OpacityType::HasAlphaChannel;
-    prefer_compositor_surface = false;
-  }
-
-  ImageDescriptor(const gfx::IntSize& aSize, gfx::SurfaceFormat aFormat,
+struct ImageDescriptor : public WrImageDescriptor {
+  ImageDescriptor() = delete;
+  ImageDescriptor(const gfx::IntSize& aSize, ImageFormat aFormat,
+                  OpacityType aOpacityType,
                   bool aPreferCompositorSurface = false) {
-    format = wr::SurfaceFormatToImageFormat(aFormat).valueOr((ImageFormat)0);
+    format = aFormat;
     width = aSize.width;
     height = aSize.height;
     stride = 0;
-    opacity = gfx::IsOpaque(aFormat) ? OpacityType::Opaque
-                                     : OpacityType::HasAlphaChannel;
+    opacity = aOpacityType;
     prefer_compositor_surface = aPreferCompositorSurface;
   }
 
-  ImageDescriptor(const gfx::IntSize& aSize, uint32_t aByteStride,
-                  gfx::SurfaceFormat aFormat,
+  ImageDescriptor(const gfx::IntSize& aSize, int32_t aByteStride,
+                  ImageFormat aFormat, OpacityType aOpacityType,
                   bool aPreferCompositorSurface = false) {
-    format = wr::SurfaceFormatToImageFormat(aFormat).valueOr((ImageFormat)0);
+    format = aFormat;
     width = aSize.width;
     height = aSize.height;
     stride = aByteStride;
-    opacity = gfx::IsOpaque(aFormat) ? OpacityType::Opaque
-                                     : OpacityType::HasAlphaChannel;
-    prefer_compositor_surface = aPreferCompositorSurface;
-  }
-
-  ImageDescriptor(const gfx::IntSize& aSize, uint32_t aByteStride,
-                  gfx::SurfaceFormat aFormat, OpacityType aOpacity,
-                  bool aPreferCompositorSurface = false) {
-    format = wr::SurfaceFormatToImageFormat(aFormat).valueOr((ImageFormat)0);
-    width = aSize.width;
-    height = aSize.height;
-    stride = aByteStride;
-    opacity = aOpacity;
+    opacity = aOpacityType;
     prefer_compositor_surface = aPreferCompositorSurface;
   }
 };
@@ -392,35 +382,6 @@ static inline wr::LayoutSize ToLayoutSize(
   return ls;
 }
 
-static inline wr::ComplexClipRegion ToComplexClipRegion(
-    const gfx::RoundedRect& rect) {
-  wr::ComplexClipRegion ret;
-  ret.rect = ToLayoutRect(rect.rect);
-  ret.radii.top_left = ToLayoutSize(LayoutDeviceSize::FromUnknownSize(
-      rect.corners.radii[mozilla::eCornerTopLeft]));
-  ret.radii.top_right = ToLayoutSize(LayoutDeviceSize::FromUnknownSize(
-      rect.corners.radii[mozilla::eCornerTopRight]));
-  ret.radii.bottom_left = ToLayoutSize(LayoutDeviceSize::FromUnknownSize(
-      rect.corners.radii[mozilla::eCornerBottomLeft]));
-  ret.radii.bottom_right = ToLayoutSize(LayoutDeviceSize::FromUnknownSize(
-      rect.corners.radii[mozilla::eCornerBottomRight]));
-  ret.mode = wr::ClipMode::Clip;
-  return ret;
-}
-
-static inline wr::ComplexClipRegion SimpleRadii(const wr::LayoutRect& aRect,
-                                                float aRadii) {
-  wr::ComplexClipRegion ret;
-  wr::LayoutSize radii{aRadii, aRadii};
-  ret.rect = aRect;
-  ret.radii.top_left = radii;
-  ret.radii.top_right = radii;
-  ret.radii.bottom_left = radii;
-  ret.radii.bottom_right = radii;
-  ret.mode = wr::ClipMode::Clip;
-  return ret;
-}
-
 static inline wr::LayoutSize ToLayoutSize(
     const mozilla::LayoutDeviceIntSize& size) {
   return ToLayoutSize(LayoutDeviceSize(size));
@@ -462,6 +423,11 @@ static inline wr::BorderSide ToBorderSide(const gfx::DeviceColor& color,
 static inline wr::BorderRadius EmptyBorderRadius() {
   wr::BorderRadius br;
   PodZero(&br);
+  // PodZero leaves shape_* at 0.0, but the round (default) shape is K=1.0.
+  br.shape_top_left = 1.0f;
+  br.shape_top_right = 1.0f;
+  br.shape_bottom_left = 1.0f;
+  br.shape_bottom_right = 1.0f;
   return br;
 }
 
@@ -473,26 +439,50 @@ static inline wr::BorderRadius ToBorderRadius(
   br.top_right = ToLayoutSize(topRight);
   br.bottom_left = ToLayoutSize(bottomLeft);
   br.bottom_right = ToLayoutSize(bottomRight);
+
+  br.shape_top_left = 1.0f;
+  br.shape_top_right = 1.0f;
+  br.shape_bottom_left = 1.0f;
+  br.shape_bottom_right = 1.0f;
   return br;
+}
+
+static inline void SetCornerShapes(wr::BorderRadius& aRadius, float aTopLeftK,
+                                   float aTopRightK, float aBottomRightK,
+                                   float aBottomLeftK) {
+  aRadius.shape_top_left = aTopLeftK;
+  aRadius.shape_top_right = aTopRightK;
+  aRadius.shape_bottom_right = aBottomRightK;
+  aRadius.shape_bottom_left = aBottomLeftK;
 }
 
 static inline wr::BorderRadius ToBorderRadius(
     const gfx::RectCornerRadii& aRadii) {
-  return ToBorderRadius(
-      LayoutDeviceSize::FromUnknownSize(aRadii.TopLeft()),
-      LayoutDeviceSize::FromUnknownSize(aRadii.TopRight()),
-      LayoutDeviceSize::FromUnknownSize(aRadii.BottomLeft()),
-      LayoutDeviceSize::FromUnknownSize(aRadii.BottomRight()));
+  auto br =
+      ToBorderRadius(LayoutDeviceSize::FromUnknownSize(aRadii.TopLeft()),
+                     LayoutDeviceSize::FromUnknownSize(aRadii.TopRight()),
+                     LayoutDeviceSize::FromUnknownSize(aRadii.BottomLeft()),
+                     LayoutDeviceSize::FromUnknownSize(aRadii.BottomRight()));
+  SetCornerShapes(br, aRadii.mShapeK[mozilla::eCornerTopLeft],
+                  aRadii.mShapeK[mozilla::eCornerTopRight],
+                  aRadii.mShapeK[mozilla::eCornerBottomRight],
+                  aRadii.mShapeK[mozilla::eCornerBottomLeft]);
+  return br;
 }
 
 static inline wr::BorderRadius ToBorderRadius(const nsRectCornerRadii& aRadii,
                                               int32_t aAppUnitsPerDevPixel) {
-  return ToBorderRadius(
+  auto br = ToBorderRadius(
       LayoutDeviceSize::FromAppUnits(aRadii.TopLeft(), aAppUnitsPerDevPixel),
       LayoutDeviceSize::FromAppUnits(aRadii.TopRight(), aAppUnitsPerDevPixel),
       LayoutDeviceSize::FromAppUnits(aRadii.BottomLeft(), aAppUnitsPerDevPixel),
       LayoutDeviceSize::FromAppUnits(aRadii.BottomRight(),
                                      aAppUnitsPerDevPixel));
+  SetCornerShapes(br, aRadii.mShapeK[mozilla::eCornerTopLeft],
+                  aRadii.mShapeK[mozilla::eCornerTopRight],
+                  aRadii.mShapeK[mozilla::eCornerBottomRight],
+                  aRadii.mShapeK[mozilla::eCornerBottomLeft]);
+  return br;
 }
 
 static inline wr::ComplexClipRegion ToComplexClipRegion(
@@ -503,6 +493,29 @@ static inline wr::ComplexClipRegion ToComplexClipRegion(
       ToLayoutRect(LayoutDeviceRect::FromAppUnits(aRect, aAppUnitsPerDevPixel));
   ret.radii = ToBorderRadius(aRadii, aAppUnitsPerDevPixel);
   ret.mode = ClipMode::Clip;
+  return ret;
+}
+
+static inline wr::ComplexClipRegion ToComplexClipRegion(
+    const gfx::RoundedRect& rect) {
+  wr::ComplexClipRegion ret;
+  ret.rect = ToLayoutRect(rect.rect);
+  ret.radii = ToBorderRadius(rect.corners);
+  ret.mode = wr::ClipMode::Clip;
+  return ret;
+}
+
+static inline wr::ComplexClipRegion SimpleRadii(const wr::LayoutRect& aRect,
+                                                float aRadii) {
+  wr::ComplexClipRegion ret;
+  wr::LayoutSize radii{aRadii, aRadii};
+  ret.rect = aRect;
+  ret.radii = EmptyBorderRadius();
+  ret.radii.top_left = radii;
+  ret.radii.top_right = radii;
+  ret.radii.bottom_left = radii;
+  ret.radii.bottom_right = radii;
+  ret.mode = wr::ClipMode::Clip;
   return ret;
 }
 

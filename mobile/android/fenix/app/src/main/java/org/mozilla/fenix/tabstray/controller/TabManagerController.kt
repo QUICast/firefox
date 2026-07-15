@@ -11,7 +11,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import mozilla.appservices.places.BookmarkRoot
 import mozilla.components.browser.state.action.DebugAction
 import mozilla.components.browser.state.action.LastAccessAction
 import mozilla.components.browser.state.selector.selectedTab
@@ -21,7 +20,6 @@ import mozilla.components.browser.storage.sync.Tab
 import mozilla.components.concept.base.profiler.Profiler
 import mozilla.components.concept.engine.prompt.ShareData
 import mozilla.components.concept.engine.utils.ABOUT_HOME_URL
-import mozilla.components.concept.storage.BookmarksStorage
 import mozilla.components.feature.accounts.push.CloseTabsUseCases
 import mozilla.components.feature.downloads.ui.DownloadCancelDialogFragment
 import mozilla.components.feature.tabs.TabsUseCases
@@ -41,6 +39,7 @@ import org.mozilla.fenix.components.AppStore
 import org.mozilla.fenix.components.TabCollectionStorage
 import org.mozilla.fenix.components.accounts.FenixFxAEntryPoint
 import org.mozilla.fenix.components.appstate.AppAction
+import org.mozilla.fenix.components.bookmarks.BookmarksUseCase
 import org.mozilla.fenix.components.share.ShareSource
 import org.mozilla.fenix.components.usecases.FenixBrowserUseCases
 import org.mozilla.fenix.components.usecases.ShareUseCases
@@ -63,6 +62,7 @@ import org.mozilla.fenix.tabstray.redux.state.Page
 import org.mozilla.fenix.tabstray.redux.state.TabsTrayState
 import org.mozilla.fenix.tabstray.redux.store.TabsTrayStore
 import org.mozilla.fenix.tabstray.ui.TabManagementFragmentDirections
+import org.mozilla.fenix.trackingprotection.ProtectionsDashboardFragment
 import org.mozilla.fenix.utils.Settings
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.CoroutineContext
@@ -150,13 +150,6 @@ interface TabManagerController :
     /**
      * Adds the provided tab to the current selection of tabs.
      *
-     * @param tab [TabsTrayItem] that was long clicked.
-     */
-    fun handleTabLongClick(tab: TabsTrayItem): Boolean
-
-    /**
-     * Adds the provided tab to the current selection of tabs.
-     *
      * @param tab [TabsTrayItem.Tab] to be selected.
      * @param source App feature from which the tab was selected.
      */
@@ -230,7 +223,9 @@ interface TabManagerController :
  * @param fenixBrowserUseCases [FenixBrowserUseCases] used for adding new homepage tabs.
  * @param shareUseCases [ShareUseCases] for sharing content via the system share sheet or the in-app [ShareFragment].
  * @param closeSyncedTabsUseCases Use cases for closing synced tabs.
- * @param bookmarksStorage Storage layer for retrieving and saving bookmarks.
+ * @param addBookmarkUseCase Use case for adding a new bookmark; resolves the parent folder via
+ * the shared [LastSavedFolderCache] so the tab manager's bulk save lands in the same folder as
+ * single-bookmark saves from the toolbar and menu.
  * @param ioDispatcher [CoroutineContext] used for storage operations.
  * @param mainDispatcher [CoroutineContext] used for UI operations.
  * @param collectionStorage Storage layer for interacting with collections.
@@ -258,7 +253,7 @@ class DefaultTabManagerController(
     private val fenixBrowserUseCases: FenixBrowserUseCases,
     private val shareUseCases: ShareUseCases,
     private val closeSyncedTabsUseCases: CloseTabsUseCases,
-    private val bookmarksStorage: BookmarksStorage,
+    private val addBookmarkUseCase: BookmarksUseCase.AddBookmarksUseCase,
     private val ioDispatcher: CoroutineContext = Dispatchers.IO,
     private val mainDispatcher: CoroutineContext = Dispatchers.Main,
     private val collectionStorage: TabCollectionStorage,
@@ -303,7 +298,9 @@ class DefaultTabManagerController(
         } else {
             navController.popBackStack()
             navController.navigate(
-                TabManagementFragmentDirections.actionGlobalHome(focusOnAddressBar = true),
+                TabManagementFragmentDirections.actionGlobalHome(
+                    focusOnAddressBar = !settings.enableHomepageTrendingRecentSearch,
+                ),
             )
         }
 
@@ -490,23 +487,10 @@ class DefaultTabManagerController(
         // tab manager closes before the job is done.
         CoroutineScope(ioDispatcher).launch {
             Result.runCatching {
-                val parentGuid = bookmarksStorage
-                    .getRecentBookmarks(1)
-                    .getOrDefault(listOf())
-                    .firstOrNull()
-                    ?.parentGuid
-                    ?: BookmarkRoot.Mobile.id
-
-                val parentNode = bookmarksStorage.getBookmark(parentGuid).getOrNull()
-
-                tabs.forEach { tab ->
-                    bookmarksStorage.addItem(
-                        parentGuid = parentNode!!.guid,
-                        url = tab.url,
-                        title = tab.title,
-                        position = null,
-                    )
+                val results = tabs.map { tab ->
+                    addBookmarkUseCase(url = tab.url, title = tab.title)
                 }
+                val parentNode = results.firstOrNull()?.parentNode
                 withContext(mainDispatcher) {
                     showBookmarkSnackbar(tabs.size, parentNode?.title)
                 }
@@ -620,19 +604,6 @@ class DefaultTabManagerController(
         }
     }
 
-    override fun handleTabLongClick(tab: TabsTrayItem): Boolean {
-        return if (tab is TabsTrayItem.Tab &&
-            !tab.private && tabsTrayStore.state.mode.selectedTabs.isEmpty()
-        ) {
-            Collections.longPress.record(NoExtras())
-            TabsTray.tabLongPress.record(NoExtras())
-            tabsTrayStore.dispatch(TabsTrayAction.AddSelectTab(tab))
-            true
-        } else {
-            false
-        }
-    }
-
     override fun handleTabSelected(tab: TabsTrayItem.Tab, source: String?) {
         val selected = tabsTrayStore.state.mode.selectedTabs
         when {
@@ -664,6 +635,10 @@ class DefaultTabManagerController(
             handleNavigateToHome()
         } else {
             handleNavigateToBrowser()
+        }
+
+        if (!appStore.state.mode.isPrivate && settings.privateBrowsingLockedFeatureEnabled) {
+            appStore.dispatch(AppAction.PrivateBrowsingLockAction.UpdatePrivateBrowsingLock(isLocked = true))
         }
     }
 
@@ -764,7 +739,10 @@ class DefaultTabManagerController(
         val currentSessionId = browserStore.state.selectedTabId
         navController.nav(
             R.id.tabManagementFragment,
-            TabManagementFragmentDirections.actionTabManagementFragmentToGlobalProtectionsDashboard(currentSessionId),
+            TabManagementFragmentDirections.actionTabManagementFragmentToGlobalProtectionsDashboard(
+                currentSessionId,
+                source = ProtectionsDashboardFragment.SOURCE_TABS_TRAY,
+            ),
         )
     }
 

@@ -9,6 +9,7 @@
 #include "js/PropertyDescriptor.h"  // JSPROP_ENUMERATE, JSPROP_READONLY
 #include "js/ValueArray.h"
 #include "nsIFile.h"
+#include "jsapi.h"
 
 namespace mozilla::Telemetry {
 

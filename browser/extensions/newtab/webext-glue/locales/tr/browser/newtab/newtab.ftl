@@ -31,6 +31,281 @@ newtab-card-dismiss-button =
     .title = Kapat
     .aria-label = Kapat
 
+## Strings for "Homepage" and "Firefox Home" sections of about:settings#home.
+## Homepage panel
+
+home-homepage-title =
+    .label = Giriş sayfası
+home-homepage-new-windows =
+    .label = Yeni pencereler
+home-homepage-new-tabs =
+    .label = Yeni sekmeler
+# This option leads to the "Custom Homepage" subpage
+home-homepage-custom-homepage-button =
+    .label = Belirli bir site seç
+
+## Custom URLs subpage
+
+# Subheader on the Custom Homepage subpage. Followed by a form to enter URLs and a list of URLs already saved, if any.
+home-custom-homepage-card-header =
+    .label = Web sitesi adres(ler)i
+home-custom-homepage-address =
+    .placeholder = Adres yazın
+home-custom-homepage-address-button =
+    .label = Adres ekle
+# Shown when no custom websites/URLs to use as a homepage have been added yet
+home-custom-homepage-no-results =
+    .label = Henüz hiç site eklenmedi.
+home-custom-homepage-delete-address-button =
+    .aria-label = Adresi sil
+    .title = Adresi sil
+# Further options to use when setting the home page. Two action buttons are placed in line with this prompt
+# to replace the current home page with a currently open page or bookmark.
+home-custom-homepage-replace-with-prompt =
+    .label = Bununla değiştir:
+# Button that appears in-line after text "Replace with" (home-custom-homepage-replace-with-prompt)
+home-custom-homepage-current-pages-button =
+    .label = Şu anda açık olan sayfalar
+# Button that appears in-line after text "Replace with" (home-custom-homepage-replace-with-prompt)
+home-custom-homepage-bookmarks-button =
+    .label = Yer imleri…
+
+## Firefox Home content
+
+home-prefs-content-header =
+    .label = { -firefox-home-brand-name }
+home-prefs-search-header2 =
+    .label = Arama
+home-prefs-stories-header2 =
+    .label = Haberler
+    .description = { -brand-product-name } ailesinin seçtiği harika içerikler
+home-prefs-widgets-header =
+    .label = Araçlar
+# Lists is a widget on New Tab, similar to a to-do widget
+home-prefs-lists-header =
+    .label = Listeler
+# Timer is a widget on New Tab, similar to the Pomodoro timer.
+home-prefs-timer-header =
+    .label = Sayaç
+# Sports is a widget on New Tab showing sports scores and schedules.
+home-prefs-sports-widget-header =
+    .label = Spor
+# Clock is a widget on New Tab that displays time zones around the world.
+home-prefs-clocks-header =
+    .label = Saat
+# Privacy is a widget on New Tab that shows tracking protection activity.
+home-prefs-privacy-header =
+    .label = Gizlilik
+# Stocks is a widget on New Tab that shows stock ticker prices.
+home-prefs-stocks-header =
+    .label = Borsa
+# Picture of the day is a widget on New Tab that shows a daily Wikimedia Commons image.
+home-prefs-picture-header =
+    .label = Günün resmi
+home-prefs-mission-message2 =
+    .message = Sponsorlarımız daha iyi bir web inşa etme misyonumuzu destekliyor.
+home-prefs-manage-topics-link2 =
+    .label = Konuları yönet
+home-prefs-choose-wallpaper-link2 =
+    .label = Duvar kâğıdı seç
+home-prefs-firefox-logo-header =
+    .label = { -brand-short-name } logosu
+# Informational message bar that appears in the Firefox Home section when the options are disabled.
+# The user must select Firefox Home as their homepage for either new tabs or new windows to enable
+# the features in settings.
+home-prefs-firefox-home-disabled-notice =
+    .message = Bu özellikleri kullanmak için yeni sekme veya yeni pencere ayarınızı { -firefox-home-brand-name } olarak değiştirmelisiniz.
+# Variables:
+#   $num (number) - Number of rows displayed
+home-prefs-sections-rows-option-srd =
+    .label =
+        { $num ->
+            [one] { $num } satır
+           *[other] { $num } satır
+        }
+# Dropdown option shown when an extension replaces the contents of new windows or tabs.
+# Variables:
+#   $extension (string) - Name of the extension
+home-prefs-homepage-extension-option =
+    .label = Uzantı ({ $extension })
+home-restore-defaults-srd =
+    .label = Varsayılanları geri yükle
+    .accesskey = R
+home-mode-choice-default-fx-srd =
+    .label = { -firefox-home-brand-name } (Varsayılan)
+home-mode-choice-custom-srd =
+    .label = Özel adresler…
+home-mode-choice-blank-srd =
+    .label = Boş sayfa
+home-prefs-shortcuts-header-srd =
+    .label = Kısayollar
+home-prefs-shortcuts-select =
+    .aria-label = Kısayollar
+home-prefs-shortcuts-by-option-sponsored-srd =
+    .label = Sponsorlu kısayollar
+home-prefs-recommended-by-option-sponsored-stories-srd =
+    .label = Sponsorlu haberler
+home-prefs-highlights-option-visited-pages-srd =
+    .label = Ziyaret ettiğim sayfalar
+home-prefs-highlights-options-bookmarks-srd =
+    .label = Yer imleri
+home-prefs-highlights-option-most-recent-download-srd =
+    .label = Son indirme
+home-prefs-recent-activity-header-srd =
+    .label = Son etkinlikler
+home-prefs-recent-activity-select =
+    .aria-label = Son etkinlikler
+home-prefs-weather-header-srd =
+    .label = Hava durumu
+home-prefs-support-firefox-header-srd =
+    .label = { -brand-product-name } tarayıcısını destekleyin
+home-prefs-mission-message-learn-more-link-srd = Nasıl mı?
+
+## Strings for the Privacy widget
+
+# Context menu item linking to more information about the Privacy widget.
+newtab-privacy-menu-learn-more = Daha fazla bilgi al
+
+## Privacy widget — count readout
+
+# Label shown under the large tracker-count number, appearing like:
+# Line 1: 86
+# Line 2: Trackers blocked today
+# Translations can be adjusted to "Today's blocked trackers" or something
+# similar if this fixed order causes issues.
+# Variables:
+#   $count (number) - Number of trackers blocked today
+newtab-privacy-trackers-blocked-today =
+    { $count ->
+        [one] Bugün engellenen takip kodu
+       *[other] Bugün engellenen takip kodları
+    }
+# Second line of the readout, under the large number and "Trackers blocked
+# today". Counts the sites those trackers were blocked on. The English is
+# shortened from "Blocked across { $count } sites" — translate it that fuller way
+# if the short fragment doesn't work in your language.
+# Variables:
+#   $count (number) - Number of sites where trackers were blocked
+newtab-privacy-across-sites =
+    { $count ->
+        [one] { $count } sitede
+       *[other] { $count } sitede
+    }
+
+## Privacy widget — empty state
+
+# Shown when no trackers have been blocked yet today.
+newtab-privacy-empty = Siz internette gezinirken { -brand-short-name } takip kodlarını engeller. Engellenenleri burada göreceksiniz.
+
+## Privacy widget — informational messages
+##
+## Rotating "info" secondary messages. Each message has a body plus a matched
+## "-cta" button label sharing the same id stem (the CTA button isn't rendered
+## yet; the labels are authored so the pairing is ready).
+
+newtab-privacy-message-info-1 = Siz internette gezinirken { -brand-short-name } takip kodlarını otomatik olarak engeller.
+newtab-privacy-message-info-1-cta = Korumaları göster
+newtab-privacy-message-info-2 = Takip kodu engelleme, şirketlerin sizi internette takip etmesini engeller.
+newtab-privacy-message-info-2-cta = Korumaları göster
+newtab-privacy-message-info-3-cta = Korumaları göster
+newtab-privacy-message-info-4-cta = Korumaları göster
+newtab-privacy-message-info-5 = Takip kodları engellendikçe farklı sitelerde sizi takip edebilen şirket sayısı azalır.
+newtab-privacy-message-info-5-cta = Korumaları göster
+newtab-privacy-message-info-6-cta = Daha fazla bilgi al
+newtab-privacy-message-info-7-cta = Korumaları göster
+newtab-privacy-message-info-8-cta = Daha fazla bilgi alın
+newtab-privacy-message-info-9-cta = Varsayılan yap
+newtab-privacy-message-info-10-cta = Parolalara git
+newtab-privacy-message-info-11-cta = Daha fazla bilgi alın
+newtab-privacy-message-info-12-cta = Korumaları göster
+newtab-privacy-message-info-13-cta = Korumaları göster
+
+## Privacy widget — promotional messages
+##
+## Rotating "promo" secondary messages suggesting another Firefox feature. Each
+## has a body plus a matched "-cta" button label.
+
+newtab-privacy-message-promo-monitor-1 = Kişisel bilgilerinizin ele geçirilip geçirilmediğini öğrenin.
+newtab-privacy-message-promo-monitor-1-cta = Daha fazla bilgi al
+newtab-privacy-message-promo-monitor-2-cta = Daha fazla bilgi al
+newtab-privacy-message-promo-signin-1-cta = Giriş yap
+newtab-privacy-message-promo-vpn-1-cta = VPN’i aç
+newtab-privacy-message-promo-vpn-2-cta = VPN’i aç
+newtab-privacy-message-promo-vpn-3-cta = VPN’i aç
+newtab-privacy-message-promo-private-window-1-cta = Gizli pencere aç
+
+## Privacy widget — celebration messages
+##
+## Earned "celebration" moments (milestones, daily cap, streak, first
+## protection). Count-bearing ones interpolate { $count }.
+
+newtab-privacy-message-milestone-week-cta = Korumaları göster
+newtab-privacy-message-milestone-month-cta = Korumaları göster
+newtab-privacy-message-milestone-year-cta = Korumaları göster
+newtab-privacy-message-milestone-total-cta = Korumaları göster
+newtab-privacy-message-daily-cap-cta = Korumaları göster
+newtab-privacy-message-streak-cta = Korumaları göster
+newtab-privacy-message-first-protection-cta = Korumaları göster
+
+## Strings for the Stocks widget
+
+# Context menu item for searching stock ticker symbols.
+newtab-stocks-menu-search = Sembollerde ara
+# Context menu item linking to more information about the Stocks widget.
+newtab-stocks-menu-learn-more = Daha fazla bilgi al
+# Heading for the Stocks widget.
+newtab-stocks-widget-title = Borsa
+
+## Strings for the Picture of the Day widget
+
+# Title shown at the top of the widget, with the source name appended.
+# "Wikimedia Commons" is a brand name and should not be translated.
+newtab-picture-header = Günün resmi · Wikimedia Commons
+# Shorter title shown at the top of the widget, without the source name.
+newtab-picture-header-main = Günün resmi
+# Attribution line shown under the title once a picture loads: an author
+# credit, a link to the picture's source page, and a link to its license.
+# "©" is the copyright symbol.
+# $author (string) - the name of the image's author.
+newtab-picture-attribution-author = © { $author }
+# Link to the picture's source page (its Wikimedia Commons file page).
+# "Wikimedia Commons" is a brand name and should not be translated.
+newtab-picture-attribution-source-link = Wikimedia Commons
+# Screen-reader label for the license link; the visible text is the license
+# name (for example "CC BY-SA 4.0") provided with the picture.
+# $license (string) - the name of the license.
+newtab-picture-attribution-license =
+    .aria-label = { $license } lisansını göster
+# Tooltip and screen-reader label for the icon-only button that opens the
+# widget's context menu. The button never renders visible text.
+newtab-picture-widget-menu-button =
+    .title = Günün resmi seçenekleri
+    .aria-label = Günün resmi seçenekleri
+# Button that sets the current picture as the New Tab background wallpaper. The
+# button collapses to an icon when not hovered/focused, so .title is its tooltip.
+newtab-picture-set-wallpaper =
+    .label = Duvar kâğıdı yap
+    .title = Duvar kâğıdı yap
+    .aria-label = Günün resmini duvar kâğıdım yap
+# Context menu item that opens the New Tab customization panel.
+newtab-picture-menu-manage-wallpaper = Duvar kâğıdını yönet
+# Context menu item that hides today’s picture, replacing it with an existing
+# wallpaper.
+newtab-picture-menu-hide-photo = Günün resmini gizle
+# Context menu item that restores today’s picture after it has been hidden.
+newtab-picture-menu-show-photo = Günün resmini göster
+# Context menu item linking to more information about the widget.
+newtab-picture-menu-learn-more = Daha fazla bilgi al
+# Icon button shown on the widget once the picture is hidden; restores it.
+newtab-picture-show-button =
+    .title = Günün resmini göster
+    .aria-label = Günün resmini göster
+# Shown when there is no new picture to display yet.
+newtab-picture-check-back = Yarın yeni bir resim burada sizi bekleyecek
+# Screen-reader text alternative for the picture; fallback used when the source
+# provides no localized description.
+newtab-picture-image-alt = Günün Wikimedia Commons resmi
+
 ## Search box component.
 
 # "Search" is a verb/action
@@ -66,6 +341,7 @@ newtab-topsites-add-shortcut-label = Kısayol ekle
 newtab-topsites-add-shortcut-title =
     .title = Kısayol ekle
     .aria-label = Kısayol ekle
+newtab-shortcuts-pinned-area = Sabitlenmiş alan
 newtab-topsites-title-label = Başlık
 newtab-topsites-title-input =
     .placeholder = Başlık yazın
@@ -151,6 +427,8 @@ newtab-menu-section-block = Engelle
 # "Follow", "unfollow", and "following" are social media terms that refer to subscribing to or unsubscribing from a section of stories.
 # e.g. Following the travel section of stories.
 newtab-menu-section-unfollow-topic = Takibi bırak
+# Context menu option to open a support page explaining the New Tab personalization features and privacy controls.
+newtab-menu-section-learn-more = Daha fazla bilgi al
 # "Follow", "unfollow", and "following" are social media terms that refer to subscribing to or unsubscribing from a section of stories.
 # e.g. Following the travel section of stories.
 newtab-menu-section-unfollow = Konuyu takip etmeyi bırak
@@ -349,6 +627,8 @@ newtab-recommended-stories-toggle =
     .label = Önerilen makaleler
 newtab-custom-stories-personalized-toggle =
     .label = Haberler
+newtab-custom-stories-personalized-checkbox =
+    .label = Etkinliğinize göre kişiselleştirilmiş haberler
 newtab-custom-stories-personalized-checkbox-label = Etkinliğinize göre kişiselleştirilmiş haberler
 newtab-custom-pocket-sponsored = Sponsorlu haberler
 newtab-custom-pocket-show-recent-saves = Son kaydedilenleri göster
@@ -369,6 +649,12 @@ newtab-custom-widget-clock-toggle =
     .label = Saat
 newtab-custom-widget-sports-toggle2 =
     .label = Spor
+newtab-custom-widget-privacy-toggle =
+    .label = Gizlilik
+newtab-custom-widget-stocks-toggle =
+    .label = Borsa
+newtab-custom-widget-picture-toggle =
+    .label = Günün resmi
 newtab-custom-widget-section-title = Araçlar
 newtab-custom-widget-section-toggle =
     .label = Araçlar
@@ -754,8 +1040,6 @@ newtab-widget-lists-button-add-item = Görev ekle
 newtab-widget-lists-input-add-an-item2 =
     .placeholder = Görev ekle
     .aria-label = Görev ekle
-newtab-widget-lists-input-add-an-item =
-    .placeholder = Görev ekle
 newtab-widget-lists-input-error = Görev eklemek için lütfen metin yazın.
 newtab-widget-lists-input-menu-open-link = Bağlantıyı aç
 newtab-widget-lists-input-menu-move-up = Yukarı taşı
@@ -783,11 +1067,6 @@ newtab-widget-lists-name-placeholder-checklist2 =
 newtab-widget-lists-name-placeholder-new2 =
     .placeholder = Yeni liste
     .aria-label = Liste adını düzenle
-newtab-widget-lists-name-placeholder-checklist =
-    .placeholder = Görev listesi
-# The placeholder value of the name field for a newly created list
-newtab-widget-lists-name-placeholder-new =
-    .placeholder = Yeni liste
 newtab-widget-section-title = Araçlar
 newtab-widget-menu-hide = Aracı gizle
 newtab-widget-menu-change-size = Boyutu değiştir
@@ -852,6 +1131,8 @@ newtab-widget-timer-reset =
 newtab-widget-timer-menu-notifications = Bildirimleri kapat
 newtab-widget-timer-menu-notifications-on = Bildirimleri aç
 newtab-widget-timer-menu-learn-more = Daha fazla bilgi al
+newtab-widget-timer-menu-button =
+    .aria-label = Sayaç seçenekleri
 # The title displays above a set of top news headlines.
 newtab-daily-briefing-card-title = Öne çıkan başlıklar
 newtab-daily-briefing-card-menu-dismiss = Kapat
@@ -863,6 +1144,7 @@ newtab-widget-message-title = Listeler ve sayaçla işinize daha iyi odaklanın
 newtab-widget-message-copy = Küçük anımsatıcılar ve günlük görev listeleriyle, odaklanma oturumları ve molalarla zamanınızı daha iyi yönetin.
 # One spot refers to a dedicated section on new tab to manage and use widgets
 newtab-widget-message-focus-forecasts-title = Odaklanma, hava durumu ve daha fazlası tek noktada
+newtab-widget-message-focus-forecasts-body = { -brand-product-name } araçlarıyla gününüz daha akıcı olsun. İster hava durumunu kontrol edin, ister işinize odaklanın, ister dünya saatlerini takip edin.
 # "Make Firefox yours" refers to about:newtab. The call to action here ("Try it now")
 # is to customize the new tab page with a background image or color from
 # the built-in wallpaper collection or uploading your own image.
@@ -965,6 +1247,8 @@ newtab-sports-widget-show-less =
 # Toggle that filters the list of teams the user follows
 newtab-sports-widget-followed-only-toggle =
     .label = Yalnızca takip edilen takımlar
+# Status shown when more matches are being fetched.
+newtab-sports-widget-loading-more = Diğer maçlar yükleniyor…
 # Watch is a verb (as in watch matches online).
 newtab-sports-widget-watch =
     .label = İzle
@@ -1044,6 +1328,9 @@ newtab-sports-widget-third-place = Üçüncü
 newtab-sports-widget-runner-up = İkinci
 newtab-sports-widget-champions = Şampiyon
 newtab-sports-widget-world-cup-champions = 2026 Dünya Kupası Şampiyonu
+# Compact champions label for the medium-size widget result card; the larger
+# card uses newtab-sports-widget-world-cup-champions.
+newtab-sports-widget-world-cup-champions-short = 2026 Şampiyonu
 # Variables:
 #   $date (Date) - The match start time
 newtab-sports-widget-match-time = { DATETIME($date, hour: "2-digit", minute: "2-digit") }
@@ -1051,6 +1338,28 @@ newtab-sports-widget-match-full-time = Maç sonu
 newtab-sports-widget-match-halftime = Devre arası
 newtab-sports-widget-match-extra-time = Uzatmalar
 newtab-sports-widget-match-penalties = Penaltılar
+# Separator shown between two teams in a placeholder match row when no upcoming
+# match details are available yet.
+newtab-sports-widget-match-vs = -
+# Note shown in the Upcoming tab when no match details are available yet.
+newtab-sports-widget-no-upcoming-matches = Yaklaşan maç bilgileri için beklemede kalın
+
+## Sports widget live-games pagination. Shown when 2+ matches are live at the same time
+
+# arrow button that goes to the previous page of live matches.
+newtab-sports-widget-pagination-previous =
+    .aria-label = Önceki
+    .title = Önceki
+# arrow button that goes to the next page of live matches.
+newtab-sports-widget-pagination-next =
+    .aria-label = Sonraki
+    .title = Sonraki
+# Dot indicator that jumps directly to a given live match.
+# $index (number) - 1-based position of this dot in the list.
+# $total (number) - Total number of live matches.
+newtab-sports-widget-pagination-dot =
+    .aria-label = Canlı maç { $index }/{ $total }
+    .title = Canlı maç { $index }/{ $total }
 
 ## Accessible labels for match rows in the sports widget. These are read by
 ## screen readers to announce the match details and status.
@@ -1111,16 +1420,32 @@ newtab-sports-widget-team-name-label-eng =
     .label = İngiltere
 newtab-sports-widget-team-name-label-sco =
     .label = İskoçya
+# Placeholder used in a match row's aria-label for an undecided team (shown visually as "--").
+newtab-sports-widget-team-tbd = Belli değil
 
 ## Sports widget OMC messages
 ## Shown as on-screen messages promoting the Sports widget and World Cup wallpapers.
 
 newtab-sports-widget-message-wallpapers-title = Dünya Kupası’na yeni duvar kâğıtlarıyla başlayın
+newtab-sports-widget-message-wallpapers-body = Maçların heyecanını tarayıcınıza taşıyın.
 newtab-sports-widget-message-wallpapers-cta = Duvar kâğıdı seçin
+newtab-sports-widget-message-wallpapers-semifinals-title = Yarı finaller için yeni bir duvar kâğıdı indirin
+newtab-sports-widget-message-wallpapers-semifinals-body = Dünya Kupası’nın en büyük maçlarına hazırlanın.
 newtab-sports-widget-message-add-widgets-cta =
     .label = Araç ekleyin
+newtab-sports-widget-message-day-in-play-title = { -brand-product-name } araçlarıyla gününüze keyif katın
+newtab-sports-widget-message-day-in-play-body = Dünya Kupası’nı takip edin, işinize odaklanın, dünya saatlerini takip edin ve daha fazlasını yapın.
 newtab-sports-widget-message-explore-widgets-cta =
     .label = Araçları keşfedin
+
+## Survey prompts shown after the World Cup to gather feedback on the widgets experience.
+
+newtab-sports-widget-message-survey-title = Araçları iyileştirmemize yardım edin
+newtab-sports-widget-message-survey-body = Dünya Kupaları sona erdi. Bu deneyimle ilgili görüşlerinizi paylaşın.
+newtab-sports-widget-message-survey-widget-title = Dünya Kupası aracını nasıl buldunuz?
+newtab-sports-widget-message-survey-widget-body = Yeni araçlar geliştirmemize yardımcı olmak için geri bildiriminizi bizimle paylaşın. Sonra da sıradaki aracımızı deneyin.
+newtab-sports-widget-message-survey-cta =
+    .label = Ankete katıl
 
 ## Strings for activation window message variants. In certain experiment configurations,
 ## the strings from these variants may be displayed in a message below the search input

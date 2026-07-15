@@ -6,7 +6,7 @@ package org.mozilla.fenix.helpers
 
 import androidx.test.platform.app.InstrumentationRegistry
 import mozilla.components.feature.sitepermissions.SitePermissionsRules
-import org.mozilla.fenix.ext.settings
+import org.mozilla.fenix.ext.components
 
 /**
  * Helper for querying the status and modifying various features and settings in the application.
@@ -46,11 +46,6 @@ interface FeatureSettingsHelper {
     var isDeleteSitePermissionsEnabled: Boolean
 
     /**
-     * Whether the Unified Trust Panel is enabled or not.
-     */
-    var isUnifiedTrustPanelEnabled: Boolean
-
-    /**
      * Whether the Homepage Sports Widget is visible or not.
      */
     var isHomepageSportsWidgetVisible: Boolean
@@ -72,11 +67,6 @@ interface FeatureSettingsHelper {
     var isLocationPermissionEnabled: SitePermissionsRules.Action
 
     /**
-     * Enable or disable the new main menu CFR.
-     */
-    var isMenuRedesignCFREnabled: Boolean
-
-    /**
      * Enable or disable the new microsurvey feature.
      */
     var isMicrosurveyEnabled: Boolean
@@ -90,11 +80,6 @@ interface FeatureSettingsHelper {
      * Enable or disable the onboarding feature.
      */
     var onboardingFeatureEnabled: Boolean
-
-    /**
-     * Enable or disable new crash reporter flow.
-     */
-    var isUseNewCrashReporterFlow: Boolean
 
     /**
      * Enable or disable the tab swipe CFR.
@@ -160,12 +145,23 @@ interface FeatureSettingsHelper {
         }
     }
 
+    /**
+     * Enable or disable the IP Protection feature.
+     */
+    fun enableOrDisableIPProtection(enableIPProtection: Boolean) {
+        if (enableIPProtection) {
+            FxNimbusHelper.enableIPProtection()
+        } else {
+            FxNimbusHelper.disableIPProtection()
+        }
+    }
+
     fun applyFlagUpdates()
 
     fun resetAllFeatureFlags()
 
     companion object {
-        val settings = InstrumentationRegistry.getInstrumentation().targetContext.settings()
+        val settings = InstrumentationRegistry.getInstrumentation().targetContext.components.settings
     }
 }
 

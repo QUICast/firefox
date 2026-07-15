@@ -79,10 +79,15 @@ static inline bool IsDummy() {
 #endif
 }
 
-nsresult OOPInit(nsIFile* aXREDirectory);
+nsresult OOPInit(nsIFile* aXREDirectory, bool force = false);
 void OOPDeinit();
 nsresult SetExceptionHandler(nsIFile* aXREDirectory, bool force = false);
 nsresult UnsetExceptionHandler();
+
+/**
+ * Get the PID of the crash helper process, or 0 if disabled.
+ */
+uint32_t GetCrashHelperPid();
 
 /**
  * Tell the crash reporter to recalculate where crash events files should go.
@@ -271,6 +276,17 @@ bool ChildProcessProxyRendezvous(GeckoChildID aID, DWORD aPid, HANDLE aHandle);
 #endif  // defined(XP_WIN)
 
 // Child-side API
+
+/*
+ * Set the exception handler in a child process. The `sCrashReporter` argument
+ * must be present on all platforms. The `sCrashHelper` argument must be
+ * present on Android, Linux and Windows, and the `sCrashHelperSend` and
+ * `sCrashHelperRecv` arguments must be present on macOS and iOS. If any of
+ * these arguments are not present in the argument vector then this function
+ * will assert.
+ *
+ * @return bool If `false` the exception handler has not been set.
+ */
 MOZ_EXPORT bool SetRemoteExceptionHandler(int& aArgc, char** aArgv);
 bool UnsetRemoteExceptionHandler(bool wasSet = true);
 

@@ -24,11 +24,26 @@ const PREF_SYSTEM_SPORTS_ENABLED = "widgets.system.sportsWidget.enabled";
 const FOLLOW_STATE = "sports-follow-state";
 const CACHE_KEY = "sports_feed";
 const MERINO_CLIENT_KEY = "HNT_SPORTS_FEED";
+// Floor for how long a just-ended match's endedAt timestamp is retained before
+// being pruned. The effective retention is max(this, the configured celebration
+// window) so a window configured larger than this can't have its stamps pruned
+// before it expires; this only caps unbounded growth of the persisted map.
+const CELEBRATION_RETENTION_FLOOR_MS = 7 * 24 * 60 * 60 * 1000;
+// Default "recently ended" window; mirrors DEFAULT_CELEBRATION_WINDOW_MS in
+// SportsWidget.jsx (the content side owns the celebration-firing decision).
+const DEFAULT_CELEBRATION_WINDOW_MS = 24 * 60 * 60 * 1000;
+// Cap the persisted `celebrated` id list so it can't grow without bound over a
+// long tournament; only the most recent ids matter (the window is hours, not
+// the whole list). FIFO-trim the oldest.
+const MAX_CELEBRATED_IDS = 100;
 // SAP source string passed to BrowserSearchTelemetry — must be a key in
 // BrowserSearchTelemetry.KNOWN_SEARCH_SOURCES. Today this widget reports under
 // the generic newtab source; the search team may ask us to switch to a
 // widget-specific source later.
 const SEARCH_SAP_SOURCE = "about_newtab";
+// Status types that count as in-progress for the Now tab. Kept as a
+// defensive filter so the Now tab only ever surfaces actually-live matches.
+const LIVE_STATUS_TYPES = new Set(["live", "halftime", "extra time"]);
 
 // Adaptive live-polling prefs and constants
 const PREF_SPORTS_LIVE_ENABLED = "widgets.sportsWidget.live.enabled";
@@ -37,6 +52,8 @@ const PREF_POLL_IDLE_MS = "widgets.sportsWidget.pollIdleMs";
 const PREF_POLL_MATCH_DAY_MS = "widgets.sportsWidget.pollMatchDayMs";
 const PREF_POLL_LIVE_MS = "widgets.sportsWidget.pollLiveMs";
 const PREF_POLL_PREGAME_LEAD_MS = "widgets.sportsWidget.pollPregameLeadMs";
+const PREF_CELEBRATIONS_WINDOW_MS =
+  "widgets.sportsWidget.celebrations.windowMs";
 
 const POLLING_STATE_IDLE = "IDLE";
 const POLLING_STATE_MATCH_DAY = "MATCH_DAY";
@@ -48,7 +65,27 @@ const MAX_RETRY_DELAY_MS = 300000; // 5 minutes
 // value from producing a tight network loop. Pregame lead allows 0 (= disabled)
 // but no negatives.
 const MIN_POLL_INTERVAL_MS = 10000; // 10 seconds
+// When the widget becomes visible again, data is stale if older than
+// poll interval / this. 3 makes the threshold long enough to ignore
+// quick returns but short enough to catch real absences.
+const FRESHNESS_THRESHOLD_DIVISOR = 3;
+// Capping the time between /live refreshes to 15 seconds.
+// The button will also be disabled for this duration on the client side
+// but enforcing the cap here keeps a user from spamming from the endpoint regardless of UI state.
+const MIN_MANUAL_REFRESH_MS = 15000; // 15 seconds
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+// Load-more (infinite scroll) for the Upcoming and Results expanded lists.
+// The backend currently returns a ±21 day window around the requested
+// `date`, so stepping the date by 21 days advances the window forward or
+// backward without leaving gaps (the reducer drops any matches we already
+// have when consecutive windows overlap).
+const LOAD_MORE_STEP_DAYS = 21;
+
+// 2026 World Cup tournament bounds -- used as hard stops for load-more so
+// we don't keep asking for dates outside the tournament's range.
+const TOURNAMENT_START_MS = Date.UTC(2026, 5, 11); // 2026-06-11
+const TOURNAMENT_END_MS = Date.UTC(2026, 6, 19); // 2026-07-19
 
 /**
  * Manages persistent state for the Sports widget (selected teams and widget
@@ -72,6 +109,7 @@ export class SportsFeed {
     this.pollingState = POLLING_STATE_IDLE;
     this.visibleTabs = new Set();
     this.lastLiveUpdated = null;
+    this.lastFetchAt = null;
     this.nextKickoffDeltaMs = null;
     // Reentrancy guard: stops a second tick() from racing the first when
     // fetchNow() is called back-to-back (e.g. a WIDGETS_SPORTS_LIVE_VISIBLE
@@ -104,7 +142,23 @@ export class SportsFeed {
       pollIdleMs: widgets.sportsWidgetPollIdleMs ?? legacy.pollIdleMs,
       pollPregameLeadMs:
         widgets.sportsWidgetPollPregameLeadMs ?? legacy.pollPregameLeadMs,
+      celebrationsWindowMs:
+        widgets.sportsWidgetCelebrationsWindowMs ?? legacy.celebrationsWindowMs,
     };
+  }
+
+  // Effective "recently ended" celebration window (trainhop > pref > default),
+  // mirroring SportsWidget.jsx; the dedicated sportsCelebrations namespace wins.
+  // Used as a floor for endedAt retention so a configured window longer than the
+  // default retention floor doesn't get its stamps pruned before it expires.
+  resolveCelebrationWindowMs() {
+    const prefs = this.store.getState()?.Prefs.values ?? {};
+    return (
+      prefs.trainhopConfig?.sportsCelebrations?.windowMs ??
+      this._trainhopSports(prefs).celebrationsWindowMs ??
+      prefs[PREF_CELEBRATIONS_WINDOW_MS] ??
+      DEFAULT_CELEBRATION_WINDOW_MS
+    );
   }
 
   get enabled() {
@@ -141,6 +195,7 @@ export class SportsFeed {
       // first VISIBLE see a pending pollTimer and skip its fetchNow, so the
       // first live update wouldn't land until a full interval later.
       this.updatePollingStateFromMatches();
+      await this.maybeFetchWatchLive();
     }
   }
 
@@ -182,8 +237,21 @@ export class SportsFeed {
       matchesTab,
       followedOnly,
       liveIndex,
+      celebrations,
     } = cachedData;
     const { teams, matches, live } = sportsData || {};
+
+    if (celebrations) {
+      this.store.dispatch(
+        ac.BroadcastToContent({
+          type: at.WIDGETS_SPORTS_SET_CELEBRATIONS,
+          data: {
+            endedAt: celebrations.endedAt || {},
+            celebrated: celebrations.celebrated || [],
+          },
+        })
+      );
+    }
 
     if (widgetState) {
       this.store.dispatch(
@@ -347,10 +415,12 @@ export class SportsFeed {
     const liveData = liveResult.data;
     const liveMatchesValid = Array.isArray(liveData?.matches);
     // The /live endpoint is meant to be pre-filtered to in-progress games,
-    // but we re-filter on `status_type === "live"` as a defensive guard so
-    // the Now tab only ever surfaces actually-live matches.
+    // but we re-filter against LIVE_STATUS_TYPES as a defensive guard so the
+    // Now tab only ever surfaces actually-live matches.
     const liveMatches = liveMatchesValid
-      ? liveData.matches.filter(match => match?.status_type === "live")
+      ? liveData.matches.filter(match =>
+          LIVE_STATUS_TYPES.has(match?.status_type?.toLowerCase())
+        )
       : [];
 
     // Report the first failure only. Order: teams, then matches, then live,
@@ -401,6 +471,180 @@ export class SportsFeed {
     }
   }
 
+  // Fetches the next page of matches in the given direction by adding a
+  // `date` query param to /matches. Direction "upcoming" steps the date
+  // forward and reads `next[]` from the response; direction "results"
+  // steps backward and reads `previous[]`.
+  async fetchMoreMatches(direction) {
+    if (direction !== "upcoming" && direction !== "results") {
+      return;
+    }
+    const state = this.store.getState()?.SportsWidget;
+    const loadMore = state?.loadMore?.[direction] || {};
+    if (loadMore.loading || loadMore.exhausted) {
+      return;
+    }
+
+    const broadcast = data =>
+      this.store.dispatch(
+        ac.BroadcastToContent({
+          type: at.WIDGETS_SPORTS_SET_LOAD_MORE,
+          data: { direction, ...data },
+        })
+      );
+
+    const prefs = this.store.getState()?.Prefs.values;
+    const trainhop = this._trainhopSports(prefs);
+    const matchesEndpoint =
+      trainhop.matchesEndpoint || prefs?.["sports.worldCup.matchesEndpoint"];
+    const allowedEndpoints = (prefs?.["discoverystream.endpoints"] ?? "")
+      .split(",")
+      .map(item => item.trim())
+      .filter(item => item);
+    const allowlistError = this.getAllowlistError({
+      matchesEndpoint,
+      allowedEndpoints,
+    });
+    if (!matchesEndpoint || allowlistError) {
+      broadcast({ exhausted: true });
+      return;
+    }
+
+    // Step from the last requested date, or from "today" on the first call
+    // (the initial /matches fetch uses no date param, which the backend
+    // treats as today). All math in UTC to keep the YYYY-MM-DD stable
+    // across timezones.
+    const baseMs = loadMore.lastFetchedDate
+      ? Date.parse(`${loadMore.lastFetchedDate}T00:00:00Z`)
+      : Date.UTC(
+          new Date().getUTCFullYear(),
+          new Date().getUTCMonth(),
+          new Date().getUTCDate()
+        );
+    const stepMs = LOAD_MORE_STEP_DAYS * MS_PER_DAY;
+    const nextMs = direction === "upcoming" ? baseMs + stepMs : baseMs - stepMs;
+    const pastTournamentBounds =
+      direction === "upcoming"
+        ? nextMs > TOURNAMENT_END_MS
+        : nextMs < TOURNAMENT_START_MS;
+    if (pastTournamentBounds) {
+      broadcast({ exhausted: true });
+      return;
+    }
+    const next = new Date(nextMs);
+    const nextDate =
+      `${next.getUTCFullYear()}-` +
+      `${String(next.getUTCMonth() + 1).padStart(2, "0")}-` +
+      `${String(next.getUTCDate()).padStart(2, "0")}`;
+
+    // Flip the loading flag before awaiting so a second scroll-trigger
+    // can't race a fetch already in flight.
+    broadcast({ loading: true });
+
+    const result = await this.merino.fetchSportsMatches({
+      source: "newtab",
+      endpointUrl: matchesEndpoint,
+      date: nextDate,
+    });
+
+    const responseField = direction === "upcoming" ? "next" : "previous";
+    const newMatches = Array.isArray(result.data?.[responseField])
+      ? result.data[responseField]
+      : [];
+    // Mark exhausted only when the request succeeded and returned zero
+    // matches. If the request errored, leave exhausted false so a later
+    // scroll can try again.
+    const exhausted = !result.error && newMatches.length === 0;
+
+    // Only advance lastFetchedDate when the request succeeded. On error,
+    // leave it as-is so the next scroll retries the same date instead of
+    // stepping past a window we never actually loaded.
+    broadcast({
+      loading: false,
+      ...(result.error ? {} : { lastFetchedDate: nextDate }),
+      exhausted,
+      matches: newMatches,
+    });
+  }
+
+  // End-of-match celebration bookkeeping, persisted so a celebration fires at
+  // most once per match even across reloads. `endedAt` maps a just-ended
+  // match's global_event_id to the ms it dropped out of /live; `celebrated`
+  // lists ids that have already been shown.
+  async getCelebrations() {
+    const cached = (await this.cache.get()) || {};
+    const celebrations = cached.celebrations || {};
+    return {
+      endedAt: celebrations.endedAt || {},
+      celebrated: celebrations.celebrated || [],
+    };
+  }
+
+  async setCelebrations(celebrations) {
+    await this.cache.set("celebrations", celebrations);
+    this.store.dispatch(
+      ac.BroadcastToContent({
+        type: at.WIDGETS_SPORTS_SET_CELEBRATIONS,
+        data: celebrations,
+      })
+    );
+  }
+
+  // Stamps newly-ended matches with the current time (unless already recorded
+  // or already celebrated) and prunes stale entries. Called when the live poll
+  // shows matches that just dropped out of /live.
+  async recordEndedMatches(endedIds) {
+    if (!endedIds.length) {
+      return;
+    }
+    const { endedAt, celebrated } = await this.getCelebrations();
+    const celebratedSet = new Set(celebrated);
+    const now = Date.now();
+    // Never prune a stamp before its celebration window expires.
+    const retentionMs = Math.max(
+      this.resolveCelebrationWindowMs(),
+      CELEBRATION_RETENTION_FLOOR_MS
+    );
+    const nextEndedAt = { ...endedAt };
+    let changed = false;
+    for (const id of endedIds) {
+      if (
+        id === null ||
+        id === undefined ||
+        celebratedSet.has(id) ||
+        nextEndedAt[id] !== undefined
+      ) {
+        continue;
+      }
+      nextEndedAt[id] = now;
+      changed = true;
+    }
+    for (const [id, ts] of Object.entries(nextEndedAt)) {
+      if (now - ts > retentionMs) {
+        delete nextEndedAt[id];
+        changed = true;
+      }
+    }
+    if (changed) {
+      await this.setCelebrations({ endedAt: nextEndedAt, celebrated });
+    }
+  }
+
+  // Proactively fetch the watch-live broadcaster listings once a live game is
+  // present, so the "Watch live" entry point can be gated on region support
+  // before the button renders. The backend hoists the caller's own country
+  // into `your_region`; an empty `your_region` means the user's country has no
+  // listed broadcasters and the button must stay hidden. Fetches at most once
+  // per session — the user's region can't change mid-session, and the modal
+  // re-fetches on open for fresh links.
+  async maybeFetchWatchLive() {
+    const state = this.store.getState()?.SportsWidget;
+    const hasLiveGames = !!(state?.data?.live ?? []).length;
+    if (hasLiveGames && !state?.watchLive?.loaded) {
+      await this.fetchWatchLive();
+    }
+  }
+
   async fetchWatchLive() {
     const prefs = this.store.getState()?.Prefs.values;
     const watchLiveEndpoint =
@@ -419,6 +663,14 @@ export class SportsFeed {
       console.error(
         `Sports watch-live endpoint not in allowlist: ${watchLiveEndpoint}`
       );
+      // Settle the loaded flag with no data so the proactive maybeFetchWatchLive
+      // caller doesn't re-attempt this disallowed fetch on every poll tick.
+      this.store.dispatch(
+        ac.BroadcastToContent({
+          type: at.WIDGETS_SPORTS_WATCH_LIVE_SET,
+          data: null,
+        })
+      );
       return;
     }
 
@@ -436,18 +688,24 @@ export class SportsFeed {
     );
   }
 
-  // Write the current SportsWidget state to PersistentCache. Used by the
-  // LIVE-tick path so live scores survive browser shutdown; fetchSportsData
-  // caches directly from the fetched payload before dispatching.
+  // Save the latest live-scores snapshot to PersistentCache from the
+  // LIVE-tick path so live scores survive browser shutdown. Only updates
+  // the `live` field of the cached blob; `teams` and `matches` are kept
+  // as whatever `fetchSportsData` last wrote. That keeps the cached
+  // `matches` aligned with the backend's fresh ±21 day window and stops
+  // load-more's appended matches from being persisted across sessions.
   async persistSportsData() {
     const data = this.store.getState()?.SportsWidget?.data;
-    if (data?.teams?.length || data?.matches || data?.live) {
-      await this.cache.set("sportsData", {
-        teams: data.teams,
-        matches: data.matches,
-        live: data.live,
-      });
+    if (!data?.live?.length && !data?.teams?.length && !data?.matches) {
+      return;
     }
+    const cached = (await this.cache.get()) || {};
+    const existing = cached.sportsData || {};
+    await this.cache.set("sportsData", {
+      teams: existing.teams ?? data.teams,
+      matches: existing.matches ?? data.matches,
+      live: data.live,
+    });
   }
 
   // Resolve the next poll interval from trainhopConfig, then the raw pref
@@ -480,6 +738,13 @@ export class SportsFeed {
       prefs[PREF_POLL_PREGAME_LEAD_MS] ??
       600000;
     return Math.max(0, raw);
+  }
+
+  resolveFreshnessThresholdMs() {
+    return Math.max(
+      MIN_POLL_INTERVAL_MS,
+      this.resolvePollIntervalMs() / FRESHNESS_THRESHOLD_DIVISOR
+    );
   }
 
   // Fetch the /wcs/live endpoint. Returns the parsed response, or null on
@@ -538,8 +803,13 @@ export class SportsFeed {
       const prevLive = this.store.getState()?.SportsWidget?.data?.live ?? [];
       const prevLiveIds = new Set(prevLive.map(ev => ev.global_event_id));
       const newLiveIds = new Set(liveEvents.map(ev => ev.global_event_id));
-      const someEnded = [...prevLiveIds].some(id => !newLiveIds.has(id));
+      const endedIds = [...prevLiveIds].filter(id => !newLiveIds.has(id));
+      const someEnded = !!endedIds.length;
       const someStarted = [...newLiveIds].some(id => !prevLiveIds.has(id));
+
+      // Stamp the just-ended matches so the content side can celebrate them
+      // once, within the celebration window.
+      await this.recordEndedMatches(endedIds);
 
       this.dispatchLive(liveEvents);
       if (!liveEvents.length || someEnded || someStarted) {
@@ -555,6 +825,7 @@ export class SportsFeed {
         await this.persistSportsData();
       }
       this.updatePollingStateFromMatches();
+      await this.maybeFetchWatchLive();
       this.retryCount = 0;
       return true;
     }
@@ -562,6 +833,7 @@ export class SportsFeed {
     // long intervals, so no retry/backoff on this branch.
     await this.fetchSportsData();
     this.updatePollingStateFromMatches();
+    await this.maybeFetchWatchLive();
     this.retryCount = 0;
     return true;
   }
@@ -641,6 +913,7 @@ export class SportsFeed {
       if (!this.liveEnabled || this.visibleTabs.size === 0) {
         return;
       }
+      this.lastFetchAt = Date.now();
       this.scheduleNext();
     } finally {
       this.ticking = false;
@@ -651,9 +924,9 @@ export class SportsFeed {
     this.clearTimeout(this.pollTimer);
     this.clearTimeout(this.retryTimer);
     this.retryTimer = null;
-    // Null the ID inside the callback so `this.pollTimer` is a reliable
-    // "a poll is still scheduled" signal — visibility resume logic depends
-    // on this to avoid preempting an already-armed timer.
+    // When the timer fires, clear pollTimer. Then when a tab becomes
+    // visible, we can tell whether a poll is still scheduled: if it's
+    // null, fetch right away; if it's set, wait for the scheduled poll.
     this.pollTimer = this.setTimeout(() => {
       this.pollTimer = null;
       this.tick();
@@ -779,31 +1052,35 @@ export class SportsFeed {
       // ---------------------------------------------------------------------
       // How live polling decides when to fetch /live (during a live game)
       //
-      // The rule is simple: we poll only while the widget is actually being
-      // looked at. A tab counts as "looking" when the widget is on-screen in
-      // the foreground tab. The content side already enforces this — it only
-      // reports a tab visible when the widget is scrolled into view and the
-      // tab is in front (isIntersecting && !document.hidden). We keep the set
-      // of those tabs in `visibleTabs`. If the set is empty, we stop polling.
-      // There is no timestamp or "last fetched" tracking — just this set and
-      // the poll timer.
+      // We poll only while the widget is actually being looked at. A tab
+      // counts as "looking" when the widget is on-screen in the foreground
+      // tab; the content side reports a tab visible when the widget is
+      // scrolled into view and the tab is in front (isIntersecting &&
+      // !document.hidden). We keep the set of those tabs in `visibleTabs`.
+      // If the set is empty, we stop polling.
+      //
+      // When a tab becomes visible we fetch if either no poll is
+      // scheduled (bootstrap) or `lastFetchAt` is older than
+      // `resolveFreshnessThresholdMs()`. Otherwise the pending poll
+      // covers us and we wait it out.
       //
       // What that means in practice:
-      //  1. You open New Tab on a live game: the widget shows up, we fetch
+      //  1. You open New Tab on a live game: lastFetchAt is null, we fetch
       //     /live right away, and start the timer.
       //  2. The timer runs out while you're looking at it: we fetch /live
-      //     again and restart the timer.
-      //  3. You scroll the widget off-screen: we stop, but we leave the timer
-      //     running. If it runs out while it's off-screen, we just skip that
-      //     fetch. When you scroll back, we fetch again only if the timer
-      //     already ran out; if it hasn't, we wait for it. (This is why
-      //     quickly scrolling away and back does NOT fire extra requests.)
+      //     again, restart the timer, and stamp lastFetchAt.
+      //  3. You scroll the widget off-screen: we stop, but the timer
+      //     keeps running. If it fires while you're off-screen, we skip
+      //     that fetch and don't schedule the next one. On scroll-back
+      //     we fetch if no poll is scheduled or the data has aged past
+      //     the freshness threshold.
       //  4. Two tabs are open and a background tab has the widget on-screen:
-      //     it does not count, because it isn't the active tab. Only the tab
-      //     you're actually looking at drives a fetch.
-      //  5. You open a new tab while the timer is still running: the new tab
-      //     does not fetch on its own — it waits for the timer that's already
-      //     going.
+      //     it does not count, because it isn't the active tab. Only the
+      //     tab you're actually looking at drives a fetch.
+      //  5. You open a new tab while a poll is pending and the data is
+      //     still fresh: the new tab waits for the running timer. Open
+      //     it after a long absence and it fetches, because `lastFetchAt`
+      //     is now stale.
       // ---------------------------------------------------------------------
 
       // A tab going hidden, or closing, just drops its port. NEW_TAB_UNLOAD is
@@ -829,22 +1106,40 @@ export class SportsFeed {
         const portId = au.getPortIdOfSender(action);
         if (portId) {
           this.visibleTabs.add(portId);
-          // Resume polling only when it is actually paused. A pending timer
-          // (or in-flight tick) means the current interval has not elapsed,
-          // so we wait for it rather than firing an immediate /live — this
-          // is what keeps scroll-off-and-back, and opening new tabs, from
-          // issuing extra requests. The null-in-callback bookkeeping in
-          // scheduleNext/scheduleRetry makes these handle checks reliable
-          // after a timer has fired.
-          if (
+          // When the tab becomes visible, fetch if either no poll is
+          // scheduled (bootstrap) or the data is stale. Preempting a
+          // pending pollTimer is safe because fetchNow() clears it first.
+          const stale =
+            this.lastFetchAt === null ||
+            Date.now() - this.lastFetchAt > this.resolveFreshnessThresholdMs();
+          const shouldFetchNow =
             this.liveEnabled &&
             !this.ticking &&
-            !this.pollTimer &&
-            !this.retryTimer
-          ) {
+            !this.retryTimer &&
+            (!this.pollTimer || stale);
+          if (shouldFetchNow) {
             this.fetchNow();
           }
         }
+        break;
+      }
+      // User clicked the refresh button on a live match row, this will pull data from the /live endpoint
+      // while enforcing a hard-coded MIN_MANUAL_REFRESH_MS cap between successive manual fetches.
+      case at.WIDGETS_SPORTS_LIVE_REFRESH: {
+        if (
+          !this.liveEnabled ||
+          this.pollingState !== POLLING_STATE_LIVE ||
+          this.ticking
+        ) {
+          break;
+        }
+        if (
+          this.lastLiveUpdated !== null &&
+          Date.now() - this.lastLiveUpdated < MIN_MANUAL_REFRESH_MS
+        ) {
+          break;
+        }
+        this.fetchNow();
         break;
       }
       // User clicked a match row — run a search for the match's `query` using
@@ -918,8 +1213,30 @@ export class SportsFeed {
         );
         break;
       }
+      // Content fired a celebration for a match — record it so it never fires
+      // again (across reloads/tabs) and drop its pending endedAt stamp.
+      case at.WIDGETS_SPORTS_MARK_CELEBRATED: {
+        const id = action.data;
+        const { endedAt, celebrated } = await this.getCelebrations();
+        if (id === null || id === undefined || celebrated.includes(id)) {
+          break;
+        }
+        const nextEndedAt = { ...endedAt };
+        delete nextEndedAt[id];
+        await this.setCelebrations({
+          endedAt: nextEndedAt,
+          celebrated: [...celebrated, id].slice(-MAX_CELEBRATED_IDS),
+        });
+        break;
+      }
       case at.WIDGETS_SPORTS_WATCH_LIVE_REQUEST:
         await this.fetchWatchLive();
+        break;
+      // User scrolled past the bottom of an expanded "View all" list —
+      // fetch the next 21-day window of matches in the requested direction
+      // (forward for "upcoming", backward for "results").
+      case at.WIDGETS_SPORTS_FETCH_MORE_MATCHES:
+        await this.fetchMoreMatches(action.data?.direction);
         break;
     }
   }

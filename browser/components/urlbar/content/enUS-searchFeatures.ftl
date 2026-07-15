@@ -78,18 +78,12 @@ firefox-suggest-weather-high-low = High: { $high }°{ $unit } · Low: { $low }°
 
 ## These strings are used as labels of menu items in the result menu.
 
-firefox-suggest-command-dont-show-this =
-  .label = Don’t show this
-firefox-suggest-command-dont-show-mdn =
-  .label = Don’t show { -mdn-brand-short-name } suggestions
-firefox-suggest-command-not-interested =
-  .label = Not interested
-firefox-suggest-command-dont-show-this-suggestion =
-  .label = Don’t show this suggestion
-firefox-suggest-command-dont-show-any-suggestions =
-  .label = Don’t show any suggestions
-firefox-suggest-command-dont-show-addons =
-  .label = Don’t show { -brand-product-name } extension suggestions
+firefox-suggest-command-dont-show-this2 = Don’t show this
+firefox-suggest-command-dont-show-mdn2 = Don’t show { -mdn-brand-short-name } suggestions
+firefox-suggest-command-not-interested2 = Not interested
+firefox-suggest-command-dont-show-this-suggestion2 = Don’t show this suggestion
+firefox-suggest-command-dont-show-any-suggestions2 = Don’t show any suggestions
+firefox-suggest-command-dont-show-addons2 = Don’t show { -brand-product-name } extension suggestions
 
 ## These strings are used for Yelp suggestions in the urlbar.
 
@@ -215,8 +209,7 @@ urlbar-result-yelp-realtime-opt-in-title = Find great places nearby and more
 urlbar-result-yelp-realtime-opt-in-description = Get suggestions for nearby places and services — plus updates on stocks, sports scores, and more from our partners by sharing search query data with { -vendor-short-name }. <a data-l10n-name="learn-more-link">Learn more</a>
 
 # This string is shown in the result menu.
-urlbar-result-menu-dont-show-yelp-realtime =
-  .label = Don’t show { -yelp-brand-name } suggestions
+urlbar-result-menu-dont-show-yelp-realtime2 = Don’t show { -yelp-brand-name } suggestions
 
 # A message that replaces a result when the user dismisses Yelp realtime
 # suggestions.
@@ -261,8 +254,7 @@ urlbar-result-aria-group-yelp-realtime =
 ## and the status like delayed, etc.
 
 # This string is shown in the result menu.
-urlbar-result-menu-dont-show-flight-status =
-  .label = Don’t show flight status suggestions
+urlbar-result-menu-dont-show-flight-status = Don’t show flight status suggestions
 
 # A message that replaces a result when the user dismisses flight status
 # suggestions.
@@ -343,8 +335,7 @@ urlbar-result-sports-status-live = Live
 urlbar-result-sports-status-final = Final
 
 # This string is shown in the result menu.
-urlbar-result-menu-dont-show-sports =
-  .label = Don’t show sports suggestions
+urlbar-result-menu-dont-show-sports = Don’t show sports suggestions
 
 # A message that replaces a result when the user dismisses sports suggestions.
 urlbar-result-dismissal-acknowledgment-sports = Thanks for your feedback. You won’t see sports suggestions anymore.
@@ -352,21 +343,3 @@ urlbar-result-dismissal-acknowledgment-sports = Thanks for your feedback. You wo
 # This a11y label is read by screen readers when an item in the row is selected.
 urlbar-result-aria-group-sports =
   .aria-label = Sports suggestions
-
-## For urlbar results with last-visited dates like history, bookmarks, and top
-## sites, these strings replace their URL when the user selects or hovers over
-## them. They explain the reason the result is shown.
-##
-## TODO: Move these to browser.ftl when they are finalized.
-
-# This explanation is used when the when the last-visited date is formatted as
-# an absolute date like "11 May" or "11 May 2026".
-# Variables:
-#   $date (string) - A localized absolute date string
-urlbar-result-explanation-last-visited-absolute = You last visited this on { $date }
-
-# This explanation is used when the when the last-visited date is formatted as
-# one of the following relative dates: "yesterday", "today"
-# Variables:
-#   $date (string) - A localized relative date string
-urlbar-result-explanation-last-visited-relative = You last visited this { $date }

@@ -5,28 +5,28 @@
 #include "CanvasChild.h"
 
 #include "MainThreadUtils.h"
+#include "RecordedCanvasEventImpl.h"
+#include "mozilla/AppShutdown.h"
+#include "mozilla/Mutex.h"
+#include "mozilla/StaticPrefs_gfx.h"
 #include "mozilla/dom/WorkerPrivate.h"
 #include "mozilla/dom/WorkerRef.h"
 #include "mozilla/dom/WorkerRunnable.h"
 #include "mozilla/gfx/CanvasManagerChild.h"
 #include "mozilla/gfx/CanvasShutdownManager.h"
 #include "mozilla/gfx/DrawTargetRecording.h"
-#include "mozilla/gfx/gfxVars.h"
-#include "mozilla/gfx/Tools.h"
-#include "mozilla/gfx/Rect.h"
 #include "mozilla/gfx/Point.h"
+#include "mozilla/gfx/Rect.h"
+#include "mozilla/gfx/Tools.h"
+#include "mozilla/gfx/gfxVars.h"
 #include "mozilla/ipc/Endpoint.h"
 #include "mozilla/ipc/ProcessChild.h"
 #include "mozilla/ipc/SharedMemoryHandle.h"
 #include "mozilla/layers/CanvasDrawEventRecorder.h"
 #include "mozilla/layers/ImageDataSerializer.h"
 #include "mozilla/layers/SourceSurfaceSharedData.h"
-#include "mozilla/AppShutdown.h"
-#include "mozilla/Mutex.h"
-#include "mozilla/StaticPrefs_gfx.h"
-#include "nsIObserverService.h"
 #include "nsICanvasRenderingContextInternal.h"
-#include "RecordedCanvasEventImpl.h"
+#include "nsIObserverService.h"
 
 namespace mozilla {
 namespace layers {
@@ -135,7 +135,17 @@ class SourceSurfaceCanvasRecording final : public gfx::SourceSurface {
         });
   }
 
-  gfx::SurfaceType GetType() const final { return mRecordedSurface->GetType(); }
+  gfx::SurfaceType GetType() const final {
+    return gfx::SurfaceType::CANVAS_RECORDING;
+  }
+
+  gfx::SurfaceType GetUnderlyingType() const final {
+    return mRecordedSurface->GetType();
+  }
+
+  already_AddRefed<SourceSurface> GetUnderlyingSurface() final {
+    return do_AddRef(mRecordedSurface);
+  }
 
   gfx::IntSize GetSize() const final { return mRecordedSurface->GetSize(); }
 
@@ -645,12 +655,19 @@ already_AddRefed<gfx::DataSourceSurface> CanvasChild::GetDataSurface(
     return nullptr;
   }
 
+  size_t sizeRequired = SizeOfDataSurfaceShmem(ssSize, ssFormat);
+  if (!sizeRequired) {
+    return nullptr;
+  }
+
   // Shmem is only valid if the surface is the latest snapshot (not detached).
   if (!aDetached) {
     // If there is a shmem associated with this snapshot id, then we want to try
-    // use that directly without having to allocate a new shmem for retrieval.
+    // to use that directly instead of allocating a new shmem for retrieval.
+    // Also check that it meets the size required.
     auto it = mTextureInfo.find(aTextureOwnerId);
-    if (it != mTextureInfo.end() && it->second.mSnapshotShmem) {
+    if (it != mTextureInfo.end() && it->second.mSnapshotShmem &&
+        !NS_WARN_IF(sizeRequired > it->second.mSnapshotShmem->Size())) {
       const auto* shmemPtr = it->second.mSnapshotShmem->DataAs<uint8_t>();
       MOZ_ASSERT(shmemPtr);
       mRecorder->RecordEvent(RecordedPrepareShmem(aTextureOwnerId));
@@ -673,11 +690,6 @@ already_AddRefed<gfx::DataSourceSurface> CanvasChild::GetDataSurface(
       aMayInvalidate = true;
       return dataSurface.forget();
     }
-  }
-
-  size_t sizeRequired = SizeOfDataSurfaceShmem(ssSize, ssFormat);
-  if (!sizeRequired) {
-    return nullptr;
   }
 
   RecordEvent(RecordedCacheDataSurface(aSurface));

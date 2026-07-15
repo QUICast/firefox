@@ -6,21 +6,22 @@
 
 #include <string.h>  // for memcpy, memset
 
-#include "GLImages.h"    // for SurfaceTextureImage
+#include "GLImages.h"  // for SurfaceTextureImage
+#include "GPUVideoImage.h"
 #include "MediaInfo.h"   // VideoInfo::Rotation
 #include "YCbCrUtils.h"  // for YCbCr conversions
 #include "gfx2DGlue.h"
 #include "gfxPlatform.h"  // for gfxPlatform
 #include "gfxUtils.h"     // for gfxUtils
-#include "GPUVideoImage.h"
 #include "libyuv.h"
 #include "mozilla/CheckedInt.h"
 #include "mozilla/ProfilerLabels.h"
 #include "mozilla/RefPtr.h"  // for already_AddRefed
 #include "mozilla/StaticPrefs_layers.h"
+#include "mozilla/UniquePtrExtensions.h"
 #include "mozilla/gfx/2D.h"
-#include "mozilla/gfx/gfxVars.h"
 #include "mozilla/gfx/Swizzle.h"
+#include "mozilla/gfx/gfxVars.h"
 #include "mozilla/ipc/CrossProcessMutex.h"  // for CrossProcessMutex, etc
 #include "mozilla/layers/CompositorTypes.h"
 #include "mozilla/layers/ImageBridgeChild.h"     // for ImageBridgeChild
@@ -30,9 +31,8 @@
 #include "mozilla/layers/SharedPlanarYCbCrImage.h"
 #include "mozilla/layers/SharedRGBImage.h"
 #include "mozilla/layers/TextureClientRecycleAllocator.h"
-#include "mozilla/UniquePtrExtensions.h"
-#include "nsProxyRelease.h"
 #include "nsISupportsUtils.h"  // for NS_IF_ADDREF
+#include "nsProxyRelease.h"
 
 #ifdef XP_DARWIN
 #  include "MacIOSurfaceImage.h"
@@ -794,10 +794,11 @@ nsresult PlanarYCbCrImage::BuildSurfaceDescriptorBuffer(
 
     // If we can copy directly from the surface, let's do that to avoid the YUV
     // to RGB conversion.
-    if (mSourceSurface && mSourceSurface->GetSize() == size) {
-      DataSourceSurface::ScopedMap map(mSourceSurface, DataSourceSurface::READ);
+    RefPtr<gfx::DataSourceSurface> sourceSurface = mSourceSurface.Get();
+    if (sourceSurface && sourceSurface->GetSize() == size) {
+      DataSourceSurface::ScopedMap map(sourceSurface, DataSourceSurface::READ);
       if (map.IsMapped() && SwizzleData(map.GetData(), map.GetStride(),
-                                        mSourceSurface->GetFormat(), buffer,
+                                        sourceSurface->GetFormat(), buffer,
                                         stride, format, size)) {
         return NS_OK;
       }
@@ -894,7 +895,13 @@ static void CopyPlane(uint8_t* aDst, const uint8_t* aSrc,
   int32_t width = aSize.width;
   const int32_t rowBytes = width * aBytesPerElement;
 
-  MOZ_RELEASE_ASSERT(rowBytes <= aStride);
+  // The interleaved (aSkip != 0) path steps over skipped elements between
+  // pixels, so a row reaches further than the packed width. Computed with
+  // 64-bit arithmetic.
+  const int64_t srcRowSpan =
+      (static_cast<int64_t>(width) + static_cast<int64_t>(width - 1) * aSkip) *
+      aBytesPerElement;
+  MOZ_RELEASE_ASSERT(srcRowSpan <= aStride);
 
   if (!aSkip) {
     // Fast path: planar input.
@@ -981,9 +988,8 @@ nsresult PlanarYCbCrImage::AdoptData(const Data& aData) {
 }
 
 already_AddRefed<gfx::SourceSurface> PlanarYCbCrImage::GetAsSourceSurface() {
-  if (mSourceSurface) {
-    RefPtr<gfx::SourceSurface> surface(mSourceSurface);
-    return surface.forget();
+  if (RefPtr<gfx::DataSourceSurface> cached = mSourceSurface.Get()) {
+    return cached.forget();
   }
 
   gfx::IntSize size(mSize);
@@ -1013,39 +1019,38 @@ already_AddRefed<gfx::SourceSurface> PlanarYCbCrImage::GetAsSourceSurface() {
     return nullptr;
   }
 
-  mSourceSurface = surface;
+  mSourceSurface.Set(surface);
 
   return surface.forget();
 }
 
-PlanarYCbCrImage::~PlanarYCbCrImage() {
-  NS_ReleaseOnMainThread("PlanarYCbCrImage::mSourceSurface",
-                         mSourceSurface.forget());
-}
+PlanarYCbCrImage::~PlanarYCbCrImage() = default;
 
 NVImage::NVImage() : Image(nullptr, ImageFormat::NV_IMAGE), mBufferSize(0) {}
 
-NVImage::~NVImage() {
-  NS_ReleaseOnMainThread("NVImage::mSourceSurface", mSourceSurface.forget());
-}
+NVImage::~NVImage() = default;
 
 IntSize NVImage::GetSize() const { return mSize; }
 
 IntRect NVImage::GetPictureRect() const { return mData.mPictureRect; }
 
 already_AddRefed<SourceSurface> NVImage::GetAsSourceSurface() {
-  if (mSourceSurface) {
-    RefPtr<gfx::SourceSurface> surface(mSourceSurface);
-    return surface.forget();
+  if (RefPtr<gfx::DataSourceSurface> cached = mSourceSurface.Get()) {
+    return cached.forget();
   }
 
   // Convert the current NV12 or NV21 data to YUV420P so that we can follow the
   // logics in PlanarYCbCrImage::GetAsSourceSurface().
   auto ySize = mData.YDataSize();
   auto cbcrSize = mData.CbCrDataSize();
-  const int bufferLength =
-      ySize.height * mData.mYStride + cbcrSize.height * cbcrSize.width * 2;
-  auto buffer = MakeUnique<uint8_t[]>(bufferLength);
+  auto bufferLength = CheckedInt32(ySize.height) * mData.mYStride +
+                      CheckedInt32(cbcrSize.height) * cbcrSize.width * 2;
+  if (!bufferLength.isValid()) {
+    NS_ERROR("Image buffer length exceeds integer limits.");
+    return nullptr;
+  }
+
+  auto buffer = MakeUnique<uint8_t[]>(bufferLength.value());
 
   Data aData = mData;
   aData.mCbCrStride = cbcrSize.width;
@@ -1094,7 +1099,7 @@ already_AddRefed<SourceSurface> NVImage::GetAsSourceSurface() {
     return nullptr;
   }
 
-  mSourceSurface = surface;
+  mSourceSurface.Set(surface);
 
   return surface.forget();
 }
@@ -1116,10 +1121,17 @@ nsresult NVImage::BuildSurfaceDescriptorBuffer(
 
   UniquePtr<uint8_t[]> buffer;
 
-  if (!mSourceSurface) {
-    const int bufferLength =
-        ySize.height * mData.mYStride + cbcrSize.height * cbcrSize.width * 2;
-    buffer = MakeUnique<uint8_t[]>(bufferLength);
+  RefPtr<gfx::DataSourceSurface> sourceSurface = mSourceSurface.Get();
+  if (!sourceSurface) {
+    auto bufferLength = CheckedInt32(ySize.height) * mData.mYStride +
+                        CheckedInt32(cbcrSize.height) * cbcrSize.width * 2;
+
+    if (!bufferLength.isValid()) {
+      NS_ERROR("Image buffer length exceeds integer limits.");
+      return NS_ERROR_FAILURE;
+    }
+
+    buffer = MakeUnique<uint8_t[]>(bufferLength.value());
     aData.mYChannel = buffer.get();
 
     if (mData.mCbChannel < mData.mCrChannel) {  // NV12
@@ -1146,7 +1158,7 @@ nsresult NVImage::BuildSurfaceDescriptorBuffer(
     return NS_ERROR_FAILURE;
   }
 
-  if (mSourceSurface && mSourceSurface->GetSize() != size) {
+  if (sourceSurface && sourceSurface->GetSize() != size) {
     return NS_ERROR_NOT_IMPLEMENTED;
   }
 
@@ -1158,7 +1170,7 @@ nsresult NVImage::BuildSurfaceDescriptorBuffer(
     return rv;
   }
 
-  if (!mSourceSurface) {
+  if (!sourceSurface) {
     rv = gfx::ConvertYCbCrToRGB(aData, format, size, output, stride);
     if (NS_WARN_IF(NS_FAILED(rv))) {
       MOZ_ASSERT_UNREACHABLE("Failed to convert YUV into RGB data");
@@ -1167,12 +1179,12 @@ nsresult NVImage::BuildSurfaceDescriptorBuffer(
     return NS_OK;
   }
 
-  DataSourceSurface::ScopedMap map(mSourceSurface, DataSourceSurface::WRITE);
+  DataSourceSurface::ScopedMap map(sourceSurface, DataSourceSurface::WRITE);
   if (NS_WARN_IF(!map.IsMapped())) {
     return NS_ERROR_FAILURE;
   }
 
-  if (!SwizzleData(map.GetData(), map.GetStride(), mSourceSurface->GetFormat(),
+  if (!SwizzleData(map.GetData(), map.GetStride(), sourceSurface->GetFormat(),
                    output, stride, format, size)) {
     return NS_ERROR_FAILURE;
   }

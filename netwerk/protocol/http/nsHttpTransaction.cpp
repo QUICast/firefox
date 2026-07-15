@@ -8,31 +8,33 @@
 #include <algorithm>
 #include <utility>
 
-#include "HttpLog.h"
 #include "HTTPSRecordResolver.h"
+#include "HttpLog.h"
+#include "MockHttpAuth.h"
 #include "NSSErrorsService.h"
 #include "base/basictypes.h"
 #include "mozilla/AppShutdown.h"
 #include "mozilla/Components.h"
+#include "mozilla/ScopeExit.h"
+#include "mozilla/StaticPrefs_network.h"
+#include "mozilla/Tokenizer.h"
 #include "mozilla/glean/NetwerkMetrics.h"
 #include "mozilla/glean/NetwerkProtocolHttpMetrics.h"
 #include "mozilla/net/SSLTokensCache.h"
-#include "mozilla/ScopeExit.h"
-#include "mozilla/Tokenizer.h"
-#include "mozilla/StaticPrefs_network.h"
-#include "MockHttpAuth.h"
 #include "nsCRT.h"
 #include "nsComponentManagerUtils.h"  // do_CreateInstance
 #include "nsHttpBasicAuth.h"
 #include "nsHttpChannel.h"
 #include "nsHttpChunkedDecoder.h"
+#include "nsHttpConnectionMgr.h"
 #include "nsHttpDigestAuth.h"
 #include "nsHttpHandler.h"
-#include "nsHttpConnectionMgr.h"
 #include "nsHttpNTLMAuth.h"
 #ifdef MOZ_AUTH_EXTENSION
 #  include "nsHttpNegotiateAuth.h"
 #endif
+#include "SpeculativeTransaction.h"
+#include "mozilla/Preferences.h"
 #include "nsHttpRequestHead.h"
 #include "nsHttpResponseHead.h"
 #include "nsICancelable.h"
@@ -62,8 +64,6 @@
 #include "nsThreadUtils.h"
 #include "nsTransportUtils.h"
 #include "sslerr.h"
-#include "SpeculativeTransaction.h"
-#include "mozilla/Preferences.h"
 
 //-----------------------------------------------------------------------------
 
@@ -186,11 +186,11 @@ nsHttpTransaction::~nsHttpTransaction() {
 nsresult nsHttpTransaction::Init(
     uint32_t caps, nsHttpConnectionInfo* cinfo, nsHttpRequestHead* requestHead,
     nsIInputStream* requestBody, uint64_t requestContentLength,
-    bool requestBodyHasHeaders, nsIEventTarget* target,
-    nsIInterfaceRequestor* callbacks, nsITransportEventSink* eventsink,
-    uint64_t browserId, HttpTrafficCategory trafficCategory,
-    nsIRequestContext* requestContext, ClassOfService classOfService,
-    uint32_t initialRwin, bool responseTimeoutEnabled, uint64_t channelId,
+    nsIEventTarget* target, nsIInterfaceRequestor* callbacks,
+    nsITransportEventSink* eventsink, uint64_t browserId,
+    HttpTrafficCategory trafficCategory, nsIRequestContext* requestContext,
+    ClassOfService classOfService, uint32_t initialRwin,
+    bool responseTimeoutEnabled, uint64_t channelId,
     TransactionObserverFunc&& transactionObserver,
     nsILoadInfo::IPAddressSpace aParentIpAddressSpace,
     const struct LNAPerms& aLnaPermissionStatus) {
@@ -267,8 +267,7 @@ nsresult nsHttpTransaction::Init(
   mRequestHead = requestHead;
 
   mReqHeaderBuf = nsHttp::ConvertRequestHeadToString(
-      *requestHead, !!requestBody, requestBodyHasHeaders,
-      cinfo->UsingConnect());
+      *requestHead, !!requestBody, false, cinfo->UsingConnect());
 
   if (LOG1_ENABLED()) {
     LOG1(("http request [\n"));
@@ -520,7 +519,9 @@ UniquePtr<nsHttpHeaderArray> nsHttpTransaction::TakeResponseTrailers() {
 
 void nsHttpTransaction::SetProxyConnectFailed() { mProxyConnectFailed = true; }
 
-nsHttpRequestHead* nsHttpTransaction::RequestHead() { return mRequestHead; }
+const nsHttpRequestHead* nsHttpTransaction::RequestHead() {
+  return mRequestHead;
+}
 
 uint32_t nsHttpTransaction::Http1xTransactionCount() { return 1; }
 
@@ -548,6 +549,9 @@ void nsHttpTransaction::SetConnection(nsAHttpConnection* conn) {
         mEchConfigUsed = mConnection->GetEchConfigUsed();
       }
 
+      // On a reused HTTP/1.1 CONNECT tunnel OnProxyConnectComplete is not
+      // called again, so pick up the head the connection captured during
+      // tunnel setup. This is just a RefPtr addref, not a copy.
       if (mConnInfo && mConnInfo->UsingConnect()) {
         RefPtr<HttpConnectionBase> httpConn = mConnection->HttpConnection();
         if (httpConn) {
@@ -1430,6 +1434,12 @@ void nsHttpTransaction::Close(nsresult reason) {
   MaybeCancelFallbackTimer();
 
   MOZ_ASSERT(OnSocketThread(), "not on socket thread");
+
+  if (mTokenBucketCancel) {
+    mTokenBucketCancel->Cancel(reason);
+    mTokenBucketCancel = nullptr;
+  }
+
   if (reason == NS_BINDING_RETARGETED) {
     LOG(("  close %p skipped due to ERETARGETED\n", this));
     return;
@@ -1441,11 +1451,6 @@ void nsHttpTransaction::Close(nsresult reason) {
   }
 
   NotifyTransactionObserver(reason);
-
-  if (mTokenBucketCancel) {
-    mTokenBucketCancel->Cancel(reason);
-    mTokenBucketCancel = nullptr;
-  }
 
   // report the reponse is complete if not already reported
   if (!mResponseIsComplete) {
@@ -3462,19 +3467,21 @@ bool nsHttpTransaction::IsWebsocketUpgrade() {
 }
 
 void nsHttpTransaction::OnProxyConnectComplete(
-    const nsHttpResponseHead& aResponseHead) {
+    ProxyConnectResponseHead* aResponseHead) {
   MOZ_ASSERT(OnSocketThread(), "not on socket thread");
   MOZ_ASSERT(mConnInfo->UsingConnect());
+  MOZ_ASSERT(aResponseHead);
 
+  int32_t status = aResponseHead->Head().Status();
   LOG(("nsHttpTransaction::OnProxyConnectComplete %p aResponseCode=%d", this,
-       aResponseHead.Status()));
+       status));
 
   {
     MutexAutoLock lock(mLock);
-    mProxyConnectResponseHead = Some(aResponseHead);
+    mProxyConnectResponseHead = aResponseHead;
   }
 
-  if (mConnInfo->IsHttp3() && aResponseHead.Status() == 200 &&
+  if (mConnInfo->IsHttp3() && status == 200 &&
       !mHttp3TunnelFallbackTimerCreated) {
     mHttp3TunnelFallbackTimerCreated = true;
     CreateAndStartTimer(mHttp3TunnelFallbackTimer, this,
@@ -3484,10 +3491,12 @@ void nsHttpTransaction::OnProxyConnectComplete(
 
 int32_t nsHttpTransaction::GetProxyConnectResponseCode() {
   MutexAutoLock lock(mLock);
-  return mProxyConnectResponseHead ? mProxyConnectResponseHead->Status() : 0;
+  return mProxyConnectResponseHead ? mProxyConnectResponseHead->Head().Status()
+                                   : 0;
 }
 
-Maybe<nsHttpResponseHead> nsHttpTransaction::GetProxyConnectResponseHead() {
+RefPtr<ProxyConnectResponseHead>
+nsHttpTransaction::GetProxyConnectResponseHead() {
   MutexAutoLock lock(mLock);
   return mProxyConnectResponseHead;
 }

@@ -20,6 +20,7 @@ struct URLExtraData;
 namespace dom {
 struct BindContext;
 class CharacterDataBuffer;
+class CustomElementRegistry;
 struct UnbindContext;
 class ShadowRoot;
 class HTMLSlotElement;
@@ -303,9 +304,30 @@ class nsIContent : public nsINode {
    *
    * @return The assigned slot element or null.
    */
-  mozilla::dom::HTMLSlotElement* GetAssignedSlot() const {
+  [[nodiscard]] mozilla::dom::HTMLSlotElement* GetAssignedSlot() const {
     const nsExtendedContentSlots* slots = GetExistingExtendedContentSlots();
     return slots ? slots->mAssignedSlot.get() : nullptr;
+  }
+
+  /**
+   * Gets the assigned slot associated with this content if and only if the
+   * shadow tree should be handled for selection.
+   */
+  [[nodiscard]] mozilla::dom::HTMLSlotElement* GetAssignedSlotForSelection()
+      const;
+
+  template <TreeKind aKind>
+  [[nodiscard]] mozilla::dom::HTMLSlotElement* GetAssignedSlot() const {
+    if constexpr (aKind == TreeKind::DOM ||
+                  aKind == TreeKind::ShadowIncludingDOM) {
+      return nullptr;  // nodes won't be assigned in the non-flat tree.
+    } else if constexpr (aKind == TreeKind::FlatForSelection) {
+      return GetAssignedSlotForSelection();
+    } else if constexpr (aKind == TreeKind::Flat) {
+      return GetAssignedSlot();
+    } else {
+      MOZ_MAKE_COMPILER_ASSUME_IS_UNREACHABLE("Handle the new TreeKind value");
+    }
   }
 
   /**
@@ -547,9 +569,15 @@ class nsIContent : public nsINode {
   /**
    * If the content is a part of HTML editor, this returns editing
    * host content.  When the content is in designMode, this returns its body
-   * element.  Also, when the content isn't editable, this returns null.
+   * element.
    */
   mozilla::dom::Element* GetEditingHost() const;
+
+  /**
+   * If this is editable, return `this`.
+   * Otherwise, return the inclusive editable ancestor.
+   */
+  nsIContent* GetInclusiveEditableAncestor() const;
 
   bool SupportsLangAttr() const {
     return IsHTMLElement() || IsSVGElement() || IsXULElement();

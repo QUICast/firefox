@@ -361,7 +361,8 @@ class SportsWidgetMiddlewareTest {
     fun `GIVEN no team WHEN a live group-stage match exists THEN that round wins over any played R32`() = runTest {
         // Defensive case — the contract says one stage per day, so this shouldn't happen,
         // but if a live game and a past higher-round match coexist, the live game's round
-        // takes priority (rule 1 beats rule 2).
+        // takes priority for the active round (rule 1 beats rule 2): group stage is active.
+        // R32 is then its (decided) next round, so it also surfaces via the next-round reveal.
         val groupLive = match(
             id = 1L,
             day = 28,
@@ -383,16 +384,25 @@ class SportsWidgetMiddlewareTest {
         dispatchAndAwait(store, SportsWidgetAction.FetchMatches)
 
         val matches = store.state.sportsWidgetState.matchCardStates.flatMap { it.matches + it.relatedMatches }
-        assertEquals(listOf(1L), matches.map { it.globalEventId })
+        assertEquals(setOf(1L, 2L), matches.map { it.globalEventId }.toSet())
     }
 
     @Test
     fun `GIVEN no team WHEN R16 has begun THEN R32 and group stage drop away`() = runTest {
-        // QF, SF, FINAL still upcoming; max ordinal among played stages is R16.
+        // QF, SF, FINAL still upcoming; max ordinal among played stages is R16. The QF fixture
+        // is still fully undetermined (its teams depend on R16 results), so the next-round
+        // reveal doesn't surface it yet — only the active R16 shows.
         val groupDone = match(1L, day = 18, stage = TournamentRound.GROUP_STAGE, status = MatchStatus.Final)
         val r32Done = match(2L, day = 28, stage = TournamentRound.ROUND_OF_32, status = MatchStatus.Final)
         val r16Done = match(3L, day = 4, stage = TournamentRound.ROUND_OF_16, status = MatchStatus.Final)
-        val qfNext = match(4L, day = 8, stage = TournamentRound.QUARTER_FINAL, status = MatchStatus.Scheduled)
+        val qfNext = match(
+            id = 4L,
+            day = 8,
+            stage = TournamentRound.QUARTER_FINAL,
+            status = MatchStatus.Scheduled,
+            homeTeam = null,
+            awayTeam = null,
+        )
         val repo = StubRepository(
             Result.success(
                 TeamMatchesResult(
@@ -480,6 +490,312 @@ class SportsWidgetMiddlewareTest {
         dispatchAndAwait(store, SportsWidgetAction.FetchMatches)
 
         val matches = store.state.sportsWidgetState.matchCardStates.flatMap { it.matches + it.relatedMatches }
+        assertEquals(setOf(1L, 2L), matches.map { it.globalEventId }.toSet())
+    }
+
+    @Test
+    fun `GIVEN no team WHEN a next-round fixture has one side decided THEN it surfaces alongside the active round`() =
+        runTest {
+            // Group stage is active (its game is the most-recently played). The next round (R32)
+            // has started to fill in: one fixture has a single team set (the other still TBD),
+            // and another is fully undetermined. The decided-one-side fixture surfaces; the
+            // fully-TBD one does not.
+            val groupDone = match(1L, day = 18, stage = TournamentRound.GROUP_STAGE, status = MatchStatus.Final)
+            val r32OneSide = match(
+                id = 2L,
+                day = 28,
+                stage = TournamentRound.ROUND_OF_32,
+                status = MatchStatus.Scheduled,
+                awayTeam = null,
+            )
+            val r32FullyTbd = match(
+                id = 3L,
+                day = 29,
+                stage = TournamentRound.ROUND_OF_32,
+                status = MatchStatus.Scheduled,
+                homeTeam = null,
+                awayTeam = null,
+            )
+            val repo = StubRepository(
+                Result.success(
+                    TeamMatchesResult(
+                        previous = listOf(groupDone),
+                        current = emptyList(),
+                        next = listOf(r32OneSide, r32FullyTbd),
+                    ),
+                ),
+            )
+            val store = appStore(repo)
+
+            dispatchAndAwait(store, SportsWidgetAction.FetchMatches)
+
+            val matches = store.state.sportsWidgetState.matchCardStates.flatMap { it.matches + it.relatedMatches }
+            assertEquals(setOf(1L, 2L), matches.map { it.globalEventId }.toSet())
+            // The surfaced next-round fixture renders with its undecided side absent (shown as TBD).
+            val revealed = matches.first { it.globalEventId == 2L }
+            assertEquals("MEX", revealed.home?.key)
+            assertEquals(null, revealed.away)
+        }
+
+    @Test
+    fun `GIVEN no team WHEN every next-round fixture is fully TBD THEN the next round is withheld`() = runTest {
+        // R32 exists in the response but neither fixture has a team yet, so nothing from it
+        // should leak into the pager — only the active group stage shows.
+        val groupDone = match(1L, day = 18, stage = TournamentRound.GROUP_STAGE, status = MatchStatus.Final)
+        val r32TbdA = match(
+            id = 2L,
+            day = 28,
+            stage = TournamentRound.ROUND_OF_32,
+            status = MatchStatus.Scheduled,
+            homeTeam = null,
+            awayTeam = null,
+        )
+        val r32TbdB = match(
+            id = 3L,
+            day = 29,
+            stage = TournamentRound.ROUND_OF_32,
+            status = MatchStatus.Scheduled,
+            homeTeam = null,
+            awayTeam = null,
+        )
+        val repo = StubRepository(
+            Result.success(
+                TeamMatchesResult(
+                    previous = listOf(groupDone),
+                    current = emptyList(),
+                    next = listOf(r32TbdA, r32TbdB),
+                ),
+            ),
+        )
+        val store = appStore(repo)
+
+        dispatchAndAwait(store, SportsWidgetAction.FetchMatches)
+
+        val matches = store.state.sportsWidgetState.matchCardStates.flatMap { it.matches + it.relatedMatches }
+        assertEquals(setOf(1L), matches.map { it.globalEventId }.toSet())
+    }
+
+    @Test
+    fun `GIVEN no team WHEN a decided fixture is two rounds ahead THEN only the immediate next round is revealed`() =
+        runTest {
+            // Only the round immediately after the active one is surfaced. A decided R16 fixture
+            // (two rounds ahead of the active group stage) stays hidden; the R32 one does not.
+            val groupDone = match(1L, day = 18, stage = TournamentRound.GROUP_STAGE, status = MatchStatus.Final)
+            val r32OneSide = match(
+                id = 2L,
+                day = 28,
+                stage = TournamentRound.ROUND_OF_32,
+                status = MatchStatus.Scheduled,
+                awayTeam = null,
+            )
+            val r16OneSide = match(
+                id = 3L,
+                day = 5,
+                month = 7,
+                stage = TournamentRound.ROUND_OF_16,
+                status = MatchStatus.Scheduled,
+                awayTeam = null,
+            )
+            val repo = StubRepository(
+                Result.success(
+                    TeamMatchesResult(
+                        previous = listOf(groupDone),
+                        current = emptyList(),
+                        next = listOf(r32OneSide, r16OneSide),
+                    ),
+                ),
+            )
+            val store = appStore(repo)
+
+            dispatchAndAwait(store, SportsWidgetAction.FetchMatches)
+
+            val matches = store.state.sportsWidgetState.matchCardStates.flatMap { it.matches + it.relatedMatches }
+            assertEquals(setOf(1L, 2L), matches.map { it.globalEventId }.toSet())
+        }
+
+    @Test
+    fun `GIVEN no team WHEN a group-stage and a next-round match fall on the same day THEN each round gets its own card`() =
+        runTest {
+            // Bug 2046721: the last group-stage games and the first revealed Round of 32 fixtures
+            // can fall on the same day. Grouping by day alone merged them into one card labelled
+            // GROUP_STAGE; each round must get its own card so R32 isn't shown under a group heading.
+            val groupDone = match(1L, day = 28, stage = TournamentRound.GROUP_STAGE, status = MatchStatus.Final)
+            val r32SameDay = match(2L, day = 28, stage = TournamentRound.ROUND_OF_32, status = MatchStatus.Scheduled)
+            val repo = StubRepository(
+                Result.success(
+                    TeamMatchesResult(
+                        previous = listOf(groupDone),
+                        current = emptyList(),
+                        next = listOf(r32SameDay),
+                    ),
+                ),
+            )
+            val store = appStore(repo)
+
+            dispatchAndAwait(store, SportsWidgetAction.FetchMatches)
+
+            val cards = store.state.sportsWidgetState.matchCardStates
+            assertEquals(
+                setOf(TournamentRound.GROUP_STAGE, TournamentRound.ROUND_OF_32),
+                cards.map { it.round }.toSet(),
+            )
+            val r32Card = cards.first { it.round == TournamentRound.ROUND_OF_32 }
+            assertEquals(listOf(2L), (r32Card.matches + r32Card.relatedMatches).map { it.globalEventId })
+            val groupCard = cards.first { it.round == TournamentRound.GROUP_STAGE }
+            assertEquals(listOf(1L), (groupCard.matches + groupCard.relatedMatches).map { it.globalEventId })
+        }
+
+    @Test
+    fun `GIVEN no team WHEN the quarter-final is live THEN the full remaining bracket including a fully-TBD semi-final shows`() =
+        runTest {
+            // From QF onward the run-in is locked in, so show every later round the response carries
+            // — even a not-yet-determined semi-final — and drop the finished Round of 16.
+            val r16Done = match(1L, day = 4, month = 7, stage = TournamentRound.ROUND_OF_16, status = MatchStatus.Final)
+            val qfLive = match(
+                id = 2L,
+                day = 8,
+                month = 7,
+                stage = TournamentRound.QUARTER_FINAL,
+                status = MatchStatus.Live(period = "1", clock = "20"),
+            )
+            val sfTbd = match(
+                id = 3L,
+                day = 14,
+                month = 7,
+                stage = TournamentRound.SEMI_FINAL,
+                status = MatchStatus.Scheduled,
+                homeTeam = null,
+                awayTeam = null,
+            )
+            val tpp = match(4L, day = 18, month = 7, stage = TournamentRound.THIRD_PLACE_PLAYOFF, status = MatchStatus.Scheduled)
+            val finalMatch = match(5L, day = 19, month = 7, stage = TournamentRound.FINAL, status = MatchStatus.Scheduled)
+            val repo = StubRepository(
+                Result.success(
+                    TeamMatchesResult(
+                        previous = listOf(r16Done),
+                        current = listOf(qfLive),
+                        next = listOf(sfTbd, tpp, finalMatch),
+                    ),
+                ),
+            )
+            val store = appStore(repo)
+
+            dispatchAndAwait(store, SportsWidgetAction.FetchMatches)
+
+            val matches = store.state.sportsWidgetState.matchCardStates.flatMap { it.matches + it.relatedMatches }
+            // QF (active) + SF (fully TBD) + TPP + Final; the finished R16 drops away.
+            assertEquals(setOf(2L, 3L, 4L, 5L), matches.map { it.globalEventId }.toSet())
+        }
+
+    @Test
+    fun `GIVEN no team WHEN round of 16 is active THEN a fully-TBD quarter-final is still withheld`() = runTest {
+        // Before the endgame the decided-only next-round rule still applies: a one-sided QF fixture
+        // surfaces, but a fully-TBD QF (and the further-out SF) do not.
+        val r16Done = match(1L, day = 4, month = 7, stage = TournamentRound.ROUND_OF_16, status = MatchStatus.Final)
+        val qfDecided = match(
+            id = 2L,
+            day = 8,
+            month = 7,
+            stage = TournamentRound.QUARTER_FINAL,
+            status = MatchStatus.Scheduled,
+            awayTeam = null,
+        )
+        val qfTbd = match(
+            id = 3L,
+            day = 9,
+            month = 7,
+            stage = TournamentRound.QUARTER_FINAL,
+            status = MatchStatus.Scheduled,
+            homeTeam = null,
+            awayTeam = null,
+        )
+        val sfTbd = match(
+            id = 4L,
+            day = 14,
+            month = 7,
+            stage = TournamentRound.SEMI_FINAL,
+            status = MatchStatus.Scheduled,
+            homeTeam = null,
+            awayTeam = null,
+        )
+        val repo = StubRepository(
+            Result.success(
+                TeamMatchesResult(
+                    previous = listOf(r16Done),
+                    current = emptyList(),
+                    next = listOf(qfDecided, qfTbd, sfTbd),
+                ),
+            ),
+        )
+        val store = appStore(repo)
+
+        dispatchAndAwait(store, SportsWidgetAction.FetchMatches)
+
+        val matches = store.state.sportsWidgetState.matchCardStates.flatMap { it.matches + it.relatedMatches }
+        // Active R16 + the decided QF fixture only; fully-TBD QF and the two-rounds-out SF are withheld.
+        assertEquals(setOf(1L, 2L), matches.map { it.globalEventId }.toSet())
+    }
+
+    @Test
+    fun `GIVEN no team WHEN the semi-final is live THEN quarter-finals drop and TPP and final show`() = runTest {
+        val qfDone = match(1L, day = 8, month = 7, stage = TournamentRound.QUARTER_FINAL, status = MatchStatus.Final)
+        val sfLive = match(
+            id = 2L,
+            day = 14,
+            month = 7,
+            stage = TournamentRound.SEMI_FINAL,
+            status = MatchStatus.Live(period = "2", clock = "70"),
+        )
+        val tpp = match(3L, day = 18, month = 7, stage = TournamentRound.THIRD_PLACE_PLAYOFF, status = MatchStatus.Scheduled)
+        val finalMatch = match(4L, day = 19, month = 7, stage = TournamentRound.FINAL, status = MatchStatus.Scheduled)
+        val repo = StubRepository(
+            Result.success(
+                TeamMatchesResult(
+                    previous = listOf(qfDone),
+                    current = listOf(sfLive),
+                    next = listOf(tpp, finalMatch),
+                ),
+            ),
+        )
+        val store = appStore(repo)
+
+        dispatchAndAwait(store, SportsWidgetAction.FetchMatches)
+
+        val matches = store.state.sportsWidgetState.matchCardStates.flatMap { it.matches + it.relatedMatches }
+        assertEquals(setOf(2L, 3L, 4L), matches.map { it.globalEventId }.toSet())
+    }
+
+    @Test
+    fun `GIVEN no team WHEN before the quarter-finals THEN the final and third place are not pinned`() = runTest {
+        // The always-pinned bracket-finishers were removed: until QF starts, only the active round
+        // and the next round's decided fixtures show — the final / third-place don't appear even
+        // when the response already carries them.
+        val r16Done = match(1L, day = 4, month = 7, stage = TournamentRound.ROUND_OF_16, status = MatchStatus.Final)
+        val qfDecided = match(
+            id = 2L,
+            day = 8,
+            month = 7,
+            stage = TournamentRound.QUARTER_FINAL,
+            status = MatchStatus.Scheduled,
+            awayTeam = null,
+        )
+        val tpp = match(3L, day = 18, month = 7, stage = TournamentRound.THIRD_PLACE_PLAYOFF, status = MatchStatus.Scheduled)
+        val finalMatch = match(4L, day = 19, month = 7, stage = TournamentRound.FINAL, status = MatchStatus.Scheduled)
+        val repo = StubRepository(
+            Result.success(
+                TeamMatchesResult(
+                    previous = listOf(r16Done),
+                    current = emptyList(),
+                    next = listOf(qfDecided, tpp, finalMatch),
+                ),
+            ),
+        )
+        val store = appStore(repo)
+
+        dispatchAndAwait(store, SportsWidgetAction.FetchMatches)
+
+        val matches = store.state.sportsWidgetState.matchCardStates.flatMap { it.matches + it.relatedMatches }
+        // Active R16 + the decided QF fixture only; the final and third-place stay hidden until QF.
         assertEquals(setOf(1L, 2L), matches.map { it.globalEventId }.toSet())
     }
 
@@ -615,11 +931,13 @@ class SportsWidgetMiddlewareTest {
         stage: TournamentRound,
         status: MatchStatus,
         month: Int = 6,
+        homeTeam: SportsTeam? = teamA,
+        awayTeam: SportsTeam? = teamB,
     ): SportsMatch = SportsMatch(
         globalEventId = id,
         date = ZonedDateTime.of(2026, month, day, 14, 0, 0, 0, zone),
-        homeTeam = teamA,
-        awayTeam = teamB,
+        homeTeam = homeTeam,
+        awayTeam = awayTeam,
         matchStatus = status,
         homeScore = null,
         awayScore = null,

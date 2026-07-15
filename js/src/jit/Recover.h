@@ -131,6 +131,7 @@ namespace jit {
   _(ToFloat32)                    \
   _(ToFloat16)                    \
   _(TruncateToInt32)              \
+  _(CanonicalizeNaN)              \
   _(NewObject)                    \
   _(NewPlainObject)               \
   _(NewArrayObject)               \
@@ -191,9 +192,9 @@ class MOZ_NON_PARAM RInstruction {
 
   // Decode an RInstruction on top of the reserved storage space, based on the
   // tag written by the writeRecoverData function of the corresponding MIR
-  // instruction.
-  static void readRecoverData(CompactBufferReader& reader,
-                              RInstructionStorage* raw);
+  // instruction. Returns the decoded instruction's number of operands.
+  static uint32_t readRecoverData(CompactBufferReader& reader,
+                                  RInstructionStorage* raw);
 };
 
 #define RINSTRUCTION_HEADER_(op)                                        \
@@ -889,6 +890,14 @@ class RToFloat16 final : public RInstruction {
 class RTruncateToInt32 final : public RInstruction {
  public:
   RINSTRUCTION_HEADER_NUM_OP_(TruncateToInt32, 1)
+
+  [[nodiscard]] bool recover(JSContext* cx,
+                             SnapshotIterator& iter) const override;
+};
+
+class RCanonicalizeNaN final : public RInstruction {
+ public:
+  RINSTRUCTION_HEADER_NUM_OP_(CanonicalizeNaN, 1)
 
   [[nodiscard]] bool recover(JSContext* cx,
                              SnapshotIterator& iter) const override;

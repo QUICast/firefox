@@ -14,22 +14,28 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.tooling.preview.PreviewLightDark
 import androidx.compose.ui.unit.dp
 import org.mozilla.fenix.R
 import org.mozilla.fenix.components.menu.compose.MenuGroup
 import org.mozilla.fenix.components.menu.compose.MenuItem
-import org.mozilla.fenix.components.menu.compose.MenuItemState
 import org.mozilla.fenix.components.menu.compose.MenuScaffold
 import org.mozilla.fenix.components.menu.compose.header.SubmenuHeader
 import org.mozilla.fenix.theme.FirefoxTheme
 import org.mozilla.fenix.trackingprotection.TrackerBuckets
 import org.mozilla.fenix.trackingprotection.TrackingProtectionCategory
-import mozilla.components.feature.protection.dashboard.R as protectionDashboardR
+import org.mozilla.fenix.trackingprotection.TrackingProtectionCategory.CROSS_SITE_TRACKING_COOKIES
+import org.mozilla.fenix.trackingprotection.TrackingProtectionCategory.CRYPTOMINERS
+import org.mozilla.fenix.trackingprotection.TrackingProtectionCategory.FINGERPRINTERS
+import org.mozilla.fenix.trackingprotection.TrackingProtectionCategory.SOCIAL_MEDIA_TRACKERS
+import org.mozilla.fenix.trackingprotection.TrackingProtectionCategory.TRACKING_CONTENT
+import mozilla.components.ui.icons.R as iconsR
 
 @Composable
 internal fun TrackersBlockedPanel(
@@ -57,8 +63,9 @@ internal fun TrackersBlockedPanel(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    text = stringResource(
-                        R.string.trackers_blocked_panel_total_num_trackers_blocked,
+                    text = pluralStringResource(
+                        R.plurals.trackers_blocked_panel_total_num_trackers_blocked_2,
+                        numberOfTrackersBlocked,
                         numberOfTrackersBlocked,
                     ),
                     modifier = Modifier.weight(1f),
@@ -74,9 +81,7 @@ internal fun TrackersBlockedPanel(
                     .filter { bucketedTrackers.get(it, true).isNotEmpty() }
                     .forEach { trackingProtectionCategory ->
                         MenuItem(
-                            label = stringResource(
-                                R.string.trackers_blocked_panel_categorical_num_trackers_blocked,
-                                stringResource(trackingProtectionCategory.title),
+                            label = trackingProtectionCategory.displayLabel(
                                 bucketedTrackers.get(trackingProtectionCategory, true).size,
                             ),
                             beforeIconPainter = painterResource(id = trackingProtectionCategory.icon),
@@ -89,20 +94,32 @@ internal fun TrackersBlockedPanel(
 
             MenuGroup {
                 MenuItem(
-                    label = stringResource(
-                        R.string.trackers_blocked_panel_num_trackers_blocked_this_week,
+                    label = pluralStringResource(
+                        R.plurals.trackers_blocked_panel_num_trackers_blocked_this_week_2,
+                        numberOfTrackersBlockedThisWeek,
                         numberOfTrackersBlockedThisWeek,
                     ),
-                    beforeIconPainter = painterResource(
-                        protectionDashboardR.drawable.firefox_pictorgram_shield_check_rgb_2,
-                    ),
-                    state = MenuItemState.CRITICAL, // ensure no tint is applied for the icon.
+                    beforeIconPainter = painterResource(iconsR.drawable.mozac_ic_shield_checkmark_24),
                     onClick = { onTrackersBlockedThisWeekClicked() },
                 )
             }
         }
     }
 }
+
+@Composable
+@ReadOnlyComposable
+private fun TrackingProtectionCategory.displayLabel(count: Int): String = LocalResources.current.getQuantityString(
+    when (this) {
+        SOCIAL_MEDIA_TRACKERS -> R.plurals.trackers_blocked_panel_num_social_media_trackers
+        CROSS_SITE_TRACKING_COOKIES -> R.plurals.trackers_blocked_panel_num_cross_site_cookies
+        CRYPTOMINERS -> R.plurals.trackers_blocked_panel_num_cryptominers
+        FINGERPRINTERS -> R.plurals.trackers_blocked_panel_num_fingerprinters
+        TRACKING_CONTENT -> R.plurals.trackers_blocked_panel_num_trackers_2
+    },
+    count,
+    count,
+)
 
 @PreviewLightDark
 @Composable

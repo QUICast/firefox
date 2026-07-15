@@ -34,6 +34,7 @@
 #include "mozilla/ipc/UtilityMediaServiceChild.h"
 #include "mozilla/ipc/UtilityProcessManager.h"
 #include "mozilla/ipc/UtilityProcessParent.h"
+#include "nsFmtString.h"
 #include "nsTHashMap.h"
 #include "nsTextFormatter.h"
 
@@ -193,6 +194,8 @@ static bool RequireClearLead(const nsString& aKeySystem) {
   return aKeySystem.EqualsLiteral(kWidevineExperiment2KeySystemName) ||
          aKeySystem.EqualsLiteral(kPlayReadyHardwareClearLeadKeySystemName);
 }
+
+bool MFCDMParent::IsClearLead() const { return RequireClearLead(mKeySystem); }
 
 static void BuildCapabilitiesArray(
     const nsTArray<MFCDMMediaCapability>& aCapabilities,
@@ -394,16 +397,26 @@ void MFCDMParent::SetWidevineL1Path(const char* aPath) {
                     NS_ConvertUTF16toUTF8(sWidevineL1Path).get());
 }
 
+/* static */
+already_AddRefed<MFCDMParent> MFCDMParent::GetCDMById(uint64_t aId) {
+  StaticMutexAutoLock lock(sRegistryMutex);
+  RefPtr<MFCDMParent> cdm = sRegisteredCDMs.Get(aId);
+  return cdm.forget();
+}
+
 void MFCDMParent::Register() {
+  StaticMutexAutoLock lock(sRegistryMutex);
   MOZ_ASSERT(!sRegisteredCDMs.Contains(this->mId));
   sRegisteredCDMs.InsertOrUpdate(this->mId, this);
   MFCDM_PARENT_LOG("Registered!");
 }
 
 void MFCDMParent::Unregister() {
-  MOZ_ASSERT(sRegisteredCDMs.Contains(this->mId));
-  sRegisteredCDMs.Remove(this->mId);
-  MFCDM_PARENT_LOG("Unregistered!");
+  StaticMutexAutoLock lock(sRegistryMutex);
+  if (sRegisteredCDMs.Contains(this->mId)) {
+    sRegisteredCDMs.Remove(this->mId);
+    MFCDM_PARENT_LOG("Unregistered!");
+  }
 }
 
 MFCDMParent::MFCDMParent(const nsAString& aKeySystem,
@@ -451,6 +464,16 @@ MFCDMParent::MFCDMParent(const nsAString& aKeySystem,
 void MFCDMParent::OnHardwareContextReset() {
   ASSERT_CDM_ACCESS_ON_MANAGER_THREAD();
   MFCDM_PARENT_LOG("OnHardwareContextReset");
+  // A hardware context change can change the HDCP status, so drop the cached
+  // pre-warm result and invalidate any in-flight query (its result predates the
+  // change); the next protected activation re-queries HDCP.
+  sHDCPSupported.reset();
+  sHDCPPrewarmQuery = nullptr;
+  ++sHDCPPrewarmGeneration;
+  // The engine actor is torn down and recreated by the recovery, so clear the
+  // engine-side readiness; the new engine re-establishes it. The CDM-side
+  // conditions persist with this surviving actor.
+  mReadinessMonitor.ResetEngineConditions();
   // All CDM sessions are in an invalid state after a hardware context reset.
   // Close them so the content process can re-request keys.
   for (auto& iter : mSessions) {
@@ -560,6 +583,7 @@ void MFCDMParent::ActorDestroy(ActorDestroyReason aWhy) {
     iter.second->Close(dom::MediaKeySessionClosedReason::Closed_by_application);
   }
   mSessions.clear();
+  Unregister();
 }
 
 MFCDMParent::~MFCDMParent() {
@@ -1333,7 +1357,9 @@ mozilla::ipc::IPCResult MFCDMParent::RecvInit(
   }
 
   mIsInited = true;
+  mIsHardwareDRM = isHWSecure;
   mInitParams = Some(aParams);
+  PrewarmHDCP(isHWSecure);
   aResolver(MFCDMInitIPDL{mId});
   return IPC_OK();
 }
@@ -1532,70 +1558,125 @@ mozilla::ipc::IPCResult MFCDMParent::RecvSetServerCertificate(
   return IPC_OK();
 }
 
+RefPtr<MFCDMParent::HDCPSupportPromise> MFCDMParent::QueryHDCPSupport(
+    const nsString& aKeySystem, dom::HDCPVersion aVersion,
+    nsISerialEventTarget* aManagerThread) {
+  nsCOMPtr<nsISerialEventTarget> backgroundTaskQueue;
+  if (NS_FAILED(NS_CreateBackgroundTaskQueue(
+          __func__, getter_AddRefs(backgroundTaskQueue)))) {
+    MFCDM_PARENT_SLOG("Failed to create background task queue for HDCP query");
+    return HDCPSupportPromise::CreateAndReject(NS_ERROR_FAILURE, __func__);
+  }
+  RefPtr<HDCPSupportPromise::Private> p =
+      new HDCPSupportPromise::Private(__func__);
+  nsAutoString keySystem(aKeySystem);
+  RefPtr<nsISerialEventTarget> managerThread = aManagerThread;
+  nsresult rv = backgroundTaskQueue->Dispatch(
+      NS_NewRunnableFunction(__func__, [keySystem, aVersion, managerThread, p] {
+        nsresult result =
+            IsHDCPVersionSupported(keySystem, aVersion, managerThread);
+        nsFmtCString msg("HDCP version={}, supported={}",
+                         static_cast<uint32_t>(aVersion),
+                         result == NS_OK ? "true" : "false");
+        MFCDM_PARENT_SLOG("{}", msg.get());
+        PROFILER_MARKER_TEXT("MFCDMParent::QueryHDCPSupport", MEDIA_PLAYBACK,
+                             {}, msg);
+        p->Resolve(result, __func__);
+      }));
+  if (NS_FAILED(rv)) {
+    MFCDM_PARENT_SLOG("Failed to dispatch HDCP query, rv={:x}",
+                      static_cast<uint32_t>(rv));
+    p->Reject(rv, __func__);
+  }
+  return p;
+}
+
 mozilla::ipc::IPCResult MFCDMParent::RecvGetStatusForPolicy(
     const dom::HDCPVersion& aMinHdcpVersion,
     GetStatusForPolicyResolver&& aResolver) {
   ASSERT_CDM_ACCESS_READ_ONLY_ON_MANAGER_THREAD();
-  nsCOMPtr<nsISerialEventTarget> backgroundTaskQueue;
-  if (NS_FAILED(NS_CreateBackgroundTaskQueue(
-          __func__, getter_AddRefs(backgroundTaskQueue)))) {
-    MFCDM_PARENT_LOG("Failed to create a background task queue");
-    aResolver(NS_ERROR_FAILURE);
-    return IPC_OK();
-  }
-  using HDCPPromise = MozPromise<nsresult, nsresult, /* IsExclusive = */ true>;
-  RefPtr<HDCPPromise::Private> p = new HDCPPromise::Private(__func__);
-  (void)backgroundTaskQueue->Dispatch(NS_NewRunnableFunction(
-      __func__, [self = RefPtr<MFCDMParent>(this), this, aMinHdcpVersion, p] {
-        auto rv =
-            IsHDCPVersionSupported(mKeySystem, aMinHdcpVersion, mManagerThread);
-        if (IsBeingProfiledOrLogEnabled()) {
-          nsPrintfCString msg("HDCP version=%u, support=%s",
-                              static_cast<uint8_t>(aMinHdcpVersion),
-                              rv == NS_OK ? "true" : "false");
-          MFCDM_PARENT_LOG("{}", msg.get());
-          PROFILER_MARKER_TEXT("MFCDMParent::RecvGetStatusForPolicy",
-                               MEDIA_PLAYBACK, {}, msg);
-        }
-        p->Resolve(rv, __func__);
-      }));
-  p->Then(mManagerThread, __func__,
-          [resolver = aResolver](HDCPPromise::ResolveOrRejectValue&& aRv) {
-            MOZ_ASSERT(aRv.IsResolve());
-            resolver(aRv.ResolveValue());
+  QueryHDCPSupport(mKeySystem, aMinHdcpVersion, mManagerThread)
+      ->Then(
+          mManagerThread, __func__,
+          [resolver =
+               aResolver](const HDCPSupportPromise::ResolveOrRejectValue& aRv) {
+            resolver(aRv.IsResolve() ? aRv.ResolveValue() : NS_ERROR_FAILURE);
           });
   return IPC_OK();
 }
 
+void MFCDMParent::PrewarmHDCP(bool aIsHardwareDRM) {
+  ASSERT_CDM_ACCESS_ON_MANAGER_THREAD();
+  using Condition = MFProtectedPathReadinessMonitor::Condition;
+  if (!aIsHardwareDRM) {
+    // Non-hardware-DRM playback has no HDCP requirement, so the condition is
+    // satisfied without a query.
+    mReadinessMonitor.MarkReady(Condition::Hdcp);
+    return;
+  }
+  if (sHDCPSupported) {
+    // The per-display HDCP status was already queried for this process; reuse
+    // it rather than issuing a redundant query.
+    MarkHDCPCondition(*sHDCPSupported);
+    return;
+  }
+  if (!sHDCPPrewarmQuery) {
+    // First hardware-DRM actor for this process issues the single shared query;
+    // record the result and drop the query once it settles.
+    const uint32_t generation = sHDCPPrewarmGeneration;
+    sHDCPPrewarmQuery =
+        QueryHDCPSupport(mKeySystem, dom::HDCPVersion::_2_2, mManagerThread);
+    sHDCPPrewarmQuery->Then(
+        mManagerThread, __func__,
+        [generation](const HDCPSupportPromise::ResolveOrRejectValue& aRv) {
+          // A hardware-context reset since this query started already cleared
+          // the cache and began a new generation; ignore this stale result.
+          if (generation != sHDCPPrewarmGeneration) {
+            MFCDM_PARENT_SLOG(
+                "Ignoring stale HDCP pre-warm result (hardware reset since the "
+                "query started)");
+            return;
+          }
+          sHDCPSupported = Some(aRv.IsResolve() && aRv.ResolveValue() == NS_OK);
+          sHDCPPrewarmQuery = nullptr;
+        });
+  }
+  // Wait on the shared query (this actor's or another's) and mark this actor's
+  // monitor once it settles.
+  sHDCPPrewarmQuery->Then(
+      mManagerThread, __func__,
+      [self =
+           RefPtr{this}](const HDCPSupportPromise::ResolveOrRejectValue& aRv) {
+        self->MarkHDCPCondition(aRv.IsResolve() && aRv.ResolveValue() == NS_OK);
+      });
+}
+
+void MFCDMParent::MarkHDCPCondition(bool aSupported) {
+  ASSERT_CDM_ACCESS_ON_MANAGER_THREAD();
+  using Condition = MFProtectedPathReadinessMonitor::Condition;
+  if (aSupported) {
+    mReadinessMonitor.MarkReady(Condition::Hdcp);
+    return;
+  }
+  // HDCP could not be confirmed; mark failed so the gate still proceeds (a
+  // failed condition counts as settled) and Media Foundation rebuilds HDCP when
+  // it later builds the protected topology.
+  mReadinessMonitor.MarkFailed(Condition::Hdcp, E_FAIL);
+}
+
 RefPtr<GenericPromise> MFCDMParent::WaitForHDCPSettleAfterReset() {
   ASSERT_CDM_ACCESS_READ_ONLY_ON_MANAGER_THREAD();
-  nsCOMPtr<nsISerialEventTarget> backgroundTaskQueue;
-  if (NS_FAILED(NS_CreateBackgroundTaskQueue(
-          __func__, getter_AddRefs(backgroundTaskQueue)))) {
-    MFCDM_PARENT_LOG(
-        "Failed to create background task queue for HDCP settle check");
-    return GenericPromise::CreateAndReject(NS_ERROR_FAILURE, __func__);
-  }
-  RefPtr<GenericPromise::Private> p = new GenericPromise::Private(__func__);
-  // Capture key system and manager thread by value so this check runs
-  // independently of the CDM lifetime — the CDM may be destroyed during
-  // hardware reset recovery before the check completes.
-  nsString keySystem = mKeySystem;
-  RefPtr<nsISerialEventTarget> managerThread = mManagerThread;
-  nsresult rv = backgroundTaskQueue->Dispatch(
-      NS_NewRunnableFunction(__func__, [keySystem, managerThread, p] {
-        auto result = IsHDCPVersionSupported(keySystem, dom::HDCPVersion::_2_2,
-                                             managerThread);
-        MFCDM_PARENT_SLOG("HDCP 2.2 settle check after hardware reset: {}",
-                          result == NS_OK ? "ready" : "not ready");
-        p->Resolve(true, __func__);
-      }));
-  if (NS_FAILED(rv)) {
-    MFCDM_PARENT_LOG("Failed to dispatch HDCP settle check, rv={:x}",
-                     static_cast<uint32_t>(rv));
-    p->Reject(rv, __func__);
-  }
-  return p;
+  // Used only as a settle timing signal after a hardware reset; proceed
+  // regardless of whether HDCP is supported, and reject only if the query could
+  // not be dispatched.
+  return QueryHDCPSupport(mKeySystem, dom::HDCPVersion::_2_2, mManagerThread)
+      ->Then(mManagerThread, __func__,
+             [](const HDCPSupportPromise::ResolveOrRejectValue& aRv) {
+               return aRv.IsResolve()
+                          ? GenericPromise::CreateAndResolve(true, __func__)
+                          : GenericPromise::CreateAndReject(NS_ERROR_FAILURE,
+                                                            __func__);
+             });
 }
 
 void MFCDMParent::ConnectSessionEvents(MFCDMSession* aSession) {

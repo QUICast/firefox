@@ -2,6 +2,30 @@
 <SmellBaseline>
   <ManuallySuppressedIssues/>
   <CurrentIssues>
+    <ID>ClassAcronymCasing:AppAction.kt$AppAction$URLCopiedToClipboard : AppAction</ID>
+    <ID>ClassAcronymCasing:BookmarksAction.kt$EditBookmarkAction$URLChanged : EditBookmarkAction</ID>
+    <ID>ClassAcronymCasing:CfrToolsStore.kt$CfrToolsAction$ResetLastCFRTimestampButtonClicked : CfrToolsAction</ID>
+    <ID>ClassAcronymCasing:ClientUUID.kt$ClientUUID : UserIdProviderRequestHashProvider</ID>
+    <ID>ClassAcronymCasing:ClientUUID.kt$PrefsBackedClientUUID : ClientUUID</ID>
+    <ID>ClassAcronymCasing:CustomCBHSwitchPreference.kt$CustomCBHSwitchPreference : SwitchPreferenceCompat</ID>
+    <ID>ClassAcronymCasing:FakeClientUUID.kt$FakeClientUUID : ClientUUID</ID>
+    <ID>ClassAcronymCasing:FenixFxAEntryPoint.kt$FenixFxAEntryPoint$CREATOR : Creator</ID>
+    <ID>ClassAcronymCasing:InstallReferrerWorker.kt$UTMParams</ID>
+    <ID>ClassAcronymCasing:MARSUseCases.kt$MARSUseCases</ID>
+    <ID>ClassAcronymCasing:MenuAction.kt$MenuAction$OnCFRDismiss : MenuAction</ID>
+    <ID>ClassAcronymCasing:MenuAction.kt$MenuAction$OnCFRShown : MenuAction</ID>
+    <ID>ClassAcronymCasing:MenuDialogBottomSheet.kt$MenuCFRState</ID>
+    <ID>ClassAcronymCasing:PersistStoryUTMRequestInterceptor.kt$PersistStoryUTMRequestInterceptor : RequestInterceptor</ID>
+    <ID>ClassAcronymCasing:RtamoAttributionHandler.kt$RtamoAttributionHandler.Companion$RTAMOFailReason</ID>
+    <ID>ClassAcronymCasing:SaveToPDFInteractor.kt$SaveToPDFInteractor</ID>
+    <ID>ClassAcronymCasing:SaveToPDFMiddleware.kt$SaveToPDFMiddleware : Middleware</ID>
+    <ID>ClassAcronymCasing:SnackbarState.kt$SnackbarState$URLCopiedToClipboard : SnackbarState</ID>
+    <ID>ClassAcronymCasing:SummarizeToolbarCFRBinding.kt$SummarizeToolbarCFRBinding : AbstractBinding</ID>
+    <ID>ClassAcronymCasing:TabsTrayAction.kt$TabsTrayAction$DismissInactiveTabsCFR : TabsTrayAction</ID>
+    <ID>ClassAcronymCasing:TrustPanelAction.kt$TrustPanelAction$RequestQWAC : TrustPanelAction</ID>
+    <ID>ClassAcronymCasing:TrustPanelAction.kt$TrustPanelAction$UpdateQWAC : TrustPanelAction</ID>
+    <ID>ClassAcronymCasing:TrustPanelAction.kt$TrustPanelAction.Navigate$QWAC : Navigate</ID>
+    <ID>ClassAcronymCasing:WebCompatReporterStore.kt$WebCompatReporterAction$PreviewJSONUpdated : WebCompatReporterAction</ID>
     <ID>ForbiddenSuppress:AccountSettingsFragment.kt$AccountSettingsFragment$@Suppress("LongMethod", "CyclomaticComplexMethod")</ID>
     <ID>ForbiddenSuppress:AddonMenuItem.kt$@Suppress("LongMethod")</ID>
     <ID>ForbiddenSuppress:AddonPermissionsScreen.kt$@Suppress("LongParameterList", "LongMethod", "CognitiveComplexMethod")</ID>
@@ -17,9 +41,9 @@
     <ID>ForbiddenSuppress:BookmarksMiddleware.kt$BookmarksMiddleware$@Suppress("LongMethod")</ID>
     <ID>ForbiddenSuppress:BookmarksMiddleware.kt$BookmarksMiddleware$@Suppress("LongMethod", "CognitiveComplexMethod", "CyclomaticComplexMethod")</ID>
     <ID>ForbiddenSuppress:BookmarksReducer.kt$@Suppress("CyclomaticComplexMethod")</ID>
-    <ID>ForbiddenSuppress:BookmarksScreen.kt$@Suppress("LongMethod", "CognitiveComplexMethod", "CyclomaticComplexMethod")</ID>
+    <ID>ForbiddenSuppress:BookmarksScreen.kt$@Suppress("LongMethod", "CyclomaticComplexMethod")</ID>
+    <ID>ForbiddenSuppress:BookmarksScreen.kt$@Suppress("LongMethod", "CognitiveComplexMethod")</ID>
     <ID>ForbiddenSuppress:BookmarksTelemetryMiddleware.kt$BookmarksTelemetryMiddleware$@Suppress("CyclomaticComplexMethod")</ID>
-    <ID>ForbiddenSuppress:BrowserToolbarCFRPresenter.kt$BrowserToolbarCFRPresenter$@Suppress("MagicNumber")</ID>
     <ID>ForbiddenSuppress:BrowserToolbarMiddleware.kt$BrowserToolbarMiddleware$@Suppress("LongMethod", "CognitiveComplexMethod")</ID>
     <ID>ForbiddenSuppress:BrowserToolbarMiddleware.kt$BrowserToolbarMiddleware$@Suppress("LongMethod", "CyclomaticComplexMethod", "CognitiveComplexMethod")</ID>
     <ID>ForbiddenSuppress:BrowserToolbarMiddleware.kt$BrowserToolbarMiddleware$@Suppress("LongMethod", "CyclomaticComplexMethod", "NestedBlockDepth", "ReturnCount", "CognitiveComplexMethod")</ID>
@@ -63,9 +87,9 @@
     <ID>ForbiddenSuppress:HomeActivity.kt$HomeActivity$@SuppressWarnings("TooManyFunctions", "LargeClass", "LongMethod")</ID>
     <ID>ForbiddenSuppress:HomeDeepLinkIntentProcessor.kt$HomeDeepLinkIntentProcessor$@Suppress("CyclomaticComplexMethod")</ID>
     <ID>ForbiddenSuppress:HomeFragment.kt$HomeFragment$@Suppress("LongMethod")</ID>
+    <ID>ForbiddenSuppress:HomeFragment.kt$HomeFragment$@Suppress("LongMethod", "CognitiveComplexMethod")</ID>
     <ID>ForbiddenSuppress:Homepage.kt$@Suppress("LongMethod", "CyclomaticComplexMethod", "CognitiveComplexMethod")</ID>
     <ID>ForbiddenSuppress:InstalledAddonDetailsFragment.kt$InstalledAddonDetailsFragment$@SuppressWarnings("LongMethod")</ID>
-    <ID>ForbiddenSuppress:LegacyWallpaperMigration.kt$LegacyWallpaperMigration$@Suppress("CognitiveComplexMethod")</ID>
     <ID>ForbiddenSuppress:ListItem.kt$@Suppress("CognitiveComplexMethod")</ID>
     <ID>ForbiddenSuppress:ListItem.kt$@Suppress("LongMethod")</ID>
     <ID>ForbiddenSuppress:LoginsMiddleware.kt$LoginsMiddleware$@Suppress("LongMethod", "CyclomaticComplexMethod")</ID>
@@ -73,7 +97,6 @@
     <ID>ForbiddenSuppress:MainMenu.kt$@Suppress("LongParameterList", "LongMethod", "CognitiveComplexMethod")</ID>
     <ID>ForbiddenSuppress:MainMenu.kt$@Suppress("LongParameterList", "LongMethod", "CyclomaticComplexMethod", "CognitiveComplexMethod")</ID>
     <ID>ForbiddenSuppress:MarketingDataOnboardingPage.kt$@Suppress("LongMethod")</ID>
-    <ID>ForbiddenSuppress:MarketingDataOnboardingPageRedesign.kt$@Suppress("LongMethod")</ID>
     <ID>ForbiddenSuppress:Menu.kt$@Suppress("LongMethod", "CognitiveComplexMethod")</ID>
     <ID>ForbiddenSuppress:MenuDialogFragment.kt$MenuDialogFragment$@Suppress("LongMethod", "CyclomaticComplexMethod", "CognitiveComplexMethod")</ID>
     <ID>ForbiddenSuppress:MenuDialogMiddleware.kt$MenuDialogMiddleware$@Suppress("LongParameterList", "CyclomaticComplexMethod")</ID>
@@ -86,9 +109,7 @@
     <ID>ForbiddenSuppress:MozillaAccountMenuItem.kt$@SuppressWarnings("LongMethod")</ID>
     <ID>ForbiddenSuppress:NotificationManager.kt$NotificationManager$@SuppressWarnings("MagicNumber")</ID>
     <ID>ForbiddenSuppress:OnboardingFragment.kt$OnboardingFragment$@Suppress("LongMethod")</ID>
-    <ID>ForbiddenSuppress:OnboardingPage.kt$@Suppress("LongMethod")</ID>
     <ID>ForbiddenSuppress:OnboardingScreen.kt$@Suppress("LongParameterList", "LongMethod")</ID>
-    <ID>ForbiddenSuppress:OnboardingScreenRedesign.kt$@Suppress("LongParameterList", "LongMethod")</ID>
     <ID>ForbiddenSuppress:OnboardingTelemetryRecorder.kt$OnboardingTelemetryRecorder$@Suppress("LongMethod")</ID>
     <ID>ForbiddenSuppress:PagedHistoryProvider.kt$DefaultPagedHistoryProvider$@Suppress("MagicNumber")</ID>
     <ID>ForbiddenSuppress:PrivateBrowsingFragment.kt$PrivateBrowsingFragment$@Suppress("CognitiveComplexMethod")</ID>
@@ -129,10 +150,8 @@
     <ID>ForbiddenSuppress:TabsTrayBanner.kt$@Suppress("LongMethod", "LongParameterList")</ID>
     <ID>ForbiddenSuppress:TabsTrayBanner.kt$@Suppress("LongParameterList", "LongMethod")</ID>
     <ID>ForbiddenSuppress:TelemetryMiddleware.kt$TelemetryMiddleware$@Suppress("TooGenericExceptionCaught", "CognitiveComplexMethod", "NestedBlockDepth", "LongMethod", "CyclomaticComplexMethod")</ID>
-    <ID>ForbiddenSuppress:ThemeOnboardingPage.kt$@Suppress("LongMethod")</ID>
     <ID>ForbiddenSuppress:ToolbarHorizontalGesturesHandler.kt$ToolbarHorizontalGesturesHandler$@Suppress("CognitiveComplexMethod")</ID>
     <ID>ForbiddenSuppress:TopSites.kt$@Suppress( "LongMethod", "LongParameterList", "Deprecation", )</ID>
-    <ID>ForbiddenSuppress:TrackingProtectionPanelView.kt$TrackingProtectionPanelView$@Suppress("CognitiveComplexMethod")</ID>
     <ID>ForbiddenSuppress:TranslationSettings.kt$@Suppress("LongMethod", "CognitiveComplexMethod")</ID>
     <ID>ForbiddenSuppress:TranslationsBinding.kt$TranslationsBinding$@Suppress("LongMethod", "CognitiveComplexMethod")</ID>
     <ID>ForbiddenSuppress:TranslationsDialogBinding.kt$TranslationsDialogBinding$@Suppress("LongMethod", "CyclomaticComplexMethod")</ID>
@@ -216,7 +235,6 @@
     <ID>HardcodedPaddingUsage:DownloadsScreen.kt$(vertical = 12.dp)</ID>
     <ID>HardcodedPaddingUsage:EditFolderScreen.kt$( start = 16.dp, end = 16.dp, top = 32.dp, )</ID>
     <ID>HardcodedPaddingUsage:EditFolderScreen.kt$(start = 16.dp)</ID>
-    <ID>HardcodedPaddingUsage:EditTabGroup.kt$( bottom = 12.dp, )</ID>
     <ID>HardcodedPaddingUsage:EditTabGroup.kt$(all = 16.dp)</ID>
     <ID>HardcodedPaddingUsage:EditTabGroup.kt$(end = 12.dp)</ID>
     <ID>HardcodedPaddingUsage:EditTabGroup.kt$(horizontal = 24.dp, vertical = 16.dp)</ID>
@@ -248,7 +266,6 @@
     <ID>HardcodedPaddingUsage:IPProtectionBottomSheet.kt$(bottom = 16.dp, start = 16.dp, end = 16.dp)</ID>
     <ID>HardcodedPaddingUsage:IPProtectionBottomSheet.kt$(horizontal = 8.dp, vertical = 4.dp)</ID>
     <ID>HardcodedPaddingUsage:IPProtectionMenuItem.kt$(horizontal = 12.dp)</ID>
-    <ID>HardcodedPaddingUsage:IPProtectionPreference.kt$(horizontal = 16.dp, vertical = 14.dp)</ID>
     <ID>HardcodedPaddingUsage:IPProtectionPreference.kt$(horizontal = 8.dp)</ID>
     <ID>HardcodedPaddingUsage:InactiveTabs.kt$(all = 16.dp)</ID>
     <ID>HardcodedPaddingUsage:InactiveTabs.kt$(horizontal = 12.dp)</ID>
@@ -262,12 +279,6 @@
     <ID>HardcodedPaddingUsage:MainMenu.kt$( start = 8.dp, top = if (accessPoint != MenuAccessPoint.Home &amp;&amp; (isBottomToolbar || isExpandedToolbarEnabled) ) { 0.dp } else { 8.dp }, end = 8.dp, bottom = if (accessPoint != MenuAccessPoint.Home &amp;&amp; (isBottomToolbar || isExpandedToolbarEnabled) ) { 84.dp } else { 16.dp }, )</ID>
     <ID>HardcodedPaddingUsage:MainMenu.kt$(start = 40.dp)</ID>
     <ID>HardcodedPaddingUsage:ManagePrivacyPreferencesDialog.kt$(16.dp)</ID>
-    <ID>HardcodedPaddingUsage:MarketingDataOnboardingPage.kt$(bottom = 24.dp)</ID>
-    <ID>HardcodedPaddingUsage:MarketingDataOnboardingPage.kt$(horizontal = 16.dp)</ID>
-    <ID>HardcodedPaddingUsage:MarketingDataOnboardingPage.kt$(horizontal = 16.dp, vertical = 32.dp)</ID>
-    <ID>HardcodedPaddingUsage:MarketingDataOnboardingPage.kt$(horizontal = 20.dp)</ID>
-    <ID>HardcodedPaddingUsage:MarketingDataOnboardingPageRedesign.kt$( horizontal = 16.dp, vertical = if (state.isSmallDevice) 0.dp else 24.dp, )</ID>
-    <ID>HardcodedPaddingUsage:MarketingDataOnboardingPageRedesign.kt$(start = 20.dp, end = 32.dp)</ID>
     <ID>HardcodedPaddingUsage:MenuBanner.kt$(end = 16.dp)</ID>
     <ID>HardcodedPaddingUsage:MenuBanner.kt$(start = 24.dp, top = 12.dp, bottom = 10.dp)</ID>
     <ID>HardcodedPaddingUsage:MenuBanner.kt$(top = 8.dp, end = 12.dp)</ID>
@@ -293,13 +304,7 @@
     <ID>HardcodedPaddingUsage:NeverTranslateSitesPreference.kt$(start = 72.dp, end = 16.dp, bottom = 16.dp, top = 16.dp)</ID>
     <ID>HardcodedPaddingUsage:NimbusExperiments.kt$( start = 16.dp, end = 16.dp, top = 16.dp, bottom = 8.dp, )</ID>
     <ID>HardcodedPaddingUsage:NimbusExperiments.kt$( start = 16.dp, end = 16.dp, top = 8.dp, bottom = 8.dp, )</ID>
-    <ID>HardcodedPaddingUsage:OnboardingPage.kt$(bottom = if (pageState.secondaryButton == null) 32.dp else 24.dp)</ID>
-    <ID>HardcodedPaddingUsage:OnboardingPage.kt$(horizontal = 16.dp)</ID>
-    <ID>HardcodedPaddingUsage:OnboardingPage.kt$(horizontal = 16.dp, vertical = 32.dp)</ID>
-    <ID>HardcodedPaddingUsage:OnboardingPageRedesign.kt$( horizontal = 16.dp, vertical = if (isSmallDevice) 0.dp else 24.dp, )</ID>
-    <ID>HardcodedPaddingUsage:OnboardingPageRedesign.kt$(start = 20.dp, end = 32.dp)</ID>
     <ID>HardcodedPaddingUsage:OnboardingScreen.kt$(bottom = 16.dp)</ID>
-    <ID>HardcodedPaddingUsage:OnboardingScreenRedesign.kt$(bottom = 16.dp)</ID>
     <ID>HardcodedPaddingUsage:PageSummariesSettingsFragment.kt$PageSummariesSettingsFragment$(horizontal = 16.dp)</ID>
     <ID>HardcodedPaddingUsage:PrivateBrowsingDescription.kt$(horizontal = 24.dp)</ID>
     <ID>HardcodedPaddingUsage:PrivateSuggestionsCard.kt$( top = 20.dp, start = 20.dp, end = 20.dp, bottom = 10.dp, )</ID>
@@ -310,8 +315,6 @@
     <ID>HardcodedPaddingUsage:ProgressBarSetupChecklistView.kt$(16.dp)</ID>
     <ID>HardcodedPaddingUsage:ProtectionPanel.kt$(horizontal = 16.dp, vertical = 8.dp)</ID>
     <ID>HardcodedPaddingUsage:ProtectionPanelHeader.kt$(horizontal = 16.dp, vertical = 6.dp)</ID>
-    <ID>HardcodedPaddingUsage:ProtectionsView.kt$(horizontal = 16.dp)</ID>
-    <ID>HardcodedPaddingUsage:ProtectionsView.kt$(horizontal = 8.dp, vertical = 6.dp)</ID>
     <ID>HardcodedPaddingUsage:QRCodeDialogFragment.kt$(16.dp)</ID>
     <ID>HardcodedPaddingUsage:QRCodeDialogFragment.kt$(8.dp)</ID>
     <ID>HardcodedPaddingUsage:QRCodeDialogFragment.kt$(bottom = 32.dp, start = 48.dp, end = 48.dp)</ID>
@@ -327,8 +330,6 @@
     <ID>HardcodedPaddingUsage:SearchEngineShortcuts.kt$(start = 4.dp)</ID>
     <ID>HardcodedPaddingUsage:SearchEngineShortcuts.kt$(vertical = 8.dp)</ID>
     <ID>HardcodedPaddingUsage:SearchOptimizationFragment.kt$SearchOptimizationFragment$(horizontal = 16.dp, vertical = 24.dp)</ID>
-    <ID>HardcodedPaddingUsage:SecretDebugSettingsFragment.kt$(4.dp)</ID>
-    <ID>HardcodedPaddingUsage:SecretDebugSettingsFragment.kt$(8.dp)</ID>
     <ID>HardcodedPaddingUsage:SecretSettingsFragment.kt$SecretSettingsFragment$(horizontal = 16.dp, vertical = 24.dp)</ID>
     <ID>HardcodedPaddingUsage:SelectFolderScreen.kt$(start = if (!showPadding) folder.startPadding else 0.dp)</ID>
     <ID>HardcodedPaddingUsage:SelectFolderScreen.kt$(vertical = 16.dp)</ID>
@@ -369,20 +370,7 @@
     <ID>HardcodedPaddingUsage:TabStripCard.kt$(8.dp)</ID>
     <ID>HardcodedPaddingUsage:TabTools.kt$(all = 16.dp)</ID>
     <ID>HardcodedPaddingUsage:TabTools.kt$(start = 16.dp)</ID>
-    <ID>HardcodedPaddingUsage:TermsOfServiceOnboardingPage.kt$(bottom = 24.dp)</ID>
-    <ID>HardcodedPaddingUsage:TermsOfServiceOnboardingPage.kt$(horizontal = 10.dp)</ID>
-    <ID>HardcodedPaddingUsage:TermsOfServiceOnboardingPage.kt$(horizontal = 16.dp)</ID>
-    <ID>HardcodedPaddingUsage:TermsOfServiceOnboardingPage.kt$(vertical = 32.dp)</ID>
-    <ID>HardcodedPaddingUsage:TermsOfServiceOnboardingPageRedesign.kt$( horizontal = 16.dp, vertical = if (pageState.isSmallDevice) 0.dp else 24.dp, )</ID>
-    <ID>HardcodedPaddingUsage:TermsOfServiceOnboardingPageRedesign.kt$(end = 12.dp)</ID>
-    <ID>HardcodedPaddingUsage:TermsOfServiceOnboardingPageRedesign.kt$(horizontal = 8.dp)</ID>
     <ID>HardcodedPaddingUsage:TermsOfUseBottomSheet.kt$(start = 36.dp, end = 36.dp, bottom = 32.dp)</ID>
-    <ID>HardcodedPaddingUsage:ThemeOnboardingPage.kt$(horizontal = 16.dp, vertical = 24.dp)</ID>
-    <ID>HardcodedPaddingUsage:ThemeOnboardingPage.kt$(vertical = 6.dp)</ID>
-    <ID>HardcodedPaddingUsage:ToolbarOnboardingPage.kt$(horizontal = 16.dp, vertical = 24.dp)</ID>
-    <ID>HardcodedPaddingUsage:ToolbarOnboardingPage.kt$(vertical = 6.dp)</ID>
-    <ID>HardcodedPaddingUsage:ToolbarOnboardingPageRedesign.kt$( horizontal = 16.dp, vertical = if (pageState.isSmallDevice) 0.dp else 24.dp, )</ID>
-    <ID>HardcodedPaddingUsage:ToolbarOnboardingPageRedesign.kt$(start = 20.dp, end = 32.dp)</ID>
     <ID>HardcodedPaddingUsage:TopSites.kt$(horizontal = 4.dp)</ID>
     <ID>HardcodedPaddingUsage:TopSites.kt$(top = 8.dp)</ID>
     <ID>HardcodedPaddingUsage:TrackerCategoryDetailsPanel.kt$(horizontal = 16.dp)</ID>
@@ -419,7 +407,7 @@
     <ID>HardcodedPaddingUsage:WebCompatReporter.kt$(vertical = 6.dp)</ID>
     <ID>HardcodedPaddingUsage:WebCompatReporterPreviewSheet.kt$(top = 72.dp)</ID>
     <ID>HardcodedPaddingUsage:Wordmark.kt$(end = 10.dp)</ID>
-    <ID>LongMethod:ThemeOnboardingPage.kt$@Composable private fun SelectableImageItem( boxWithConstraintsScope: BoxWithConstraintsScope, themeOption: ThemeOption, selectedOption: ThemeOptionType, onClick: (ThemeOptionType) -&gt; Unit, )</ID>
+    <ID>LongMethod:BrowserToolbarMiddleware.kt$BrowserToolbarMiddleware$@VisibleForTesting internal fun buildHomeAction( action: HomeToolbarAction, source: Source = Source.Unknown, ): Action</ID>
     <ID>MaterialTextButtonUsage:AppLinksPromptFragment.kt$import androidx.compose.material3.TextButton</ID>
     <ID>MaterialTextButtonUsage:HomeSectionHeader.kt$import androidx.compose.material3.TextButton</ID>
     <ID>MaterialTextButtonUsage:WallpaperOnboarding.kt$import androidx.compose.material3.TextButton</ID>
@@ -428,14 +416,10 @@
     <ID>MaterialTypographyUsage:DownloadsScreen.kt$MaterialTheme.typography</ID>
     <ID>MaterialTypographyUsage:FontSizeSlider.kt$MaterialTheme.typography</ID>
     <ID>MaterialTypographyUsage:IPProtectionBottomSheet.kt$MaterialTheme.typography</ID>
-    <ID>MaterialTypographyUsage:MarketingDataOnboardingPageRedesign.kt$MaterialTheme.typography</ID>
     <ID>MaterialTypographyUsage:NimbusExperiments.kt$MaterialTheme.typography</ID>
-    <ID>MaterialTypographyUsage:OnboardingPageRedesign.kt$MaterialTheme.typography</ID>
     <ID>MaterialTypographyUsage:RenameAndChangeLocationDialogContent.kt$MaterialTheme.typography</ID>
     <ID>MaterialTypographyUsage:SyncedTabsList.kt$MaterialTheme.typography</ID>
     <ID>MaterialTypographyUsage:TabGroupColors.kt$MaterialTheme.typography</ID>
-    <ID>MaterialTypographyUsage:TermsOfServiceOnboardingPageRedesign.kt$MaterialTheme.typography</ID>
-    <ID>MaterialTypographyUsage:ToolbarOnboardingPageRedesign.kt$MaterialTheme.typography</ID>
     <ID>MaxLineLength:TelemetryMiddleware.kt$TelemetryMiddleware$@Suppress("TooGenericExceptionCaught", "CognitiveComplexMethod", "NestedBlockDepth", "LongMethod", "CyclomaticComplexMethod")</ID>
     <ID>UndocumentedPublicClass:AboutItem.kt$AboutItem</ID>
     <ID>UndocumentedPublicClass:AboutItem.kt$AboutItem$Crashes : AboutItem</ID>
@@ -502,7 +486,6 @@
     <ID>UndocumentedPublicClass:CollectionsListAdapter.kt$CollectionsListAdapter$CollectionItemViewHolder : ViewHolder</ID>
     <ID>UndocumentedPublicClass:Config.kt$Config</ID>
     <ID>UndocumentedPublicClass:Config.kt$ReleaseChannel</ID>
-    <ID>UndocumentedPublicClass:ConnectionPanelDialogFragment.kt$ConnectionPanelDialogFragment : FenixDialogFragment</ID>
     <ID>UndocumentedPublicClass:CounterPreference.kt$CounterPreference</ID>
     <ID>UndocumentedPublicClass:CrashReporterController.kt$CrashReporterController</ID>
     <ID>UndocumentedPublicClass:CreateShortcutFragment.kt$CreateShortcutFragment : DialogFragment</ID>
@@ -585,13 +568,10 @@
     <ID>UndocumentedPublicClass:PerformanceInflater.kt$InflationCounter</ID>
     <ID>UndocumentedPublicClass:PermissionStorage.kt$PermissionStorage</ID>
     <ID>UndocumentedPublicClass:PhoneFeature.kt$PhoneFeature : Parcelable</ID>
-    <ID>UndocumentedPublicClass:QuickSettingsFragmentReducer.kt$WebsitePermissionsStateReducer</ID>
-    <ID>UndocumentedPublicClass:QuickSettingsFragmentState.kt$AutoplayValue</ID>
-    <ID>UndocumentedPublicClass:QuickSettingsFragmentState.kt$AutoplayValue$AllowAll : AutoplayValue</ID>
-    <ID>UndocumentedPublicClass:QuickSettingsFragmentState.kt$AutoplayValue$BlockAll : AutoplayValue</ID>
-    <ID>UndocumentedPublicClass:QuickSettingsFragmentState.kt$AutoplayValue$BlockAudible : AutoplayValue</ID>
-    <ID>UndocumentedPublicClass:QuickSettingsFragmentState.kt$WebsitePermission$Autoplay : WebsitePermission</ID>
-    <ID>UndocumentedPublicClass:QuickSettingsFragmentState.kt$WebsitePermission$Toggleable : WebsitePermission</ID>
+    <ID>UndocumentedPublicClass:AutoplayValue.kt$AutoplayValue</ID>
+    <ID>UndocumentedPublicClass:AutoplayValue.kt$AutoplayValue$AllowAll : AutoplayValue</ID>
+    <ID>UndocumentedPublicClass:AutoplayValue.kt$AutoplayValue$BlockAll : AutoplayValue</ID>
+    <ID>UndocumentedPublicClass:AutoplayValue.kt$AutoplayValue$BlockAudible : AutoplayValue</ID>
     <ID>UndocumentedPublicClass:RadioButtonInfoPreference.kt$RadioButtonInfoPreference : RadioButtonPreference</ID>
     <ID>UndocumentedPublicClass:RadioButtonPreference.kt$RadioButtonPreference : PreferenceGroupableRadioButton</ID>
     <ID>UndocumentedPublicClass:RadioSearchEngineListPreference.kt$RadioSearchEngineListPreference : PreferenceOnCheckedChangeListener</ID>
@@ -686,12 +666,8 @@
     <ID>UndocumentedPublicClass:TrackingProtectionExceptionsInteractor.kt$TrackingProtectionExceptionsInteractor : ExceptionsInteractor</ID>
     <ID>UndocumentedPublicClass:TrackingProtectionExceptionsView.kt$TrackingProtectionExceptionsView : ExceptionsView</ID>
     <ID>UndocumentedPublicClass:TrackingProtectionMode.kt$TrackingProtectionMode : Parcelable</ID>
-    <ID>UndocumentedPublicClass:TrackingProtectionPanelDialogFragment.kt$TrackingProtectionPanelDialogFragment : AppCompatDialogFragmentUserInteractionHandler</ID>
     <ID>UndocumentedPublicClass:Utils.kt$BookmarkNodeWithDepth</ID>
     <ID>UndocumentedPublicClass:WebAppSiteControlsBuilder.kt$WebAppSiteControlsBuilder : SiteControlsBuilder</ID>
-    <ID>UndocumentedPublicClass:WebsitePermissionsView.kt$WebsitePermissionsView$PermissionViewHolder</ID>
-    <ID>UndocumentedPublicClass:WebsitePermissionsView.kt$WebsitePermissionsView.PermissionViewHolder$SpinnerPermission : PermissionViewHolder</ID>
-    <ID>UndocumentedPublicClass:WebsitePermissionsView.kt$WebsitePermissionsView.PermissionViewHolder$ToggleablePermission : PermissionViewHolder</ID>
     <ID>UndocumentedPublicClass:WhatsNewStorage.kt$SharedPreferenceWhatsNewStorage : WhatsNewStorage</ID>
     <ID>UndocumentedPublicClass:WhatsNewVersion.kt$ContextWhatsNewVersion : WhatsNewVersion</ID>
     <ID>UndocumentedPublicFunction:AboutItemViewHolder.kt$AboutItemViewHolder$fun bind(item: AboutPageItem)</ID>
@@ -704,7 +680,6 @@
     <ID>UndocumentedPublicFunction:BackgroundServices.kt$BackgroundServices$@VisibleForTesting(otherwise = PRIVATE) fun makeAccountManager( context: Context, serverConfig: ServerConfig, deviceConfig: DeviceConfig, syncConfig: SyncConfig?, crashReporter: CrashReporter?, )</ID>
     <ID>UndocumentedPublicFunction:BackgroundServices.kt$BackgroundServices$fun defaultDeviceName(context: Context): String</ID>
     <ID>UndocumentedPublicFunction:BrowserIcons.kt$fun BrowserIcons.loadIntoView(view: ImageView, url: String)</ID>
-    <ID>UndocumentedPublicFunction:ClearSiteDataView.kt$ClearSiteDataView$fun update(webInfoState: WebsiteInfoState)</ID>
     <ID>UndocumentedPublicFunction:CollectionCreationBottomBarView.kt$CollectionCreationBottomBarView$fun update(step: SaveCollectionStep, state: CollectionCreationState)</ID>
     <ID>UndocumentedPublicFunction:CollectionCreationController.kt$CollectionCreationController$fun addNewCollection()</ID>
     <ID>UndocumentedPublicFunction:CollectionCreationController.kt$CollectionCreationController$fun addTabToSelection(tab: Tab)</ID>
@@ -727,7 +702,6 @@
     <ID>UndocumentedPublicFunction:CollectionsListAdapter.kt$CollectionsListAdapter$fun getSelectedCollection()</ID>
     <ID>UndocumentedPublicFunction:Context.kt$fun Context.asActivity()</ID>
     <ID>UndocumentedPublicFunction:Context.kt$fun Context.getPreferenceKey( @StringRes resourceId: Int, ): String</ID>
-    <ID>UndocumentedPublicFunction:Context.kt$fun Context.settings()</ID>
     <ID>UndocumentedPublicFunction:CounterPreference.kt$CounterPreference$fun increment()</ID>
     <ID>UndocumentedPublicFunction:CounterPreference.kt$CounterPreference$fun underMaxCount()</ID>
     <ID>UndocumentedPublicFunction:CreditCardItemViewHolder.kt$CreditCardItemViewHolder$fun bind(creditCard: CreditCard)</ID>
@@ -806,11 +780,11 @@
     <ID>UndocumentedPublicFunction:ProfilerMarkers.kt$ProfilerMarkers$fun homeActivityOnStart(rootContainer: View, profiler: Profiler?)</ID>
     <ID>UndocumentedPublicFunction:PwaOnboardingObserver.kt$PwaOnboardingObserver$fun start()</ID>
     <ID>UndocumentedPublicFunction:PwaOnboardingObserver.kt$PwaOnboardingObserver$fun stop()</ID>
-    <ID>UndocumentedPublicFunction:QuickSettingsFragmentState.kt$AutoplayValue$abstract fun createSitePermissionsFromCustomRules(origin: String, settings: Settings): SitePermissions</ID>
-    <ID>UndocumentedPublicFunction:QuickSettingsFragmentState.kt$AutoplayValue$abstract fun isSelected(): Boolean</ID>
-    <ID>UndocumentedPublicFunction:QuickSettingsFragmentState.kt$AutoplayValue$abstract fun updateSitePermissions(sitePermissions: SitePermissions): SitePermissions</ID>
-    <ID>UndocumentedPublicFunction:QuickSettingsFragmentState.kt$AutoplayValue.Companion$fun getFallbackValue( context: Context, settings: Settings, sitePermission: SitePermissions?, ): AutoplayValue</ID>
-    <ID>UndocumentedPublicFunction:QuickSettingsFragmentState.kt$AutoplayValue.Companion$fun values( context: Context, settings: Settings, sitePermission: SitePermissions?, ): List&lt;AutoplayValue&gt;</ID>
+    <ID>UndocumentedPublicFunction:AutoplayValue.kt$AutoplayValue$abstract fun createSitePermissionsFromCustomRules(origin: String, settings: Settings): SitePermissions</ID>
+    <ID>UndocumentedPublicFunction:AutoplayValue.kt$AutoplayValue$abstract fun isSelected(): Boolean</ID>
+    <ID>UndocumentedPublicFunction:AutoplayValue.kt$AutoplayValue$abstract fun updateSitePermissions(sitePermissions: SitePermissions): SitePermissions</ID>
+    <ID>UndocumentedPublicFunction:AutoplayValue.kt$AutoplayValue.Companion$fun getFallbackValue( context: Context, settings: Settings, sitePermission: SitePermissions?, ): AutoplayValue</ID>
+    <ID>UndocumentedPublicFunction:AutoplayValue.kt$AutoplayValue.Companion$fun values( context: Context, settings: Settings, sitePermission: SitePermissions?, ): List&lt;AutoplayValue&gt;</ID>
     <ID>UndocumentedPublicFunction:RadioButtonInfoPreference.kt$RadioButtonInfoPreference$fun onInfoClickListener(listener: (() -&gt; Unit))</ID>
     <ID>UndocumentedPublicFunction:RadioButtonPreference.kt$RadioButtonPreference$fun onClickListener(listener: (() -&gt; Unit))</ID>
     <ID>UndocumentedPublicFunction:RadioButtonPreference.kt$RadioButtonPreference$fun setCheckedWithoutClickListener(isChecked: Boolean)</ID>
@@ -896,7 +870,6 @@
     <ID>UndocumentedPublicFunction:TabHistoryViewHolder.kt$TabHistoryViewHolder$fun bind(item: TabHistoryItem)</ID>
     <ID>UndocumentedPublicFunction:ThemeManager.kt$ThemeManager$fun setActivityTheme(activity: Activity)</ID>
     <ID>UndocumentedPublicFunction:TrackingProtectionExceptionsInteractor.kt$DefaultTrackingProtectionExceptionsInteractor$fun reloadExceptions()</ID>
-    <ID>UndocumentedPublicFunction:TrackingProtectionPanelView.kt$TrackingProtectionPanelView$fun onBackPressed(): Boolean</ID>
     <ID>UndocumentedPublicFunction:Utils.kt$fun BookmarkNode.flatNodeList(excludeSubtreeRoot: String?, depth: Int = 0): List&lt;BookmarkNodeWithDepth&gt;</ID>
     <ID>UndocumentedPublicFunction:Utils.kt$fun rootTitles(context: Context, withMobileRoot: Boolean): Map&lt;String, String&gt;</ID>
     <ID>UndocumentedPublicFunction:View.kt$fun View.increaseTapArea( @Dimension(unit = DP) extraDps: Int, )</ID>

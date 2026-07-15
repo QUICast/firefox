@@ -8,33 +8,33 @@
 #include "gfxCrashReporterUtils.h"
 #include "gfxEnv.h"
 #include "gfxUtils.h"
-#include "mozilla/Preferences.h"
 #include "mozilla/Assertions.h"
-#include "mozilla/gfx/gfxVars.h"
-#include "mozilla/gfx/Logging.h"
-#include "mozilla/glean/DomCanvasMetrics.h"
-#include "mozilla/Tokenizer.h"
+#include "mozilla/Preferences.h"
 #include "mozilla/ScopeExit.h"
 #include "mozilla/StaticPrefs_gfx.h"
 #include "mozilla/StaticPrefs_webgl.h"
+#include "mozilla/Tokenizer.h"
+#include "mozilla/gfx/Logging.h"
+#include "mozilla/gfx/gfxVars.h"
+#include "mozilla/glean/DomCanvasMetrics.h"
 #include "nsDirectoryServiceDefs.h"
 #include "nsDirectoryServiceUtils.h"
 #include "nsPrintfCString.h"
 #ifdef XP_WIN
+#  include <d3d11.h>
+
 #  include "mozilla/gfx/DeviceManagerDx.h"
 #  include "nsWindowsHelpers.h"
 #  include "prerror.h"
-
-#  include <d3d11.h>
 #endif
-#include "OGLShaderProgram.h"
-#include "prenv.h"
-#include "prsystem.h"
 #include "GLContext.h"
 #include "GLContextProvider.h"
 #include "GLLibraryLoader.h"
 #include "GLReadTexImageHelper.h"
+#include "OGLShaderProgram.h"
 #include "ScopedGLHelpers.h"
+#include "prenv.h"
+#include "prsystem.h"
 #ifdef MOZ_WIDGET_GTK
 #  include "mozilla/WidgetUtilsGtk.h"
 #  include "mozilla/widget/DMABufDevice.h"
@@ -94,6 +94,7 @@ static const char* sEGLExtensionNames[] = {
     "EGL_EXT_image_dma_buf_import_modifiers",
     "EGL_MESA_image_dma_buf_export",
     "EGL_KHR_no_config_context",
+    "EGL_ANGLE_iosurface_client_buffer",
 };
 
 PRLibrary* LoadApitraceLibrary() {
@@ -439,12 +440,18 @@ static std::shared_ptr<EglDisplay> GetAndInitDisplayForAccelANGLE(
 
 // -
 
-#if defined(XP_UNIX)
+#if defined(XP_DARWIN)
+#  define EGL_LIB "libEGL.dylib"
+#  define GLES2_LIB "libGLESv2.dylib"
+#elif defined(XP_UNIX)
+#  define EGL_LIB "libEGL.so"
+#  define EGL_LIB2 "libEGL.so.1"
 #  define GLES2_LIB "libGLESv2.so"
 #  define GLES2_LIB2 "libGLESv2.so.2"
 #  define GL_LIB "libGL.so"
 #  define GL_LIB2 "libGL.so.1"
 #elif defined(XP_WIN)
+#  define EGL_LIB "libEGL.dll"
 #  define GLES2_LIB "libGLESv2.dll"
 #else
 #  error "Platform not recognized"
@@ -452,7 +459,17 @@ static std::shared_ptr<EglDisplay> GetAndInitDisplayForAccelANGLE(
 
 Maybe<SymbolLoader> GLLibraryEGL::GetSymbolLoader() const {
   auto ret = SymbolLoader(mSymbols.fGetProcAddress);
-  ret.mLib = mGLLibrary;
+  // For ANGLE, use ANGLE's eglGetProcAddress as the only source for GL entry
+  // points, avoiding raw library symbol lookups. In particular, dlsym on macOS
+  // may resolve missing symbols from another GL implementation, such as the
+  // system libGL.dylib, resulting in crashes.
+  //
+  // For non-ANGLE, we must prefer to use the library lookup. Some older EGL
+  // implementations do not reliably return core GL entry points from
+  // eglGetProcAddress. See bug 1420745.
+  if (!IsANGLE()) {
+    ret.mLib = mGLLibrary;
+  }
   return Some(ret);
 }
 
@@ -512,11 +529,12 @@ bool GLLibraryEGL::Init(nsACString* const out_failureId) {
 #  endif
 
   if (!mEGLLibrary) {
-    mEGLLibrary = PR_LoadLibrary("libEGL.so");
+    mEGLLibrary = PR_LoadLibrary(EGL_LIB);
   }
-#  if defined(XP_UNIX)
+
+#  ifdef EGL_LIB2
   if (!mEGLLibrary) {
-    mEGLLibrary = PR_LoadLibrary("libEGL.so.1");
+    mEGLLibrary = PR_LoadLibrary(EGL_LIB2);
   }
 #  endif
 
@@ -639,14 +657,17 @@ bool GLLibraryEGL::Init(nsACString* const out_failureId) {
   // Client exts are ready. (But not display exts!)
 
   if (mIsANGLE) {
-    MOZ_ASSERT(IsExtensionSupported(EGLLibExtension::ANGLE_platform_angle_d3d));
     const SymLoadStruct angleSymbols[] = {SYMBOL(GetPlatformDisplay),
                                           END_OF_SYMBOLS};
     if (!fnLoadSymbols(angleSymbols)) {
       gfxCriticalError() << "Failed to load ANGLE symbols!";
       return false;
     }
+
+#ifdef XP_WIN
     MOZ_ASSERT(IsExtensionSupported(EGLLibExtension::ANGLE_platform_angle_d3d));
+#endif
+
     const SymLoadStruct createDeviceSymbols[] = {
         SYMBOL(CreateDeviceANGLE), SYMBOL(ReleaseDeviceANGLE), END_OF_SYMBOLS};
     if (!fnLoadSymbols(createDeviceSymbols)) {
@@ -968,6 +989,9 @@ std::shared_ptr<EglDisplay> GLLibraryEGL::CreateDisplayLocked(
       }
     }
 #  endif
+#elif defined(XP_MACOSX)
+    MOZ_ASSERT(!forceSoftware,
+               "Software rendering not supported by EGL on macOS");
 #endif
     if (!ret && !forceSoftware) {
       ret = GetAndInitDisplay(*this, nativeDisplay, aProofOfLock);

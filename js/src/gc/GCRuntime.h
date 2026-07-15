@@ -489,8 +489,8 @@ class GCRuntime {
 
   bool hasForegroundWork() const;
 
+  bool isNormalGC() const { return gcOptions() == JS::GCOptions::Normal; }
   bool isShrinkingGC() const { return gcOptions() == JS::GCOptions::Shrink; }
-
   bool isShutdownGC() const { return gcOptions() == JS::GCOptions::Shutdown; }
 
 #ifdef DEBUG
@@ -565,6 +565,9 @@ class GCRuntime {
     MOZ_ASSERT(isConcurrentMarkingEnabled());
     return *markers[1];
   }
+
+  bool haveAllImplicitEdges() const { return haveAllImplicitEdges_; }
+  void clearHaveAllImplicitEdges() { haveAllImplicitEdges_ = false; }
 
   JS::Zone* getCurrentSweepGroup() { return currentSweepGroup; }
   unsigned getCurrentSweepGroupIndex() {
@@ -681,6 +684,24 @@ class GCRuntime {
   // Allocator internals.
   static void* refillFreeListInGC(Zone* zone, AllocKind thingKind);
 
+  // Deferred WeakMap marking.
+  WeakMapList& deferredMapsList(MarkColor color) {
+    return (color == MarkColor::Black ? blackDeferredMaps : grayDeferredMaps)
+        .ref();
+  }
+  const WeakMapList& deferredMapsList(MarkColor color) const {
+    return (color == MarkColor::Black ? blackDeferredMaps : grayDeferredMaps)
+        .ref();
+  }
+  bool hasAnyDeferredWeakMaps() const {
+    return !blackDeferredMaps.ref().isEmpty() ||
+           !grayDeferredMaps.ref().isEmpty();
+  }
+  bool hasDeferredWeakMaps(MarkColor color) const {
+    return !deferredMapsList(color).isEmpty();
+  }
+  void resetDeferredWeakMaps();
+
   // Delayed marking.
   void delayMarkingChildren(gc::Cell* cell, MarkColor color);
   bool hasDelayedMarking() const;
@@ -729,8 +750,8 @@ class GCRuntime {
 
   static bool isFinalizationObserverTarget(const Value& target);
 
-  static bool relocateFinalizationObserverTarget(const Value& oldTarget,
-                                                 const Value& newTarget);
+  bool relocateFinalizationObserverTarget(const Value& oldTarget,
+                                          const Value& newTarget);
 
   static void clearWeakRefTargets(JS::Compartment* source, const Value& target);
   static void clearWeakRefTargets(const CompartmentFilter& sourceFilter,
@@ -1290,6 +1311,9 @@ class GCRuntime {
 
   MainThreadData<size_t> markSliceCount;
 
+  /* Whether we successfully added all edges to the implicit edges table. */
+  mozilla::Atomic<bool, mozilla::ReleaseAcquire> haveAllImplicitEdges_{false};
+
 #ifdef JS_GC_CONCURRENT_MARKING
   MainThreadData<size_t> concurrentMarkingFinishedCount;
 #endif
@@ -1326,6 +1350,12 @@ class GCRuntime {
 
   /* Index of current sweep group (for stats). */
   MainThreadData<unsigned> sweepGroupIndex;
+
+  // WeakMaps whose children have been deferred until the mark stack is empty
+  // (everything reachable without going through a WeakMap entry has been
+  // marked).
+  MainThreadOrGCTaskData<WeakMapList> blackDeferredMaps;
+  MainThreadOrGCTaskData<WeakMapList> grayDeferredMaps;
 
   /*
    * Incremental sweep state.

@@ -241,9 +241,16 @@ class FuncType {
     return false;
   }
 
+  bool isValidComponentDestructor() const {
+    return args().length() == 1 && results().length() == 0 &&
+           args()[0].valType() == ValType::i32();
+  }
+
   size_t sizeOfExcludingThis(mozilla::MallocSizeOf mallocSizeOf) const;
   WASM_DECLARE_FRIEND_SERIALIZE(FuncType);
 };
+
+extern UniqueChars ToString(const FuncType& type, const TypeContext* types);
 
 //=========================================================================
 // Structure types
@@ -1353,6 +1360,24 @@ class TypeContext : public AtomicRefCounted<TypeContext> {
       return nullptr;
     }
     return &this->type(length() - 1);
+  }
+
+  template <typename T>
+  [[nodiscard]] static SharedTypeDef canonicalizeSingleType(T&& type) {
+    MutableRecGroup recGroup = RecGroup::allocate(1);
+    if (!recGroup) {
+      return nullptr;
+    }
+    recGroup->type(0) = std::forward<T>(type);
+    if (!recGroup->finalizeDefinitions()) {
+      return nullptr;
+    }
+
+    SharedRecGroup canonical = canonicalizeGroup(recGroup);
+    if (!canonical) {
+      return nullptr;
+    }
+    return &canonical->type(0);
   }
 
   const TypeDef& type(uint32_t index) const { return *types_[index]; }

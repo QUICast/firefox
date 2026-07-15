@@ -63,6 +63,46 @@ template struct StyleStrong<StyleLockedPositionTryRule>;
 template struct StyleStrong<StyleLockedNestedDeclarationsRule>;
 template struct StyleStrong<StyleViewTransitionRule>;
 
+template <typename T, size_t N>
+inline StyleOwnedArray<T, N>::StyleOwnedArray(const StyleOwnedArray& aOther)
+    : ptr(static_cast<T*>(moz_xmalloc(N * sizeof(T)))) {
+  for (size_t i = 0; i < N; ++i) {
+    new (&ptr[i]) T(aOther.ptr[i]);
+  }
+}
+
+template <typename T, size_t N>
+template <typename... Args>
+  requires(sizeof...(Args) == N)
+inline StyleOwnedArray<T, N>::StyleOwnedArray(Args&&... aArgs)
+    : ptr(static_cast<T*>(malloc(N * sizeof(T)))) {
+  size_t i = 0;
+  (new (&ptr[i++]) T(std::forward<Args>(aArgs)), ...);
+}
+
+template <typename T, size_t N>
+inline StyleOwnedArray<T, N>& StyleOwnedArray<T, N>::operator=(
+    const StyleOwnedArray& aOther) {
+  if (this == &aOther) {
+    return *this;
+  }
+  for (size_t i = 0; i < N; ++i) {
+    ptr[i].~T();
+  }
+  for (size_t i = 0; i < N; ++i) {
+    new (&ptr[i]) T(aOther.ptr[i]);
+  }
+  return *this;
+}
+
+template <typename T, size_t N>
+inline StyleOwnedArray<T, N>::~StyleOwnedArray() {
+  for (size_t i = 0; i < N; ++i) {
+    ptr[i].~T();
+  }
+  free(ptr);
+}
+
 template <typename T>
 inline void StyleOwnedSlice<T>::Clear() {
   if (!len) {
@@ -532,6 +572,7 @@ using LengthOrAuto = StyleLengthOrAuto;
 using NonNegativeLength = StyleNonNegativeLength;
 using NonNegativeLengthOrAuto = StyleNonNegativeLengthOrAuto;
 using BorderRadius = StyleBorderRadius;
+using CornerShapeRect = StyleCornerShapeRect;
 
 bool StyleCSSPixelLength::IsZero() const { return _0 == 0.0f; }
 
@@ -1489,6 +1530,68 @@ template <>
 inline Span<const mozilla::StyleAtom>
 StyleTreeScoped<StyleAnchorNameIdent>::AsSpan() const {
   return value.AsSpan();
+}
+
+inline StyleNumericType::StyleNumericType()
+    : exponents{},
+      percent_hint(StyleOptional<StyleNumericBaseType>::None()),
+      non_zero_count(0),
+      non_zero_except_percent_count(0) {}
+
+inline StyleNumericType StyleNumericType::Empty() { return StyleNumericType(); }
+
+// See declaration for synchronization requirements.
+inline StyleNumericType StyleNumericType::WithBaseType(
+    StyleNumericBaseType aBaseType) {
+  auto result = Empty();
+  result.exponents[static_cast<size_t>(aBaseType)] = 1;
+  result.non_zero_count = 1;
+
+  if (aBaseType != StyleNumericBaseType::Percent) {
+    result.non_zero_except_percent_count = 1;
+  }
+
+  return result;
+}
+
+inline StyleNumericType StyleNumericType::Number() { return Empty(); }
+
+inline StyleNumericType StyleNumericType::Percent() {
+  return WithBaseType(StyleNumericBaseType::Percent);
+}
+
+inline StyleNumericType StyleNumericType::Length() {
+  return WithBaseType(StyleNumericBaseType::Length);
+}
+
+inline StyleNumericType StyleNumericType::Angle() {
+  return WithBaseType(StyleNumericBaseType::Angle);
+}
+
+inline StyleNumericType StyleNumericType::Time() {
+  return WithBaseType(StyleNumericBaseType::Time);
+}
+
+inline StyleNumericType StyleNumericType::Frequency() {
+  return WithBaseType(StyleNumericBaseType::Frequency);
+}
+
+inline StyleNumericType StyleNumericType::Resolution() {
+  return WithBaseType(StyleNumericBaseType::Resolution);
+}
+
+inline StyleNumericType StyleNumericType::Flex() {
+  return WithBaseType(StyleNumericBaseType::Flex);
+}
+
+inline int32_t StyleNumericType::Exponent(
+    StyleNumericBaseType aBaseType) const {
+  return exponents[static_cast<size_t>(aBaseType)];
+}
+
+inline bool StyleNumericType::operator==(const StyleNumericType& aOther) const {
+  return ArrayEqual(exponents, aOther.exponents) &&
+         percent_hint == aOther.percent_hint;
 }
 
 }  // namespace mozilla

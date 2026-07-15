@@ -873,7 +873,6 @@ bool shell::offthreadBaselineCompilation = false;
 bool shell::offthreadIonCompilation = false;
 JS::DelazificationOption shell::defaultDelazificationMode =
     JS::DelazificationOption::OnDemandOnly;
-bool shell::enableAsmJS = false;
 bool shell::enableWasm = false;
 bool shell::enableSharedMemory = SHARED_MEMORY_DEFAULT;
 bool shell::enableWasmBaseline = false;
@@ -2372,6 +2371,7 @@ static bool CreateMappedArrayBuffer(JSContext* cx, unsigned argc, Value* vp) {
   RootedObject obj(cx,
                    JS::NewMappedArrayBufferWithContents(cx, size, contents));
   if (!obj) {
+    JS::ReleaseMappedArrayBufferContents(contents, size);
     return false;
   }
 
@@ -2552,51 +2552,29 @@ static bool IgnoreUnhandledRejections(JSContext* cx, unsigned argc, Value* vp) {
   return true;
 }
 
+// Deprecated: all JS engine options have been removed. Returns an empty string
+// with no arguments; throws for any unknown option name provided.
 static bool Options(JSContext* cx, unsigned argc, Value* vp) {
   CallArgs args = CallArgsFromVp(argc, vp);
 
-  JS::ContextOptions oldContextOptions = JS::ContextOptionsRef(cx);
-  for (unsigned i = 0; i < args.length(); i++) {
-    RootedString str(cx, JS::ToString(cx, args[i]));
+  if (args.length() >= 1) {
+    RootedString str(cx, JS::ToString(cx, args[0]));
     if (!str) {
       return false;
     }
-
     Rooted<JSLinearString*> opt(cx, str->ensureLinear(cx));
     if (!opt) {
       return false;
     }
-
-    if (StringEqualsLiteral(opt, "throw_on_asmjs_validation_failure")) {
-      JS::ContextOptionsRef(cx).toggleThrowOnAsmJSValidationFailure();
-    } else {
-      UniqueChars optChars = QuoteString(cx, opt, '"');
-      if (!optChars) {
-        return false;
-      }
-
-      JS_ReportErrorASCII(cx,
-                          "unknown option name %s."
-                          " The valid name is "
-                          "throw_on_asmjs_validation_failure.",
-                          optChars.get());
+    UniqueChars optChars = QuoteString(cx, opt, '"');
+    if (!optChars) {
       return false;
     }
-  }
-
-  UniqueChars names = DuplicateString("");
-  bool found = false;
-  if (names && oldContextOptions.throwOnAsmJSValidationFailure()) {
-    names = JS_sprintf_append(std::move(names), "%s%s", found ? "," : "",
-                              "throw_on_asmjs_validation_failure");
-    found = true;
-  }
-  if (!names) {
-    JS_ReportOutOfMemory(cx);
+    JS_ReportErrorASCII(cx, "unknown option name %s.", optChars.get());
     return false;
   }
 
-  JSString* str = JS_NewStringCopyZ(cx, names.get());
+  JSString* str = JS_NewStringCopyZ(cx, "");
   if (!str) {
     return false;
   }
@@ -2832,10 +2810,6 @@ static bool ConvertTranscodeResultToJSException(JSContext* cx,
     case JS::TranscodeResult::Failure_BadBuildId:
       MOZ_ASSERT(!cx->isExceptionPending());
       JS_ReportErrorASCII(cx, "the build-id does not match");
-      return false;
-    case JS::TranscodeResult::Failure_AsmJSNotSupported:
-      MOZ_ASSERT(!cx->isExceptionPending());
-      JS_ReportErrorASCII(cx, "Asm.js is not supported by XDR");
       return false;
     case JS::TranscodeResult::Failure_BadDecode:
       MOZ_ASSERT(!cx->isExceptionPending());
@@ -4106,9 +4080,7 @@ static bool CacheIRHealthReport(JSContext* cx, unsigned argc, Value* vp) {
 #endif /* JS_CACHEIR_SPEW */
 
 /* Pretend we can always preserve wrappers for dummy DOM objects. */
-static bool DummyPreserveWrapperCallback(JSContext* cx, HandleObject obj) {
-  return true;
-}
+static void DummyPreserveWrapperCallback(JSContext* cx, HandleObject obj) {}
 
 /* Wrappers stay preserved for dummy DOM objects. */
 static bool DummyHasReleasedWrapperCallback(HandleObject obj) { return false; }
@@ -4852,7 +4824,7 @@ static bool ShapeOf(JSContext* cx, unsigned argc, JS::Value* vp) {
     return false;
   }
   JSObject* obj = &args[0].toObject();
-  args.rval().set(JS_NumberValue(double(uintptr_t(obj->shape()) >> 3)));
+  args.rval().setNumber(double(uintptr_t(obj->shape()) >> 3));
   return true;
 }
 
@@ -6000,6 +5972,22 @@ static bool InstantiateModuleStencilXDR(JSContext* cx, uint32_t argc,
   return true;
 }
 
+static bool CheckModuleFunctionAllowed(JSContext* cx) {
+  // These module functions are provided for testing purposes only. In a real
+  // implementation they are not accessible to user scripts and are called as
+  // part of the module loader itself.
+  //
+  // They should not be allowed in places where their use can break module
+  // loader invariants, for example from debugger hooks.
+
+  if (cx->noExecuteDebuggerTop) {
+    JS_ReportErrorASCII(cx, "Function not allowed inside debugger hooks");
+    return false;
+  }
+
+  return true;
+}
+
 static bool RegisterModule(JSContext* cx, unsigned argc, Value* vp) {
   CallArgs args = CallArgsFromVp(argc, vp);
   if (!args.requireAtLeast(cx, "registerModule", 2)) {
@@ -6029,6 +6017,10 @@ static bool RegisterModule(JSContext* cx, unsigned argc, Value* vp) {
 
   Rooted<JSAtom*> specifier(cx, AtomizeString(cx, args[0].toString()));
   if (!specifier) {
+    return false;
+  }
+
+  if (!CheckModuleFunctionAllowed(cx)) {
     return false;
   }
 
@@ -6089,6 +6081,10 @@ static bool ModuleLink(JSContext* cx, unsigned argc, Value* vp) {
     return false;
   }
 
+  if (!CheckModuleFunctionAllowed(cx)) {
+    return false;
+  }
+
   AutoRealm ar(cx, object);
 
   Rooted<ModuleObject*> module(cx,
@@ -6118,6 +6114,10 @@ static bool ModuleEvaluate(JSContext* cx, unsigned argc, Value* vp) {
   if (!object->is<ShellModuleObjectWrapper>()) {
     JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_INVALID_ARGS,
                               "moduleEvaluate");
+    return false;
+  }
+
+  if (!CheckModuleFunctionAllowed(cx)) {
     return false;
   }
 
@@ -7644,7 +7644,6 @@ static bool GetMaxArgs(JSContext* cx, unsigned argc, Value* vp) {
   return true;
 }
 
-#ifdef ENABLE_SOURCE_PHASE_IMPORTS
 static bool GetAbstractModuleSource(JSContext* cx, unsigned argc, Value* vp) {
   CallArgs args = CallArgsFromVp(argc, vp);
   if (JS::Prefs::experimental_source_phase_imports()) {
@@ -7659,7 +7658,6 @@ static bool GetAbstractModuleSource(JSContext* cx, unsigned argc, Value* vp) {
   }
   return true;
 }
-#endif
 
 static bool IsHTMLDDA_Call(JSContext* cx, unsigned argc, Value* vp) {
   CallArgs args = CallArgsFromVp(argc, vp);
@@ -10402,11 +10400,9 @@ JS_FN_HELP("createUserArrayBuffer", CreateUserArrayBuffer, 1, 0,
 "getMaxArgs()",
 "  Return the maximum number of supported args for a call."),
 
-#ifdef ENABLE_SOURCE_PHASE_IMPORTS
     JS_FN_HELP("getAbstractModuleSource", GetAbstractModuleSource, 0, 0,
 "getAbstractModuleSource()",
 "  Return the %AbstractModuleSource% intrinsic constructor."),
-#endif
 
     JS_FN_HELP("createIsHTMLDDA", CreateIsHTMLDDA, 0, 0,
 "createIsHTMLDDA()",
@@ -11304,7 +11300,7 @@ static bool dom_get_x(JSContext* cx, HandleObject obj, void* self,
                       JSJitGetterCallArgs args) {
   MOZ_ASSERT(JS::GetClass(obj) == GetDomClass());
   MOZ_ASSERT(self == DOM_PRIVATE_VALUE);
-  args.rval().set(JS_NumberValue(double(3.14)));
+  args.rval().setNumber(double(3.14));
   return true;
 }
 
@@ -12155,7 +12151,6 @@ auto minVal(T a, Ts... args) {
 static void SetWorkerContextOptions(JSContext* cx) {
   // Copy option values from the main thread.
   JS::ContextOptionsRef(cx)
-      .setAsmJS(enableAsmJS)
       .setWasm(enableWasm)
       .setWasmBaseline(enableWasmBaseline)
       .setWasmIon(enableWasmOptimizing)
@@ -12406,7 +12401,9 @@ static int Shell(JSContext* cx, OptionParser* op) {
     // Only if there's no other error, report unhandled rejections.
     if (!result && !sc->exitCode) {
       AutoReportException are(cx);
-      if (!ReportUnhandledRejections(cx)) {
+      if (sc->pendingRootModuleEvaluations > 0) {
+        JS_ReportErrorASCII(cx, "Module evaluation not completed");
+      } else if (!ReportUnhandledRejections(cx)) {
         FILE* fp = ErrorFilePointer();
         fputs("Error while printing unhandled rejection\n", fp);
       }
@@ -12607,6 +12604,12 @@ static bool SetGCParameterFromArg(JSContext* cx, char* arg) {
             "Error: Could not parse '%s' as decimal for GC parameter '%s'\n",
             valueStr, name);
     return false;
+  }
+
+  // Some Params are not yet fuzzing safe and so we silently skip changing said
+  // parameters.
+  if (fuzzingSafe && !IsGCParameterFuzzingSafe(key)) {
+    return true;
   }
 
   uint32_t paramValue = uint32_t(value);
@@ -12888,7 +12891,6 @@ bool InitOptionParser(OptionParser& op) {
                        -1) ||
       !op.addBoolOption('\0', "only-inline-selfhosted",
                         "Only inline selfhosted functions") ||
-      !op.addBoolOption('\0', "asmjs", "Enable asm.js compilation") ||
       !op.addStringOption(
           '\0', "wasm-compiler", "[option]",
           "Choose to enable a subset of the wasm compilers, valid options are "
@@ -13008,6 +13010,9 @@ bool InitOptionParser(OptionParser& op) {
           "On-Stack Replacement (default: on, off to disable)") ||
       !op.addBoolOption('\0', "disable-bailout-loop-check",
                         "Turn off bailout loop check") ||
+      !op.addStringOption(
+          '\0', "canonicalize-nan-at-uses", "on/off",
+          "Canonicalize NaN values at uses (default: off, on to enable") ||
       !op.addBoolOption('\0', "enable-ic-frame-pointers",
                         "Use frame pointers in all IC stubs") ||
       !op.addBoolOption('\0', "scalar-replace-arguments",
@@ -13225,6 +13230,11 @@ bool InitOptionParser(OptionParser& op) {
 #ifdef JS_CODEGEN_RISCV64
       !op.addBoolOption('\0', "riscv-debug",
                         "Print riscv debugging messages.") ||
+      !op.addStringOption(
+          '\0', "riscv-ext", "[features]",
+          "Specify RISCV code generation features. Starts with ISA (\"rv64g\") "
+          "or profile (\"rva20u64\", \"rva22u64\", \"rva23u64\"), followed by "
+          "extensions separated with '_'.") ||
 #endif
 #ifdef JS_SIMULATOR_RISCV64
       !op.addBoolOption('\0', "riscv-sim-trace",
@@ -13319,11 +13329,6 @@ bool InitOptionParser(OptionParser& op) {
       !op.addBoolOption('\0', "enable-import-text", "Enable import text") ||
       !op.addBoolOption('\0', "enable-promise-allkeyed",
                         "Enable Promise.allKeyed") ||
-      !op.addBoolOption(
-          '\0', "enable-promise-safe-resolve",
-          "Enable thenable-curtailment's safe-resolve second parameter on "
-          "Promise resolve functions") ||
-
       !op.addBoolOption('\0', "enable-arraybuffer-immutable",
                         "Enable immutable ArrayBuffers") ||
       !op.addBoolOption('\0', "enable-iterator-chunking",
@@ -13415,6 +13420,15 @@ bool SetGlobalOptionsPreJSInit(const OptionParser& op) {
   if (op.getBoolOption("enable-intl-locale-info")) {
     JS::Prefs::setAtStartup_experimental_intl_locale_info(true);
   }
+  if (op.getBoolOption("enable-iterator-includes")) {
+    JS::Prefs::setAtStartup_experimental_iterator_includes(true);
+  }
+  if (op.getBoolOption("enable-iterator-join")) {
+    JS::Prefs::setAtStartup_experimental_iterator_join(true);
+  }
+  if (op.getBoolOption("enable-iterator-chunking")) {
+    JS::Prefs::setAtStartup_experimental_iterator_chunking(true);
+  }
 #ifdef NIGHTLY_BUILD
   if (op.getBoolOption("enable-async-iterator-helpers")) {
     JS::Prefs::setAtStartup_experimental_async_iterator_helpers(true);
@@ -13434,20 +13448,6 @@ bool SetGlobalOptionsPreJSInit(const OptionParser& op) {
   if (op.getBoolOption("enable-promise-allkeyed")) {
     JS::Prefs::setAtStartup_experimental_promise_allkeyed(true);
   }
-#  ifdef NIGHTLY_BUILD
-  if (op.getBoolOption("enable-promise-safe-resolve")) {
-    JS::Prefs::setAtStartup_experimental_promise_safe_resolve(true);
-  }
-#  endif  // NIGHTLY_BUILD
-  if (op.getBoolOption("enable-iterator-chunking")) {
-    JS::Prefs::setAtStartup_experimental_iterator_chunking(true);
-  }
-  if (op.getBoolOption("enable-iterator-join")) {
-    JS::Prefs::setAtStartup_experimental_iterator_join(true);
-  }
-  if (op.getBoolOption("enable-iterator-includes")) {
-    JS::Prefs::setAtStartup_experimental_iterator_includes(true);
-  }
   if (op.getBoolOption("enable-error-stack-trace-limit")) {
     JS::Prefs::setAtStartup_experimental_error_stack_trace_limit(true);
   }
@@ -13455,7 +13455,6 @@ bool SetGlobalOptionsPreJSInit(const OptionParser& op) {
     JS::Prefs::set_experimental_wasm_esm_integration(true);
   }
 #endif
-#ifdef ENABLE_SOURCE_PHASE_IMPORTS
   if (op.getBoolOption("enable-source-phase-imports")) {
     JS::Prefs::set_experimental_source_phase_imports(true);
   }
@@ -13464,7 +13463,6 @@ bool SetGlobalOptionsPreJSInit(const OptionParser& op) {
         setAtStartup_experimental_source_phase_imports_test262_module_source(
             true);
   }
-#endif
 #ifdef ENABLE_EXPLICIT_RESOURCE_MANAGEMENT
   if (op.getBoolOption("enable-explicit-resource-management")) {
     JS::Prefs::set_experimental_explicit_resource_management(true);
@@ -13603,6 +13601,11 @@ bool SetGlobalOptionsPreJSInit(const OptionParser& op) {
   if (op.getBoolOption("no-cssc")) {
     vixl::CPUFeatures cssc(vixl::CPUFeatures::kCSSC);
     jit::ARM64Flags::DisableCPUFeatures(cssc);
+  }
+#endif
+#if defined(JS_CODEGEN_RISCV64)
+  if (const char* str = op.getStringOption("riscv-ext")) {
+    jit::SetRISCV64ExtensionsString(str);
   }
 #endif
 #ifndef __wasi__
@@ -13774,8 +13777,6 @@ bool SetContextOptions(JSContext* cx, const OptionParser& op) {
 }
 
 bool SetContextWasmOptions(JSContext* cx, const OptionParser& op) {
-  enableAsmJS = op.getBoolOption("asmjs");
-
   enableWasm = true;
   enableWasmBaseline = true;
   enableWasmOptimizing = true;
@@ -13783,25 +13784,18 @@ bool SetContextWasmOptions(JSContext* cx, const OptionParser& op) {
   if (const char* str = op.getStringOption("wasm-compiler")) {
     if (strcmp(str, "none") == 0) {
       enableWasm = false;
-      // Disable asm.js -- no wasm compilers available.
-      enableAsmJS = false;
     } else if (strcmp(str, "baseline") == 0) {
       MOZ_ASSERT(enableWasmBaseline);
       enableWasmOptimizing = false;
     } else if (strcmp(str, "optimizing") == 0 ||
-               strcmp(str, "optimized") == 0) {
+               strcmp(str, "optimized") == 0 || strcmp(str, "ion") == 0) {
       enableWasmBaseline = false;
       MOZ_ASSERT(enableWasmOptimizing);
     } else if (strcmp(str, "baseline+optimizing") == 0 ||
-               strcmp(str, "baseline+optimized") == 0) {
+               strcmp(str, "baseline+optimized") == 0 ||
+               strcmp(str, "baseline+ion") == 0) {
       MOZ_ASSERT(enableWasmBaseline);
       MOZ_ASSERT(enableWasmOptimizing);
-    } else if (strcmp(str, "ion") == 0) {
-      enableWasmBaseline = false;
-      enableWasmOptimizing = true;
-    } else if (strcmp(str, "baseline+ion") == 0) {
-      MOZ_ASSERT(enableWasmBaseline);
-      enableWasmOptimizing = true;
     } else {
       return OptionFailure("wasm-compiler", str);
     }
@@ -13810,7 +13804,6 @@ bool SetContextWasmOptions(JSContext* cx, const OptionParser& op) {
   enableTestWasmAwaitTier2 = op.getBoolOption("test-wasm-await-tier2");
 
   JS::ContextOptionsRef(cx)
-      .setAsmJS(enableAsmJS)
       .setWasm(enableWasm)
       .setWasmForTrustedPrinciples(enableWasm)
       .setWasmBaseline(enableWasmBaseline)
@@ -14296,6 +14289,16 @@ bool SetContextJITOptions(JSContext* cx, const OptionParser& op) {
 
   if (op.getBoolOption("disable-bailout-loop-check")) {
     jit::JitOptions.disableBailoutLoopCheck = true;
+  }
+
+  if (const char* str = op.getStringOption("canonicalize-nan-at-uses")) {
+    if (strcmp(str, "on") == 0) {
+      jit::JitOptions.disableCanonicalizeNaNAtUses = false;
+    } else if (strcmp(str, "off") == 0) {
+      jit::JitOptions.disableCanonicalizeNaNAtUses = true;
+    } else {
+      return OptionFailure("canonicalize-nan-at-uses", str);
+    }
   }
 
   if (op.getBoolOption("only-inline-selfhosted")) {

@@ -87,7 +87,7 @@ class VideoFrame final : public nsISupports,
                          public nsWrapperCache,
                          public media::ShutdownConsumer {
  public:
-  NS_DECL_CYCLE_COLLECTING_ISUPPORTS
+  NS_DECL_CYCLE_COLLECTING_ISUPPORTS_FINAL
   NS_DECL_CYCLE_COLLECTION_WRAPPERCACHE_CLASS(VideoFrame)
 
  public:
@@ -250,8 +250,9 @@ class VideoFrame final : public nsISupports,
     ~Resource() = default;
     Maybe<VideoPixelFormat> TryPixelFormat() const;
     uint32_t Stride(const Format::Plane& aPlane) const;
-    bool CopyTo(const Format::Plane& aPlane, const gfx::IntRect& aRect,
-                Span<uint8_t>&& aPlaneDest, size_t aDestinationStride) const;
+    bool CopyPlaneInto(const Format::Plane& aPlane, const gfx::IntRect& aRect,
+                       Span<uint8_t> aPlaneDest,
+                       size_t aDestinationStride) const;
 
     const RefPtr<layers::Image> mImage;
     // Nothing() if mImage is not in VideoPixelFormat

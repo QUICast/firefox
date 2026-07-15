@@ -88,7 +88,7 @@
 
 #if defined(MOZ_SANDBOX) && defined(XP_WIN)
 #  include "mozilla/sandboxTarget.h"
-#  include "mozilla/sandboxing/loggingCallbacks.h"
+#  include "mozilla/sandboxing/TargetGeckoServicesImpl.h"
 #endif
 
 #if defined(MOZ_SANDBOX)
@@ -112,7 +112,6 @@
 
 #if defined(XP_WIN) && defined(MOZ_SANDBOX)
 #  include "mozilla/sandboxing/SandboxInitialization.h"
-#  include "mozilla/sandboxing/sandboxLogging.h"
 #endif
 
 #if defined(MOZ_ENABLE_FORKSERVER)
@@ -284,13 +283,6 @@ nsresult XRE_InitChildProcess(int aArgc, char* aArgv[],
   // It will succeed when the parent process is a command line,
   // so that stdio will be displayed in it.
   UseParentConsole();
-
-#  if defined(MOZ_SANDBOX)
-  if (aChildData->sandboxTargetServices) {
-    SandboxTarget::Instance()->SetTargetServices(
-        aChildData->sandboxTargetServices);
-  }
-#  endif
 #endif
 
   // NB: This must be called before profiler_init
@@ -303,6 +295,15 @@ nsresult XRE_InitChildProcess(int aArgc, char* aArgv[],
                            OTHER);
   AUTO_PROFILER_INIT;
   AUTO_PROFILER_LABEL("XRE_InitChildProcess", OTHER);
+
+#if defined(XP_WIN) && defined(MOZ_SANDBOX)
+  mozilla::sandboxing::InitTargetGeckoServices(
+      aChildData->setTargetGeckoServices);
+  if (aChildData->sandboxTargetServices) {
+    SandboxTarget::Instance()->SetTargetServices(
+        aChildData->sandboxTargetServices);
+  }
+#endif
 
 #ifdef XP_MACOSX
   auto _supplementalFontThread = gfxPlatformMac::RegisterSupplementalFonts();
@@ -353,12 +354,14 @@ nsresult XRE_InitChildProcess(int aArgc, char* aArgv[],
 
   bool exceptionHandlerIsSet = false;
   if (!CrashReporter::IsDummy()) {
-    exceptionHandlerIsSet =
-        CrashReporter::SetRemoteExceptionHandler(aArgc, aArgv);
+    if (geckoargs::sCrashReporter.IsPresent(aArgc, aArgv)) {
+      exceptionHandlerIsSet =
+          CrashReporter::SetRemoteExceptionHandler(aArgc, aArgv);
 
-    if (!exceptionHandlerIsSet) {
-      // Bug 684322 will add better visibility into this condition
-      NS_WARNING("Could not setup crash reporting");
+      if (!exceptionHandlerIsSet) {
+        // Bug 684322 will add better visibility into this condition
+        NS_WARNING("Could not setup crash reporting");
+      }
     } else {
       // We might have registered a runtime exception module very early in
       // process startup to catch early crashes. This is before we process the
@@ -575,12 +578,6 @@ nsresult XRE_InitChildProcess(int aArgc, char* aArgv[],
           MakeScopeExit([&dllSvc]() { dllSvc->DisableFull(); });
 #endif
 
-#if defined(MOZ_SANDBOX) && defined(XP_WIN)
-      // We need to do this after the process has been initialised, as
-      // InitLoggingIfRequired may need access to prefs.
-      mozilla::sandboxing::InitLoggingIfRequired(
-          aChildData->ProvideLogFunction);
-#endif
       mozilla::FilePreferences::InitDirectoriesAllowlist();
       mozilla::FilePreferences::InitPrefs();
 

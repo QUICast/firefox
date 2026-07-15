@@ -602,7 +602,7 @@ nsresult HTMLFormElement::PostHandleEvent(EventChainPostVisitor& aVisitor) {
         case eFormSubmit: {
           if (!aVisitor.mEvent->IsTrusted()) {
             // Warning about the form submission is from untrusted event.
-            OwnerDoc()->WarnOnceAbout(
+            OwnerDoc()->WarnOnceAndReportAbout(
                 DeprecatedOperations::eFormSubmissionUntrustedEvent);
           }
           RefPtr<Event> event = aVisitor.mDOMEvent;
@@ -891,9 +891,7 @@ nsresult HTMLFormElement::SubmitSubmission(
     } else {
       loadState->SetSourceElement(this);
     }
-
-    nsCOMPtr<nsIPrincipal> nodePrincipal = NodePrincipal();
-    rv = container->OnLinkClickSync(this, loadState, false, nodePrincipal);
+    nsresult rv = container->OnFormSubmit(this, loadState);
     NS_ENSURE_SUBMIT_SUCCESS(rv);
 
     mTargetContext = loadState->TargetBrowsingContext().GetMaybeDiscarded();

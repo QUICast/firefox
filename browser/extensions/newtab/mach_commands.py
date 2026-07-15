@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import textwrap
 import time
 from datetime import datetime, timedelta, timezone
 from enum import Enum
@@ -51,6 +52,7 @@ COMPARE_TOOL_PATH = Path(
 )
 REPORT_PATH = Path(WEBEXT_LOCALES_PATH, "locales-report.json")
 REPORT_LEFT_JUSTIFY_CHARS = 15
+REPORT_WRAP_CHARS = 80
 FLUENT_FILE_ANCESTRY = Path("browser", "newtab")
 SUPPORTED_LOCALES_PATH = Path(WEBEXT_LOCALES_PATH, "supported-locales.json")
 
@@ -65,9 +67,11 @@ RELEASE_SCHEDULE_QUERY = (
 BETA_FALLBACK_THRESHOLD = timedelta(weeks=3)
 TASKCLUSTER_ROOT_URL = "https://firefox-ci-tc.services.mozilla.com"
 BEETMOVER_TASK_NAME = "beetmover-newtab"
+SIGNING_TASK_NAME = "release-signing-newtab"
 XPI_NAME = "newtab.xpi"
 BEETMOVER_ARTIFACT_PATH = f"public/build/{XPI_NAME}"
 ARCHIVE_ROOT_PATH = "https://ftp.mozilla.org"
+GIT2HG_URL = "https://lando.moz.tools/api/git2hg/firefox"
 
 
 class YamlType(Enum):
@@ -95,6 +99,10 @@ def run_mach(command_context, cmd, **kwargs):
     )
 
 
+def mach_argv(command_context):
+    return [sys.executable, os.path.join(command_context.topsrcdir, "mach")]
+
+
 @SubCommand(
     "newtab",
     "watch",
@@ -105,13 +113,13 @@ def watch(command_context):
 
     try:
         p1 = subprocess.Popen([
-            "./mach",
+            *mach_argv(command_context),
             "npm",
             "run",
             "watchmc",
             "--prefix=browser/extensions/newtab",
         ])
-        p2 = subprocess.Popen(["./mach", "watch"])
+        p2 = subprocess.Popen([*mach_argv(command_context), "watch"])
         processes.extend([p1, p2])
         print("Watching subprocesses started. Press Ctrl-C to terminate them.")
 
@@ -276,10 +284,19 @@ def update_locales(command_context):
 @CommandArgument(
     "--details", default=None, help="Which locale to pull up details about"
 )
-def locales_report(command_context, details):
+@CommandArgument(
+    "--string",
+    dest="message_id",
+    default=None,
+    help="Show which locales are missing a specific Fluent message id",
+)
+def locales_report(command_context, details, message_id):
     with open(REPORT_PATH) as file:
         report = json.load(file)
-        display_report(report, details)
+        if message_id:
+            display_string_report(report, message_id)
+        else:
+            display_report(report, details)
 
 
 def get_message_dates(fluent_file_path):
@@ -471,6 +488,59 @@ def display_report(report, details=None):
                 Fore.GREEN
                 + f"{locale.ljust(REPORT_LEFT_JUSTIFY_CHARS)}0 missing translations"
             )
+    print(Style.RESET_ALL, end="")
+
+
+def display_string_report(report, message_id):
+    """Lists which locales are missing or have a specific Fluent message id.
+
+    This is the inverse of the --details view: instead of listing the missing
+    strings for one locale, it lists every locale missing one given string (and
+    the locales that have it). Computed entirely from the local
+    locales-report.json (no network access).
+    """
+    if message_id not in report["message_dates"]:
+        print(f"Unknown string '{message_id}'")
+        return
+
+    file_key = str(FLUENT_FILE_ANCESTRY.joinpath(FLUENT_FILE))
+    missing_locales = []
+    present_locales = []
+    for locale in sorted(report["locales"].keys(), key=lambda x: x.lower()):
+        missing = report["locales"][locale]["missing"]
+        # Entries may carry a ".attribute" suffix, so normalize to the message id.
+        missing_ids = {
+            entry.split(".")[0] for entry in (missing or {}).get(file_key, [])
+        }
+        if message_id in missing_ids:
+            missing_locales.append(locale)
+        else:
+            present_locales.append(locale)
+
+    total = len(report["locales"])
+    meta = report["meta"]
+    print("New Tab string report")
+    print(f"String: {message_id}")
+    print(f"Landed in en-US: {report['message_dates'][message_id]}")
+    print(f"Locales last updated: {meta['updated']}")
+    print(f"From {meta['repository']} - revision: {meta['revision']}")
+    print("------")
+    print(Fore.YELLOW + f"{len(missing_locales)}/{total} locales missing")
+    print(
+        textwrap.fill(
+            ", ".join(missing_locales),
+            width=REPORT_WRAP_CHARS,
+            break_on_hyphens=False,
+        )
+    )
+    print(Fore.GREEN + f"{len(present_locales)}/{total} locales present")
+    print(
+        textwrap.fill(
+            ", ".join(present_locales),
+            width=REPORT_WRAP_CHARS,
+            break_on_hyphens=False,
+        )
+    )
     print(Style.RESET_ALL, end="")
 
 
@@ -763,7 +833,14 @@ ship-it""",
 @CommandArgument(
     "taskcluster_group_url", help="The shipping Taskcluster task group URL from ship-it"
 )
-def trainhop_recipe(command_context, taskcluster_group_url):
+@CommandArgument(
+    "--for-table",
+    action="store_true",
+    help="""Also emit a skeleton train-hops.yaml entry (for the train-hop
+tracking table) with the addon version, release name, git and Mercurial
+revisions filled in, and the deployment dates and notes left as placeholders.""",
+)
+def trainhop_recipe(command_context, taskcluster_group_url, for_table):
     tc_root_url = urlparse(TASKCLUSTER_ROOT_URL)
     group_url = urlparse(taskcluster_group_url)
     if group_url.scheme != "https" or group_url.hostname != tc_root_url.hostname:
@@ -826,6 +903,92 @@ def trainhop_recipe(command_context, taskcluster_group_url):
     print(json.dumps(result, indent=2, sort_keys=True))
     print("\n")
 
+    if for_table:
+        build_task_id = get_build_task_id(task_group)
+        if not build_task_id:
+            print(
+                f"Could not find the build task via the {SIGNING_TASK_NAME} task. "
+                "Skipping the train-hops.yaml entry."
+            )
+            return 1
+
+        print(f"Found build task {build_task_id}")
+        git_sha = queue.task(build_task_id)["payload"]["env"]["NEWTAB_HEAD_REV"]
+        print(f"Got the git revision: {git_sha}")
+
+        mercurial_sha = git_sha_to_hg(git_sha)
+        print(f"Got the Mercurial revision: {mercurial_sha}")
+
+        entry = {
+            "version": addon_version,
+            # The release name is the second-to-last path segment of the
+            # beetmover destination, e.g. "newtab-154.2.0-build1".
+            "name": artifact_destination.split("/")[-2],
+            "git_sha": git_sha,
+            "mercurial_sha": mercurial_sha,
+            "deployed_release_25": "Pending",
+            "deployed_release_100": "Pending",
+            "deployed_beta_100": "Pending",
+            "notes": "TODO",
+        }
+
+        print("train-hops.yaml entry:\n\n")
+        print(format_table_entry(entry))
+        print("\n")
+
+
+def get_build_task_id(task_group):
+    """Returns the task ID of the build task that produced the newtab XPI.
+
+    This is found by locating the signing task within the shipping task group
+    and reading the upstream artifact that points back at the build task.
+    Returns None if no such task can be found.
+    """
+    for task in task_group["tasks"]:
+        if task["task"]["metadata"]["name"] == SIGNING_TASK_NAME:
+            upstream_artifacts = task["task"]["payload"].get("upstreamArtifacts", [])
+            for artifact in upstream_artifacts:
+                if BEETMOVER_ARTIFACT_PATH in artifact.get("paths", []):
+                    return artifact["taskId"]
+    return None
+
+
+def git_sha_to_hg(git_sha):
+    """Converts a firefox-main git revision to its Mercurial counterpart."""
+    response = requests.get(f"{GIT2HG_URL}/{git_sha}", timeout=10)
+    response.raise_for_status()
+    return response.json()["hg_hash"]
+
+
+class _TrainHopDumper(yaml.Dumper):
+    """A yaml.Dumper that indents block sequence entries under their parent.
+
+    PyYAML's default places the "- " of a sequence item at the parent key's
+    indent level; forcing indentless off reproduces the train-hops.yaml layout
+    where the dash sits one level in from train_hops.
+    """
+
+    def increase_indent(self, flow=False, indentless=False):
+        return super().increase_indent(flow, False)
+
+
+def format_table_entry(entry):
+    """Formats a train-hops.yaml list entry, ready to paste under train_hops.
+
+    entry is an ordered dict of the entry's fields; insertion order is
+    preserved in the output so it matches the existing entries.
+    """
+    body = yaml.dump(
+        [entry],
+        Dumper=_TrainHopDumper,
+        sort_keys=False,
+        default_flow_style=False,
+        # Avoid wrapping long scalars (e.g. the notes field) onto a second line.
+        width=float("inf"),
+        allow_unicode=True,
+    )
+    return textwrap.indent(body, "  ").rstrip()
+
 
 @SubCommand(
     "newtab",
@@ -840,7 +1003,7 @@ def bundle(command_context):
 
     try:
         proc = subprocess.Popen([
-            "./mach",
+            *mach_argv(command_context),
             "npm",
             "run",
             "bundle",
@@ -884,7 +1047,7 @@ def install(command_context):
 
     try:
         proc = subprocess.Popen([
-            "./mach",
+            *mach_argv(command_context),
             "npm",
             "install",
             "--prefix=browser/extensions/newtab",

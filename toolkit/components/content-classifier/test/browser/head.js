@@ -106,12 +106,98 @@ async function populateRS(db, id, name, rules) {
   return record;
 }
 
+// Wait until the content-classifier filter lists have settled after a
+// change. The C++ service rebuilds engines off the main thread and fires
+// LISTS_LOADED_TOPIC once a rebuild completes.
+//
+// Key invariant we rely on: every change bumps a global generation counter
+// synchronously, and a rebuild only fires the topic if its generation is
+// still the latest when it finishes. So a *batch* of changes applied
+// synchronously (all the prefs in one pushPrefEnv, or one RS sync) leaves
+// exactly one un-superseded rebuild, i.e. exactly one notification, and it
+// carries the final state. That lets callers who make a single such batch
+// wait for exactly one notification and stop - no quiet-window drain, which
+// is pure dead time and dominated test runtime.
+//
+//   minNotifies  How many notifications to wait for before settling. A
+//                guaranteed-rebuild batch (an RS sync, a real engines-pref
+//                change) uses 1; best-effort drains, where zero rebuilds is
+//                a legitimate outcome, use 0.
+//   quietMs      0 (default) settles as soon as minNotifies is reached.
+//                A positive value instead waits for that long a gap with no
+//                further notification - only needed when a single call may
+//                legitimately produce several rebuilds whose order matters
+//                and must all be drained (see test_rs_back_to_back).
+//   timeoutMs    Deadlock backstop only: if an expected notification never
+//                arrives we resolve anyway (after logging) rather than hang.
+//
+// The minNotifies gate is also what makes this robust under MOZ_CHAOSMODE,
+// where a rebuild's notification can arrive long after its trigger: we never
+// settle until the rebuild has actually reported in.
+async function waitForListsSettled({
+  quietMs = 0,
+  minNotifies = 0,
+  timeoutMs = 30000,
+} = {}) {
+  return new Promise(resolve => {
+    let quietTimer;
+    let deadlineTimer;
+    let notifies = 0;
+
+    function finish() {
+      clearTimeout(quietTimer);
+      clearTimeout(deadlineTimer);
+      Services.obs.removeObserver(observer, LISTS_LOADED_TOPIC);
+      resolve();
+    }
+
+    // Settle once enough notifications have been seen. With quietMs === 0
+    // that is immediate; otherwise we (re)arm a quiet window so trailing
+    // rebuilds within quietMs are drained first.
+    function maybeSettle() {
+      if (notifies < minNotifies) {
+        return;
+      }
+      if (!quietMs) {
+        finish();
+        return;
+      }
+      clearTimeout(quietTimer);
+      quietTimer = setTimeout(finish, quietMs);
+    }
+
+    let observer = () => {
+      notifies++;
+      maybeSettle();
+    };
+
+    Services.obs.addObserver(observer, LISTS_LOADED_TOPIC);
+
+    // Best-effort drains (minNotifies === 0) settle on the quiet window even
+    // if no rebuild ever fires, so evaluate the settle condition immediately.
+    maybeSettle();
+
+    deadlineTimer = setTimeout(() => {
+      if (notifies < minNotifies) {
+        info(
+          `waitForListsSettled: timed out after ${timeoutMs}ms with ` +
+            `${notifies}/${minNotifies} notification(s); resolving anyway`
+        );
+      }
+      finish();
+    }, timeoutMs);
+  });
+}
+
+// Emit an RS sync and wait for the resulting rebuild to settle. A sync is a
+// single synchronous change, so it yields exactly one notification carrying
+// the final state (see waitForListsSettled): wait for that one and stop.
 async function syncAndWaitForLists(client, records) {
-  let listsLoaded = TestUtils.topicObserved(LISTS_LOADED_TOPIC);
+  let settled = waitForListsSettled({ minNotifies: 1 });
   await client.emit("sync", {
     data: { created: records, updated: [], deleted: [] },
   });
-  await listsLoaded;
+  await settled;
 }
 
 // Get the RS client and register cleanup to clear its DB and disable
@@ -208,6 +294,12 @@ async function pushEnginePrefs({
       ["privacy.trackingprotection.content.annotation.test_list_urls", ""],
     ],
   });
+  // No wait here: these prefs are one synchronous batch, so generation
+  // suppression collapses them to a single (final-state) rebuild whose
+  // notification - if it even fires before the caller's syncAndWaitForLists -
+  // already carries the full pref snapshot. Every caller that then asserts
+  // engine behavior goes through syncAndWaitForLists, which owns the wait;
+  // the lone exception leaves the feature disabled (no rebuild to wait for).
 }
 
 // Inspect a content-blocking log dump and assert that `origin` has an

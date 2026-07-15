@@ -5,20 +5,18 @@
 #ifndef MOZILLA_GFX_RECORDEDEVENTIMPL_H_
 #define MOZILLA_GFX_RECORDEDEVENTIMPL_H_
 
-#include "RecordedEvent.h"
-
-#include "PathRecording.h"
-#include "RecordingTypes.h"
-#include "Tools.h"
 #include "Filters.h"
 #include "Logging.h"
-#include "ScaledFontBase.h"
+#include "PathRecording.h"
+#include "RecordedEvent.h"
+#include "RecordingTypes.h"
 #include "SFNTData.h"
-
+#include "ScaledFontBase.h"
+#include "Tools.h"
 #include "mozilla/dom/CanvasRenderingContextHelper.h"
+#include "mozilla/ipc/SerializeToBytesUtil.h"
 #include "mozilla/layers/BuildConstants.h"
 #include "mozilla/layers/LayersSurfaces.h"
-#include "mozilla/ipc/SerializeToBytesUtil.h"
 
 namespace mozilla {
 namespace gfx {

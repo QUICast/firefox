@@ -32,16 +32,9 @@ from gecko_taskgraph.files_changed import get_locally_changed_files
 
 
 def format_taskgraph_yaml(taskgraph):
-    from taskgraph.util.readonlydict import ReadOnlyDict
-
     class TGDumper(yaml.SafeDumper):
         def ignore_aliases(self, data):
             return True
-
-        def represent_ro_dict(self, data):
-            return self.represent_dict(dict(data))
-
-    TGDumper.add_representer(ReadOnlyDict, TGDumper.represent_ro_dict)
 
     return yaml.dump(taskgraph.to_json(), Dumper=TGDumper, default_flow_style=False)
 
@@ -585,6 +578,12 @@ def image_digest(args):
     "--tasks-for", required=True, help="the tasks_for value used to generate this task"
 )
 @argument("--try-task-config-file", help="path to try task configuration file")
+@argument(
+    "--allow-parameter-override",
+    default=False,
+    action="store_true",
+    help="Allow user to override computed decision task parameters.",
+)
 @argument(
     "--no-verify",
     dest="verify",

@@ -21,6 +21,7 @@ import mozilla.components.concept.engine.content.blocking.TrackingProtectionEven
 import mozilla.components.concept.engine.content.blocking.TrackingProtectionEvent.Companion.SUSPICIOUS_FINGERPRINTERS
 import mozilla.components.concept.engine.content.blocking.TrackingProtectionEvent.Companion.TRACKERS
 import mozilla.components.concept.engine.content.blocking.TrackingProtectionEvent.Companion.TRACKING_COOKIES
+import mozilla.components.feature.protection.dashboard.TrackerCategory
 import mozilla.components.feature.protection.dashboard.TrackersBlockedCategory
 import mozilla.components.feature.session.TrackingProtectionUseCases
 import mozilla.components.lib.state.helpers.AbstractBinding
@@ -28,7 +29,9 @@ import mozilla.components.support.ktx.kotlinx.coroutines.flow.ifAnyChanged
 import mozilla.components.support.utils.DefaultDateTimeProvider
 import org.mozilla.fenix.R
 import org.mozilla.fenix.components.AppStore
-import org.mozilla.fenix.components.appstate.AppAction
+import org.mozilla.fenix.components.appstate.AppAction.BlockedTrackersAction.UpdateEarliestTrackingDate
+import org.mozilla.fenix.components.appstate.AppAction.BlockedTrackersAction.UpdateTrackersBlockedCount
+import org.mozilla.fenix.components.appstate.AppAction.BlockedTrackersAction.UpdateTrackersBlockedThisWeek
 import java.util.concurrent.TimeUnit
 import kotlin.time.Duration.Companion.seconds
 import mozilla.components.ui.icons.R as iconsR
@@ -58,6 +61,7 @@ class TrackersBlockedFeature(
         // Subsequent changes to the tab's blocked trackers then trigger a refresh for dynamic updates.
         withContext(Dispatchers.Main) {
             syncTrackersBlockedDetails()
+            syncEarliestData() // This cannot change for the lifetime of this class.
         }
 
         // The number of blocked trackers can change while a tab is being loaded in background.
@@ -85,7 +89,7 @@ class TrackersBlockedFeature(
     private fun syncTotalTrackerBlocked() {
         trackingProtectionUseCases.fetchTotalTrackersBlocked(
             onSuccess = {
-                appStore.dispatch(AppAction.UpdateTrackersBlockedCount(it))
+                appStore.dispatch(UpdateTrackersBlockedCount(it))
             },
         )
     }
@@ -97,7 +101,15 @@ class TrackersBlockedFeature(
             dateFrom = oneWeekAgo,
             dateTo = now,
             onSuccess = {
-                appStore.dispatch(AppAction.UpdateTrackersBlockedThisWeek(it.blockedTrackersCategories))
+                appStore.dispatch(UpdateTrackersBlockedThisWeek(it.blockedTrackersCategories))
+            },
+        )
+    }
+
+    private fun syncEarliestData() {
+        trackingProtectionUseCases.fetchEarliestTrackingDate(
+            onSuccess = {
+                appStore.dispatch(UpdateEarliestTrackingDate(it))
             },
         )
     }
@@ -106,32 +118,43 @@ class TrackersBlockedFeature(
         get() {
             val events = this ?: return emptyList()
             val trackerCategories = listOf(
-                Triple(
-                    R.string.etp_cookies_title,
-                    iconsR.drawable.mozac_ic_cookies_24,
-                    setOf(TRACKING_COOKIES),
+                CategoryConfig(
+                    nameRes = R.plurals.trackers_blocked_panel_num_cross_site_cookies,
+                    iconRes = iconsR.drawable.mozac_ic_cookies_24,
+                    types = setOf(TRACKING_COOKIES),
+                    category = TrackerCategory.CROSS_SITE_COOKIES,
                 ),
-                Triple(
-                    R.string.etp_social_media_trackers_title,
-                    iconsR.drawable.mozac_ic_social_tracker_24,
-                    setOf(SOCIAL),
+                CategoryConfig(
+                    nameRes = R.plurals.trackers_blocked_panel_num_social_media_trackers,
+                    iconRes = iconsR.drawable.mozac_ic_thumbs_down_24,
+                    types = setOf(SOCIAL),
+                    category = TrackerCategory.SOCIAL_MEDIA_TRACKERS,
                 ),
-                Triple(
-                    R.string.tracking_dashboard_fingerprinters_category_name,
-                    iconsR.drawable.mozac_ic_fingerprinter_24,
-                    setOf(FINGERPRINTERS, SUSPICIOUS_FINGERPRINTERS),
+                CategoryConfig(
+                    nameRes = R.plurals.trackers_blocked_panel_num_fingerprinters,
+                    iconRes = iconsR.drawable.mozac_ic_fingerprinter_24,
+                    types = setOf(FINGERPRINTERS, SUSPICIOUS_FINGERPRINTERS),
+                    category = TrackerCategory.FINGERPRINTERS,
                 ),
-                Triple(
-                    R.string.etp_tracking_content_title,
-                    iconsR.drawable.mozac_ic_image_24,
-                    setOf(TRACKERS),
+                CategoryConfig(
+                    nameRes = R.plurals.trackers_blocked_panel_num_trackers_2,
+                    iconRes = iconsR.drawable.mozac_ic_image_24,
+                    types = setOf(TRACKERS),
+                    category = TrackerCategory.TRACKING_CONTENT,
                 ),
             )
-            return trackerCategories.map { (trackerNameRes, trackerIconRes, types) ->
+            return trackerCategories.map { config ->
                 val count = events
-                    .filter { it.type in types }
+                    .filter { it.type in config.types }
                     .sumOf { it.count }
-                TrackersBlockedCategory(trackerIconRes, trackerNameRes, count)
+                TrackersBlockedCategory(config.iconRes, config.nameRes, count, config.category)
             }
         }
+
+    private data class CategoryConfig(
+        val nameRes: Int,
+        val iconRes: Int,
+        val types: Set<Int>,
+        val category: TrackerCategory,
+    )
 }

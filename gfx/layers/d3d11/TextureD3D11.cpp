@@ -17,13 +17,13 @@
 #include "mozilla/gfx/DeviceManagerDx.h"
 #include "mozilla/gfx/FileHandleWrapper.h"
 #include "mozilla/gfx/Logging.h"
-#include "mozilla/gfx/gfxVars.h"
 #include "mozilla/gfx/SourceSurfaceD3D11.h"
+#include "mozilla/gfx/gfxVars.h"
 #include "mozilla/ipc/FileDescriptor.h"
+#include "mozilla/layers/CompositeProcessD3D11FencesHolderMap.h"
 #include "mozilla/layers/CompositorBridgeChild.h"
 #include "mozilla/layers/D3D11ZeroCopyTextureImage.h"
 #include "mozilla/layers/FenceD3D11.h"
-#include "mozilla/layers/CompositeProcessD3D11FencesHolderMap.h"
 #include "mozilla/layers/GpuProcessD3D11TextureMap.h"
 #include "mozilla/layers/HelpersD3D11.h"
 #include "mozilla/webrender/RenderD3D11TextureHost.h"
@@ -519,6 +519,7 @@ D3D11TextureData* D3D11TextureData::Create(IntSize aSize, SurfaceFormat aFormat,
     case gfx::SurfaceFormat::YUV420P10:
     case gfx::SurfaceFormat::YUV422P10:
     case gfx::SurfaceFormat::NV16:
+    case gfx::SurfaceFormat::P210:
     case gfx::SurfaceFormat::YUY2:
     case gfx::SurfaceFormat::HSV:
     case gfx::SurfaceFormat::Lab:
@@ -1166,11 +1167,16 @@ void DXGITextureHostD3D11::PushResourceUpdates(
         return;
       }
 
-      wr::ImageDescriptor descriptor(mSize, GetFormat());
+      auto format = wr::SurfaceFormatToImageFormat(GetFormat());
+      if (NS_WARN_IF(!format)) {
+        return;
+      }
+      wr::ImageDescriptor descriptor(mSize, *format,
+                                     wr::ToOpacityType(GetFormat()));
       // Prefer TextureExternal unless the backend requires TextureRect.
       TextureHost::NativeTexturePolicy policy =
-          TextureHost::BackendNativeTexturePolicy(aResources.GetBackendType(),
-                                                  mSize);
+          TextureHost::BackendNativeTexturePolicy(
+              aResources.GetCapabilities().mBackendType, mSize);
       auto imageType = policy == TextureHost::NativeTexturePolicy::REQUIRE
                            ? wr::ExternalImageType::TextureHandle(
                                  wr::ImageBufferKind::TextureRect)
@@ -1191,17 +1197,17 @@ void DXGITextureHostD3D11::PushResourceUpdates(
       MOZ_ASSERT(mSize.width % 2 == 0);
       MOZ_ASSERT(mSize.height % 2 == 0);
 
-      wr::ImageDescriptor descriptor0(mSize, mFormat == gfx::SurfaceFormat::NV12
-                                                 ? gfx::SurfaceFormat::A8
-                                                 : gfx::SurfaceFormat::A16);
-      wr::ImageDescriptor descriptor1(mSize / 2,
-                                      mFormat == gfx::SurfaceFormat::NV12
-                                          ? gfx::SurfaceFormat::R8G8
-                                          : gfx::SurfaceFormat::R16G16);
+      const bool isNV12 = mFormat == gfx::SurfaceFormat::NV12;
+      wr::ImageDescriptor descriptor0(
+          mSize, isNV12 ? wr::ImageFormat::R8 : wr::ImageFormat::R16,
+          wr::OpacityType::HasAlphaChannel);
+      wr::ImageDescriptor descriptor1(
+          mSize / 2, isNV12 ? wr::ImageFormat::RG8 : wr::ImageFormat::RG16,
+          isNV12 ? wr::OpacityType::Opaque : wr::OpacityType::HasAlphaChannel);
       // Prefer TextureExternal unless the backend requires TextureRect.
       TextureHost::NativeTexturePolicy policy =
-          TextureHost::BackendNativeTexturePolicy(aResources.GetBackendType(),
-                                                  mSize);
+          TextureHost::BackendNativeTexturePolicy(
+              aResources.GetCapabilities().mBackendType, mSize);
       auto imageType = policy == TextureHost::NativeTexturePolicy::REQUIRE
                            ? wr::ExternalImageType::TextureHandle(
                                  wr::ImageBufferKind::TextureRect)
@@ -1314,6 +1320,7 @@ void DXGITextureHostD3D11::PushDisplayItems(
     case gfx::SurfaceFormat::YUV420P10:
     case gfx::SurfaceFormat::YUV422P10:
     case gfx::SurfaceFormat::NV16:
+    case gfx::SurfaceFormat::P210:
     case gfx::SurfaceFormat::YUY2:
     case gfx::SurfaceFormat::HSV:
     case gfx::SurfaceFormat::Lab:
@@ -1454,8 +1461,8 @@ void DXGIYCbCrTextureHostD3D11::PushResourceUpdates(
   // Use a size that is the maximum of the Y and CbCr sizes.
   IntSize textureSize = std::max(mSizeY, mSizeCbCr);
   TextureHost::NativeTexturePolicy policy =
-      TextureHost::BackendNativeTexturePolicy(aResources.GetBackendType(),
-                                              textureSize);
+      TextureHost::BackendNativeTexturePolicy(
+          aResources.GetCapabilities().mBackendType, textureSize);
   auto imageType = policy == TextureHost::NativeTexturePolicy::REQUIRE
                        ? wr::ExternalImageType::TextureHandle(
                              wr::ImageBufferKind::TextureRect)
@@ -1463,9 +1470,11 @@ void DXGIYCbCrTextureHostD3D11::PushResourceUpdates(
                              wr::ImageBufferKind::TextureExternal);
 
   // y
-  wr::ImageDescriptor descriptor0(mSizeY, gfx::SurfaceFormat::A8);
+  wr::ImageDescriptor descriptor0(mSizeY, wr::ImageFormat::R8,
+                                  wr::OpacityType::HasAlphaChannel);
   // cb and cr
-  wr::ImageDescriptor descriptor1(mSizeCbCr, gfx::SurfaceFormat::A8);
+  wr::ImageDescriptor descriptor1(mSizeCbCr, wr::ImageFormat::R8,
+                                  wr::OpacityType::HasAlphaChannel);
   (aResources.*method)(aImageKeys[0], descriptor0, aExtID, imageType, 0,
                        /* aNormalizedUvs */ false);
   (aResources.*method)(aImageKeys[1], descriptor1, aExtID, imageType, 1,

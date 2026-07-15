@@ -10,6 +10,7 @@
 #include "mozilla/dom/Document.h"
 #include "mozilla/dom/MediaControlUtils.h"
 #include "mozilla/dom/WindowContext.h"
+#include "nsPIDOMWindowInlines.h"
 
 // avoid redefined macro in unified build
 #undef LOG
@@ -353,8 +354,12 @@ void MediaSession::NotifyMetadataUpdated() {
     return;
   }
 
+  if (!mDoc) {
+    return;
+  }
+
   LOG("Starting load of the MediaMetadata artwork.");
-  mMediaMetadata->LoadMetadataArtwork()
+  mMediaMetadata->LoadMetadataArtwork(mDoc)
       ->Then(
           GetCurrentSerialEventTarget(), __func__,
           [self = RefPtr{this}, currentBC](MediaMetadataBase&& aMetadata) {

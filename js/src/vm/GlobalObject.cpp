@@ -179,6 +179,7 @@ bool GlobalObject::skipDeselectedConstructor(JSContext* cx, JSProtoKey key) {
     case JSProto_WasmModule:
 #ifdef ENABLE_WASM_COMPONENTS
     case JSProto_WasmComponent:
+    case JSProto_WasmComponentInstance:
 #endif
     case JSProto_WasmInstance:
     case JSProto_WasmMemory:
@@ -237,10 +238,8 @@ bool GlobalObject::skipDeselectedConstructor(JSContext* cx, JSProtoKey key) {
       return !JS::Prefs::experimental_explicit_resource_management();
 #endif
 
-#ifdef ENABLE_SOURCE_PHASE_IMPORTS
     case JSProto_AbstractModuleSource:
       return !JS::Prefs::experimental_source_phase_imports();
-#endif
 
     default:
       MOZ_CRASH("unexpected JSProtoKey");
@@ -608,8 +607,8 @@ GlobalObject* GlobalObject::createInternal(JSContext* cx,
     objectFlags.setFlag(ObjectFlag::HasObjectFuse);
   }
 
-  JSObject* obj =
-      NewTenuredObjectWithGivenProto(cx, clasp, nullptr, objectFlags);
+  JSObject* obj = NewObjectWithGivenProto(
+      cx, clasp, nullptr, {.newKind = TenuredObject, .flags = objectFlags});
   if (!obj) {
     return nullptr;
   }
@@ -777,10 +776,11 @@ static NativeObject* CreateBlankProto(JSContext* cx, const JSClass* clasp,
     // NOTE: There should be no reason currently to support this. It could
     // however be added later if needed.
     MOZ_ASSERT(objFlags.isEmpty());
-    return NewPlainObjectWithProto(cx, proto, TenuredObject);
+    return NewPlainObjectWithProto(cx, proto, {.newKind = TenuredObject});
   }
 
-  return NewTenuredObjectWithGivenProto(cx, clasp, proto, objFlags);
+  return NewObjectWithGivenProto(cx, clasp, proto,
+                                 {.newKind = TenuredObject, .flags = objFlags});
 }
 
 /* static */
@@ -869,7 +869,7 @@ RegExpStatics* GlobalObject::getRegExpStatics(JSContext* cx,
 bool GlobalObject::createIntrinsicsHolder(JSContext* cx,
                                           Handle<GlobalObject*> global) {
   NativeObject* intrinsicsHolder =
-      NewPlainObjectWithProto(cx, nullptr, TenuredObject);
+      NewPlainObjectWithProto(cx, nullptr, {.newKind = TenuredObject});
   if (!intrinsicsHolder) {
     return false;
   }

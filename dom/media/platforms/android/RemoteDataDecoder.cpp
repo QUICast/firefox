@@ -106,7 +106,10 @@ class RemoteVideoDecoder final : public RemoteDataDecoder {
                       java::Sample::Param aSample)
         : RenderOrReleaseOutput(aCodec, aSample) {}
 
-    void operator()(void) override { ReleaseOutput(true); }
+    bool operator()(bool aRender) override {
+      ReleaseOutput(aRender);
+      return true;
+    }
   };
 
   class InputInfo {
@@ -839,8 +842,9 @@ class RemoteAudioDecoder final : public RemoteDataDecoder {
         LOG("OOM while allocating temporary output buffer");
         return;
       }
-      nsresult rv = aBuffer->NativeCopy(reinterpret_cast<jlong>(audio.get()),
-                                        offset, size);
+      nsresult rv =
+          aBuffer->NativeCopy(reinterpret_cast<jlong>(audio.get()),
+                              audio.Length() * sampleSize, offset, size);
       if (NS_FAILED(rv)) {
         LOG("Fail to copy audio buffer");
         Error(MediaResult(rv, __func__));

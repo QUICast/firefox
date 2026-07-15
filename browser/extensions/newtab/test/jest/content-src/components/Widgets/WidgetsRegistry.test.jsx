@@ -7,6 +7,8 @@ import {
   getWidgetOrder,
   isWidgetAddable,
   isWidgetEnabled,
+  isWidgetToggleVisible,
+  isWidgetsContainerVisible,
   resolveWidgetSize,
   resolveWidgetOrder,
   resolveWidgetHasSidebar,
@@ -14,6 +16,74 @@ import {
 } from "common/WidgetsRegistry.mjs";
 
 const registryIds = WIDGET_REGISTRY.map(w => w.id);
+const listsWidget = WIDGET_REGISTRY.find(w => w.id === "lists");
+
+describe("isWidgetToggleVisible", () => {
+  it("is false when nothing enables it", () => {
+    expect(isWidgetToggleVisible(listsWidget, {})).toBe(false);
+  });
+
+  it("is true via the system pref", () => {
+    expect(
+      isWidgetToggleVisible(listsWidget, {
+        "widgets.system.lists.enabled": true,
+      })
+    ).toBe(true);
+  });
+
+  it("is true via trainhopConfig.widgets (addable)", () => {
+    expect(
+      isWidgetToggleVisible(listsWidget, {
+        trainhopConfig: { widgets: { listsEnabled: true } },
+      })
+    ).toBe(true);
+  });
+
+  it("is true via the widgetsSettings.*Visible override", () => {
+    expect(
+      isWidgetToggleVisible(listsWidget, {
+        trainhopConfig: { widgetsSettings: { listsVisible: true } },
+      })
+    ).toBe(true);
+  });
+
+  it("is additive only — a false widgetsSettings value cannot hide a system-enabled toggle", () => {
+    expect(
+      isWidgetToggleVisible(listsWidget, {
+        "widgets.system.lists.enabled": true,
+        trainhopConfig: { widgetsSettings: { listsVisible: false } },
+      })
+    ).toBe(true);
+  });
+});
+
+describe("isWidgetsContainerVisible", () => {
+  it("is false when nothing enables it", () => {
+    expect(isWidgetsContainerVisible({})).toBe(false);
+  });
+
+  it("is true via the system pref", () => {
+    expect(isWidgetsContainerVisible({ "widgets.system.enabled": true })).toBe(
+      true
+    );
+  });
+
+  it("is true via trainhopConfig.widgets.enabled", () => {
+    expect(
+      isWidgetsContainerVisible({
+        trainhopConfig: { widgets: { enabled: true } },
+      })
+    ).toBe(true);
+  });
+
+  it("is true via widgetsSettings.enabled", () => {
+    expect(
+      isWidgetsContainerVisible({
+        trainhopConfig: { widgetsSettings: { enabled: true } },
+      })
+    ).toBe(true);
+  });
+});
 
 describe("getWidgetOrder", () => {
   it("returns registry default order when pref is empty", () => {
@@ -27,17 +97,33 @@ describe("getWidgetOrder", () => {
 
   it("respects a fully-specified custom order", () => {
     expect(
-      getWidgetOrder("focusTimer,lists,weather,sportsWidget,clocks")
-    ).toEqual(["focusTimer", "lists", "weather", "sportsWidget", "clocks"]);
+      getWidgetOrder(
+        "focusTimer,lists,weather,sportsWidget,clocks,privacy,crossword"
+      )
+    ).toEqual([
+      "focusTimer",
+      "lists",
+      "weather",
+      "sportsWidget",
+      "clocks",
+      "privacy",
+      "crossword",
+      "pictureOfTheDay",
+      "stocks",
+    ]);
   });
 
   it("appends missing registry IDs after saved ones", () => {
     expect(getWidgetOrder("weather")).toEqual([
       "weather",
+      "pictureOfTheDay",
       "sportsWidget",
       "clocks",
       "lists",
       "focusTimer",
+      "privacy",
+      "crossword",
+      "stocks",
     ]);
   });
 
@@ -45,9 +131,13 @@ describe("getWidgetOrder", () => {
     expect(getWidgetOrder("unknownWidget,lists,weather")).toEqual([
       "lists",
       "weather",
+      "pictureOfTheDay",
       "sportsWidget",
       "clocks",
       "focusTimer",
+      "privacy",
+      "crossword",
+      "stocks",
     ]);
   });
 
@@ -62,9 +152,13 @@ describe("getWidgetOrder", () => {
     expect(result).toEqual([
       "focusTimer",
       "lists",
+      "pictureOfTheDay",
       "sportsWidget",
       "clocks",
       "weather",
+      "privacy",
+      "crossword",
+      "stocks",
     ]);
     expect(result.length).toBe(registryIds.length);
   });
@@ -80,7 +174,17 @@ describe("resolveWidgetOrder", () => {
   it("uses the user-saved order when set", () => {
     expect(
       resolveWidgetOrder({ [PREF_WIDGETS_ORDER]: "weather,lists,focusTimer" })
-    ).toEqual(["weather", "lists", "focusTimer", "sportsWidget", "clocks"]);
+    ).toEqual([
+      "weather",
+      "lists",
+      "focusTimer",
+      "pictureOfTheDay",
+      "sportsWidget",
+      "clocks",
+      "privacy",
+      "crossword",
+      "stocks",
+    ]);
   });
 
   it("uses trainhop order when no user order is saved", () => {
@@ -89,7 +193,17 @@ describe("resolveWidgetOrder", () => {
         [PREF_WIDGETS_ORDER]: "",
         trainhopConfig: { widgets: { order: "focusTimer,weather,lists" } },
       })
-    ).toEqual(["focusTimer", "weather", "lists", "sportsWidget", "clocks"]);
+    ).toEqual([
+      "focusTimer",
+      "weather",
+      "lists",
+      "pictureOfTheDay",
+      "sportsWidget",
+      "clocks",
+      "privacy",
+      "crossword",
+      "stocks",
+    ]);
   });
 
   it("user order takes precedence over trainhop order", () => {
@@ -98,7 +212,17 @@ describe("resolveWidgetOrder", () => {
         [PREF_WIDGETS_ORDER]: "lists,focusTimer,weather",
         trainhopConfig: { widgets: { order: "weather,lists,focusTimer" } },
       })
-    ).toEqual(["lists", "focusTimer", "weather", "sportsWidget", "clocks"]);
+    ).toEqual([
+      "lists",
+      "focusTimer",
+      "weather",
+      "pictureOfTheDay",
+      "sportsWidget",
+      "clocks",
+      "privacy",
+      "crossword",
+      "stocks",
+    ]);
   });
 });
 
@@ -132,11 +256,30 @@ describe("isWidgetAddable", () => {
     ).toBe(false);
   });
 
+  it("is addable when revealed via widgetsSettings (so the toggle is functional)", () => {
+    expect(
+      isWidgetAddable(listsWidget, {
+        [listsWidget.systemEnabledPref]: false,
+        trainhopConfig: { widgetsSettings: { listsVisible: true } },
+      })
+    ).toBe(true);
+  });
+
   it("does not consider the user's enabled pref", () => {
     expect(
       isWidgetAddable(listsWidget, {
         [listsWidget.systemEnabledPref]: true,
         [listsWidget.enabledPref]: false,
+      })
+    ).toBe(true);
+  });
+
+  it("is addable when revealed via the dedicated widgetPictureOfTheDay namespace", () => {
+    const potd = WIDGET_REGISTRY.find(w => w.id === "pictureOfTheDay");
+    expect(
+      isWidgetAddable(potd, {
+        [potd.systemEnabledPref]: false,
+        trainhopConfig: { widgetPictureOfTheDay: { visible: true } },
       })
     ).toBe(true);
   });
@@ -249,6 +392,29 @@ describe("resolveWidgetSize", () => {
         },
       })
     ).toBe("medium");
+  });
+
+  it("prefers the dedicated widgetPictureOfTheDay size over the shared widgets key", () => {
+    const potd = WIDGET_REGISTRY.find(w => w.id === "pictureOfTheDay");
+    expect(
+      resolveWidgetSize(potd, {
+        [potd.sizePref]: "",
+        trainhopConfig: {
+          widgetPictureOfTheDay: { size: "large" },
+          widgets: { [potd.trainhopSizeKey]: "medium" },
+        },
+      })
+    ).toBe("large");
+  });
+
+  it("falls back to the shared widgets size key for POTD when no dedicated size", () => {
+    const potd = WIDGET_REGISTRY.find(w => w.id === "pictureOfTheDay");
+    expect(
+      resolveWidgetSize(potd, {
+        [potd.sizePref]: "",
+        trainhopConfig: { widgets: { [potd.trainhopSizeKey]: "large" } },
+      })
+    ).toBe("large");
   });
 });
 

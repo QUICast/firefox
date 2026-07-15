@@ -6,15 +6,28 @@
 const { IPPChannelFilter } = ChromeUtils.importESModule(
   "moz-src:///toolkit/components/ipprotection/IPPChannelFilter.sys.mjs"
 );
-const { IPPExceptionsManager } = ChromeUtils.importESModule(
-  "moz-src:///toolkit/components/ipprotection/IPPExceptionsManager.sys.mjs"
-);
+
+const PERM_NAME = "ipp-vpn";
+function withExceptionsManager() {
+  IPPExceptionsManager.init();
+  return {
+    exclude: url => {
+      let principal =
+        Services.scriptSecurityManager.createContentPrincipalFromOrigin(url);
+      IPPExceptionsManager.addExclusion(principal);
+    },
+    [Symbol.dispose]() {
+      IPPExceptionsManager.uninit();
+      Services.perms.removeByType(PERM_NAME);
+    },
+  };
+}
 
 add_task(async function test_createConnection_and_proxy() {
   await using proxyInfo = withProxyServer();
   // Create the IPP connection filter
   const filter = IPPChannelFilter.create();
-  filter.initialize("", proxyInfo.server);
+  filter.initialize(makePass(), proxyInfo.server);
   filter.start();
 
   let tab = await BrowserTestUtils.openNewForegroundTab(
@@ -43,7 +56,7 @@ add_task(async function test_exclusion_and_proxy() {
   const filter = IPPChannelFilter.create([
     "http://localhost:" + server.identity.primaryPort,
   ]);
-  filter.initialize("", proxyInfo.server);
+  filter.initialize(makePass(), proxyInfo.server);
   proxyInfo.gotConnection.then(() => {
     Assert.ok(false, "Proxy connection should not be made for excluded URL");
   });
@@ -71,7 +84,7 @@ add_task(async function test_essential_exclusion() {
   // Create the IPP connection filter
   const filter = IPPChannelFilter.create();
 
-  filter.initialize("", proxyInfo.server);
+  filter.initialize(makePass(), proxyInfo.server);
   proxyInfo.gotConnection.then(() => {
     Assert.ok(false, "Proxy connection should not be made for excluded URL");
   });
@@ -96,16 +109,12 @@ add_task(async function test_exclusion_manager() {
   server.start(-1);
 
   await using proxyInfo = withProxyServer();
+  using manager = withExceptionsManager();
+  manager.exclude("http://localhost:" + server.identity.primaryPort);
   // Create the IPP connection filter
   const filter = IPPChannelFilter.create();
-  // Add a site exclusion using IPPExceptionsManager
-  let principal =
-    Services.scriptSecurityManager.createContentPrincipalFromOrigin(
-      "http://localhost:" + server.identity.primaryPort
-    );
-  IPPExceptionsManager.addExclusion(principal);
 
-  filter.initialize("", proxyInfo.server);
+  filter.initialize(makePass(), proxyInfo.server);
   proxyInfo.gotConnection.then(() => {
     Assert.ok(false, "Proxy connection should not be made for excluded URL");
   });
@@ -118,12 +127,11 @@ add_task(async function test_exclusion_manager() {
   );
   await BrowserTestUtils.removeTab(tab);
   filter.stop();
-
-  IPPExceptionsManager.removeExclusion(principal);
 });
 
 add_task(async function test_channel_suspend_resume() {
   await using proxyInfo = withProxyServer();
+
   // Create the IPP connection filter
   const filter = IPPChannelFilter.create();
   filter.start();
@@ -155,7 +163,7 @@ add_task(async function test_channel_suspend_resume() {
     "Proxy connection qeues channels when not initialized"
   );
 
-  filter.initialize("", proxyInfo.server);
+  filter.initialize(makePass(), proxyInfo.server);
 
   Assert.ok(!filter.hasPendingChannels, "All the pending channels are gone.");
 
@@ -177,9 +185,12 @@ add_task(async function test_excluded_url_falls_back_to_global_proxy() {
     ],
   });
 
+  using manager = withExceptionsManager();
   // eslint-disable-next-line @microsoft/sdl/no-insecure-url
-  const filter = IPPChannelFilter.create(["http://example.com"]);
-  filter.initialize("", localProxy.server);
+  manager.exclude("http://example.com");
+
+  const filter = IPPChannelFilter.create();
+  filter.initialize(makePass(), localProxy.server);
   localProxy.gotConnection.then(() => {
     Assert.ok(false, "IPP (local) proxy should not receive excluded URL");
   });
@@ -206,7 +217,7 @@ add_task(async function channelfilter_proxiedChannels() {
 
   await using proxyInfo = withProxyServer();
   const filter = IPPChannelFilter.create();
-  filter.initialize("", proxyInfo.server);
+  filter.initialize(makePass(), proxyInfo.server);
   filter.start();
   const channelIter = filter.proxiedChannels();
   let nextChannel = channelIter.next();

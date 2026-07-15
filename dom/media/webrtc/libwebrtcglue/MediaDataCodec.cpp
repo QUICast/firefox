@@ -43,12 +43,13 @@ media::EncodeSupportSet MediaDataCodec::SupportsEncoderCodec(
 }
 
 /* static */
-WebrtcVideoEncoder* MediaDataCodec::CreateEncoder(
+std::unique_ptr<WebrtcVideoEncoder> MediaDataCodec::CreateEncoder(
     const webrtc::SdpVideoFormat& aFormat) {
   if (SupportsEncoderCodec(aFormat).isEmpty()) {
     return nullptr;
   }
-  return new WebrtcVideoEncoderProxy(new WebrtcMediaDataEncoder(aFormat));
+  return std::make_unique<WebrtcVideoEncoderProxy>(
+      MakeRefPtr<WebrtcMediaDataEncoder>(aFormat));
 }
 
 static inline nsDependentCString MimeTypeFor(
@@ -76,20 +77,26 @@ media::DecodeSupportSet MediaDataCodec::SupportsDecoderCodec(
   }
   media::DecodeSupportSet support =
       PDMFactorySupport::IsTypeSupported(MimeTypeFor(aCodecType));
+  // With media.webrtc.hw.h264.enabled off, drop hardware H.264 support so
+  // WebRTC uses the software decoder, but only when one actually exists. On
+  // hardware-only platforms (which bug 2044499 made us report accurately),
+  // dropping it would leave H.264 with no support and fall back to OpenH264
+  // which isn't a reliable substitute for every WebRTC stream (bug 2052237)
   if (aCodecType == webrtc::VideoCodecType::kVideoCodecH264 &&
-      !StaticPrefs::media_webrtc_hw_h264_enabled()) {
+      !StaticPrefs::media_webrtc_hw_h264_enabled() &&
+      support.contains(media::DecodeSupport::SoftwareDecode)) {
     support -= media::DecodeSupport::HardwareDecode;
   }
   return support;
 }
 
-WebrtcVideoDecoder* MediaDataCodec::CreateDecoder(
+std::unique_ptr<WebrtcVideoDecoder> MediaDataCodec::CreateDecoder(
     webrtc::VideoCodecType aCodecType, TrackingId aTrackingId) {
   if (SupportsDecoderCodec(aCodecType).isEmpty()) {
     return nullptr;
   }
   nsDependentCString codec = MimeTypeFor(aCodecType);
-  return new WebrtcMediaDataDecoder(codec, aTrackingId);
+  return std::make_unique<WebrtcMediaDataDecoder>(codec, aTrackingId);
 }
 
 }  // namespace mozilla

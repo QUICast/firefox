@@ -3,25 +3,27 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsBaseChannel.h"
-#include "nsContentUtils.h"
-#include "nsURLHelper.h"
-#include "nsNetCID.h"
-#include "nsUnknownDecoder.h"
-#include "nsIScriptSecurityManager.h"
-#include "nsMimeTypes.h"
-#include "nsICancelable.h"
-#include "nsIChannelEventSink.h"
-#include "nsIStreamConverterService.h"
-#include "nsChannelClassifier.h"
-#include "nsAsyncRedirectVerifyHelper.h"
-#include "nsProxyRelease.h"
-#include "nsXULAppAPI.h"
-#include "nsContentSecurityManager.h"
+
 #include "LoadInfo.h"
-#include "nsServiceManagerUtils.h"
-#include "nsRedirectHistoryEntry.h"
 #include "mozilla/AntiTrackingUtils.h"
 #include "mozilla/BasePrincipal.h"
+#include "mozilla/dom/ParentProcessChannelHandle.h"
+#include "nsAsyncRedirectVerifyHelper.h"
+#include "nsChannelClassifier.h"
+#include "nsContentSecurityManager.h"
+#include "nsContentUtils.h"
+#include "nsICancelable.h"
+#include "nsIChannelEventSink.h"
+#include "nsIScriptSecurityManager.h"
+#include "nsIStreamConverterService.h"
+#include "nsMimeTypes.h"
+#include "nsNetCID.h"
+#include "nsProxyRelease.h"
+#include "nsRedirectHistoryEntry.h"
+#include "nsServiceManagerUtils.h"
+#include "nsURLHelper.h"
+#include "nsUnknownDecoder.h"
+#include "nsXULAppAPI.h"
 
 using namespace mozilla;
 
@@ -704,6 +706,26 @@ nsBaseChannel::AsyncOpen(nsIStreamListener* aListener) {
 
   ClassifyURI();
 
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsBaseChannel::GetParentProcessChannelHandle(
+    mozilla::dom::ParentProcessChannelHandle** aValue) {
+  *aValue = do_AddRef(mParentProcessChannelHandle).take();
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsBaseChannel::SetParentProcessChannelHandle(
+    mozilla::dom::ParentProcessChannelHandle* aValue) {
+  if (XRE_IsParentProcess()) {
+    MOZ_ASSERT_UNREACHABLE(
+        "SetParentProcessChannelHandle in the parent process would leak");
+    return NS_ERROR_NOT_AVAILABLE;
+  }
+
+  mParentProcessChannelHandle = aValue;
   return NS_OK;
 }
 

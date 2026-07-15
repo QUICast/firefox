@@ -3,13 +3,12 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 // HttpLog.h should generally be included first
-#include "HttpLog.h"
-
 #include "HttpBackgroundChannelParent.h"
 
 #include "HttpChannelParent.h"
-#include "mozilla/ipc/BackgroundParent.h"
+#include "HttpLog.h"
 #include "mozilla/IntegerPrintfMacros.h"
+#include "mozilla/ipc/BackgroundParent.h"
 #include "mozilla/net/BackgroundChannelRegistrar.h"
 #include "mozilla/net/ChannelEventQueue.h"
 #include "nsNetCID.h"
@@ -79,11 +78,14 @@ HttpBackgroundChannelParent::~HttpBackgroundChannelParent() {
   MOZ_ASSERT(!mIPCOpened);
 }
 
-nsresult HttpBackgroundChannelParent::Init(const uint64_t& aChannelId) {
+nsresult HttpBackgroundChannelParent::Init(const dom::ContentParentId& aCpId,
+                                           const uint64_t& aChannelId) {
   LOG(("HttpBackgroundChannelParent::Init [this=%p channelId=%" PRIu64 "]\n",
        this, aChannelId));
   AssertIsInMainProcess();
   AssertIsOnBackgroundThread();
+
+  mContentParentId = aCpId;
 
   RefPtr<ContinueAsyncOpenRunnable> runnable =
       new ContinueAsyncOpenRunnable(this, aChannelId);

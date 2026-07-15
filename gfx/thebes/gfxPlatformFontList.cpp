@@ -2,39 +2,26 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "mozilla/Logging.h"
-#include "mozilla/gfx/Logging.h"
-#include "mozilla/intl/Locale.h"
-#include "mozilla/intl/LocaleService.h"
-#include "mozilla/intl/OSPreferences.h"
-
 #include "gfxPlatformFontList.h"
+
+#include "FontVisibilityProvider.h"
+#include "GeckoProfiler.h"
+#include "SharedFontList-impl.h"
+#include "base/eintr_wrapper.h"
 #include "gfxScriptItemizer.h"
 #include "gfxTextRun.h"
 #include "gfxUserFontSet.h"
-#include "SharedFontList-impl.h"
-
-#include "FontVisibilityProvider.h"
-
-#include "GeckoProfiler.h"
-#include "nsCRT.h"
-#include "nsGkAtoms.h"
-#include "nsPresContext.h"
-#include "nsServiceManagerUtils.h"
-#include "nsUnicharUtils.h"
-#include "nsUnicodeProperties.h"
-#include "nsXULAppAPI.h"
-
 #include "mozilla/AppShutdown.h"
 #include "mozilla/BinarySearch.h"
 #include "mozilla/Likely.h"
+#include "mozilla/Logging.h"
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/Mutex.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/StaticPrefs_gfx.h"
 #include "mozilla/StaticPrefs_layout.h"
 #include "mozilla/StaticPrefs_mathml.h"
-#include "mozilla/glean/GfxMetrics.h"
+#include "mozilla/TextUtils.h"
 #include "mozilla/TimeStamp.h"
 #include "mozilla/dom/BlobImpl.h"
 #include "mozilla/dom/ContentChild.h"
@@ -42,10 +29,19 @@
 #include "mozilla/dom/ContentProcessMessageManager.h"
 #include "mozilla/dom/Document.h"
 #include "mozilla/gfx/2D.h"
+#include "mozilla/gfx/Logging.h"
+#include "mozilla/glean/GfxMetrics.h"
+#include "mozilla/intl/Locale.h"
+#include "mozilla/intl/LocaleService.h"
+#include "mozilla/intl/OSPreferences.h"
 #include "mozilla/ipc/FileDescriptorUtils.h"
-#include "mozilla/TextUtils.h"
-
-#include "base/eintr_wrapper.h"
+#include "nsCRT.h"
+#include "nsGkAtoms.h"
+#include "nsPresContext.h"
+#include "nsServiceManagerUtils.h"
+#include "nsUnicharUtils.h"
+#include "nsUnicodeProperties.h"
+#include "nsXULAppAPI.h"
 
 #ifdef XP_MACOSX
 #  include "mozilla/MacAutoreleasePool.h"
@@ -1057,7 +1053,7 @@ gfxFontEntry* gfxPlatformFontList::LookupInFaceNameLists(
   return lookup;
 }
 
-gfxFontEntry* gfxPlatformFontList::LookupInSharedFaceNameList(
+already_AddRefed<gfxFontEntry> gfxPlatformFontList::LookupInSharedFaceNameList(
     FontVisibilityProvider* aFontVisibilityProvider,
     const nsACString& aFaceName, WeightRange aWeightForEntry,
     StretchRange aStretchForEntry, SlantStyleRange aStyleForEntry) {
@@ -1090,14 +1086,14 @@ gfxFontEntry* gfxPlatformFontList::LookupInSharedFaceNameList(
     }
     return nullptr;
   }
-  gfxFontEntry* fe = CreateFontEntry(face, family);
+  RefPtr<gfxFontEntry> fe = CreateFontEntry(face, family);
   if (fe) {
     fe->mIsLocalUserFont = true;
     fe->mWeightRange = aWeightForEntry;
     fe->mStretchRange = aStretchForEntry;
     fe->mStyleRange = aStyleForEntry;
   }
-  return fe;
+  return fe.forget();
 }
 
 void gfxPlatformFontList::MaybeAddToLocalNameTable(

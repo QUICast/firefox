@@ -473,7 +473,8 @@ nsresult ElementInternals::SetAttr(nsAtom* aName, const nsAString& aValue) {
     }
   } else {
     bool attrHadValue = false;
-    rs = mAttrs.SetAndSwapAttr(aName, attrValue, &attrHadValue);
+    rs = mAttrs.SetAndSwapAttr(aName, attrValue, &attrHadValue,
+                               mozilla::dom::IsKnownNewAttr::No);
   }
   nsMutationGuard::DidMutate();
 
@@ -489,7 +490,8 @@ nsresult ElementInternals::SetAttrInternal(nsAtom* aName,
                                            const nsAString& aValue) {
   bool attrHadValue;
   nsAttrValue attrValue(aValue);
-  return mAttrs.SetAndSwapAttr(aName, attrValue, &attrHadValue);
+  return mAttrs.SetAndSwapAttr(aName, attrValue, &attrHadValue,
+                               mozilla::dom::IsKnownNewAttr::No);
 }
 
 nsresult ElementInternals::UnsetAttrInternal(nsAtom* aName) {
@@ -642,7 +644,11 @@ void ElementInternals::GetAttrElements(
   // elements.
   auto elements = getAttrAssociatedElements();
 
-  if (elements == cachedAttrElements) {
+  // aUseCachedValue is null when the binding has no cached attr-associated
+  // elements object to reuse yet (e.g. the first getter call). In that case we
+  // must return the freshly computed elements below rather than signalling a
+  // cache hit, otherwise we would dereference a null pointer.
+  if (aUseCachedValue && elements == cachedAttrElements) {
     // 2. If the contents of elements is equal to the contents of this's cached
     // attr-associated elements, then return this's cached attr-associated
     // elements object.

@@ -53,13 +53,6 @@ class SessionHistoryInfo {
                      nsIPrincipal* aPartitionedPrincipalToInherit,
                      nsIPolicyContainer* aPolicyContainer);
 
-  void Reset(nsIURI* aURI, const nsID& aDocShellID, bool aDynamicCreation,
-             nsIPrincipal* aTriggeringPrincipal,
-             nsIPrincipal* aPrincipalToInherit,
-             nsIPrincipal* aPartitionedPrincipalToInherit,
-             nsIPolicyContainer* aPolicyContainer,
-             const nsACString& aContentType);
-
   bool operator==(const SessionHistoryInfo& aInfo) const {
     return false;  // FIXME
   }
@@ -534,6 +527,7 @@ namespace IPC {
 // Allow sending SessionHistoryInfo objects over IPC.
 template <>
 struct ParamTraits<mozilla::dom::SessionHistoryInfo> {
+  typedef mozilla::dom::SessionHistoryInfo paramType;
   static void Write(IPC::MessageWriter* aWriter,
                     const mozilla::dom::SessionHistoryInfo& aParam);
   static bool Read(IPC::MessageReader* aReader,
@@ -543,6 +537,7 @@ struct ParamTraits<mozilla::dom::SessionHistoryInfo> {
 // Allow sending PreviousSessionHistoryInfo objects over IPC.
 template <>
 struct ParamTraits<mozilla::dom::PreviousSessionHistoryInfo> {
+  typedef mozilla::dom::PreviousSessionHistoryInfo paramType;
   static void Write(IPC::MessageWriter* aWriter,
                     const mozilla::dom::PreviousSessionHistoryInfo& aParam);
   static bool Read(IPC::MessageReader* aReader,
@@ -552,6 +547,7 @@ struct ParamTraits<mozilla::dom::PreviousSessionHistoryInfo> {
 // Allow sending LoadingSessionHistoryInfo objects over IPC.
 template <>
 struct ParamTraits<mozilla::dom::LoadingSessionHistoryInfo> {
+  typedef mozilla::dom::LoadingSessionHistoryInfo paramType;
   static void Write(IPC::MessageWriter* aWriter,
                     const mozilla::dom::LoadingSessionHistoryInfo& aParam);
   static bool Read(IPC::MessageReader* aReader,
@@ -569,6 +565,7 @@ struct ParamTraits<nsILayoutHistoryState*> {
 // Allow sending mozilla::dom::Wireframe objects over IPC.
 template <>
 struct ParamTraits<mozilla::dom::Wireframe> {
+  typedef mozilla::dom::Wireframe paramType;
   static void Write(IPC::MessageWriter* aWriter,
                     const mozilla::dom::Wireframe& aParam);
   static bool Read(IPC::MessageReader* aReader,

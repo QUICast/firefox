@@ -5,10 +5,10 @@
 #ifndef NETWERK_PROTOCOL_HTTP_REPLACEDHTTPRESPONSE_H_
 #define NETWERK_PROTOCOL_HTTP_REPLACEDHTTPRESPONSE_H_
 
-#include "nsString.h"
+#include "mozilla/Atomics.h"
 #include "nsHttpHeaderArray.h"
 #include "nsIReplacedHttpResponse.h"
-#include "mozilla/Atomics.h"
+#include "nsString.h"
 
 namespace mozilla::net {
 
@@ -26,7 +26,8 @@ class ReplacedHttpResponse : nsIReplacedHttpResponse {
   nsCString mResponseStatusText;
   nsCString mResponseBody;
   nsHttpHeaderArray mResponseHeaders;
-  Atomic<bool> mInVisitHeaders{false};
+  // Depth counter so nested visits cannot disarm the outer guard.
+  Atomic<uint32_t> mInVisitHeaders{0};
 };
 
 }  // namespace mozilla::net

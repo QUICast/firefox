@@ -258,12 +258,13 @@ tasks:
                           - -cx
                           - $let:
                                 extraArgs:
-                                    $if: 'tasks_for == "cron"'
-                                    then: '${cron.quoted_args}'
-                                    else:
-                                        $if: 'repository.project in ["autoland", "try"]'
-                                        then: '--no-verify'
-                                        else: ''
+                                    $switch:
+                                        'tasks_for == "cron"': '${cron.quoted_args}'
+                                        $default:
+                                            $switch:
+                                                'repository.project == "autoland"': '--no-verify'
+                                                'repository.project == "try"': '--no-verify --allow-parameter-override'
+                                                $default: ''
                             in:
                                 $if: 'tasks_for == "action"'
                                 then: >
@@ -571,7 +572,13 @@ tasks:
                                       - bash
                                       - -cx
                                       - $let:
-                                            extraArgs: {$if: 'tasks_for == "cron"', then: '${cron.quoted_args}', else: ''}
+                                            extraArgs:
+                                                $switch:
+                                                    'tasks_for == "cron"': '${cron.quoted_args}'
+                                                    $default:
+                                                        $switch:
+                                                            'repoType == "dev"': '--allow-parameter-override'
+                                                            $default: ''
                                         in:
                                             $if: 'eventType == "action"'
                                             then: >

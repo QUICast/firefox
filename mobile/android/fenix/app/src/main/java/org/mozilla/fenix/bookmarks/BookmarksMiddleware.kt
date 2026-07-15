@@ -6,6 +6,8 @@ package org.mozilla.fenix.bookmarks
 
 import androidx.navigation.NavController
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.launchIn
@@ -17,15 +19,20 @@ import mozilla.components.concept.storage.BookmarkInfo
 import mozilla.components.concept.storage.BookmarkNode
 import mozilla.components.concept.storage.BookmarkNodeType
 import mozilla.components.concept.storage.BookmarksStorage
-import mozilla.components.feature.importer.ImporterResult
 import mozilla.components.feature.tabs.TabsUseCases
 import mozilla.components.lib.state.Middleware
 import mozilla.components.lib.state.Store
+import org.mozilla.fenix.bookmarks.importer.FenixImporterEvent
 import org.mozilla.fenix.browser.browsingmode.BrowsingMode
+import org.mozilla.fenix.components.bookmarks.BookmarksUseCase
 import org.mozilla.fenix.components.usecases.FenixBrowserUseCases
-import org.mozilla.fenix.utils.LastSavedFolderCache
 
 private const val WARN_OPEN_ALL_SIZE = 15
+
+private const val SEARCH_LIMIT = 75
+
+// Add a search delay to prevent database fetches as user is still typing
+private const val SEARCH_DELAY_MS = 250L
 
 /**
  * A middleware for handling side-effects in response to [BookmarksAction]s.
@@ -45,12 +52,13 @@ private const val WARN_OPEN_ALL_SIZE = 15
  * @param resolveFolderTitle Invoked to lookup user-friendly bookmark titles.
  * @param getBrowsingMode Invoked when retrieving the app's current [BrowsingMode].
  * @param saveBookmarkSortOrder Invoked to persist the new sort order.
- * @param lastSavedFolderCache used to cache the last folder you edited a bookmark in.
+ * @param editBookmarkUseCase Commits a bookmark edit and updates the last-saved-folder cache
+ * atomically with respect to caller cancellation.
  * @param reportResultGlobally Invoked when an error occurs that needs to be reported even if the
  * feature goes out of scope.
- * @param importResults Provides the [Flow] of [ImporterResult]s produced by the bookmarks import
- * dialog. The middleware subscribes on [Init] and dispatches [ImportAction.ImportFailed] when a
- * [ImporterResult.Failure] is emitted.
+ * @param importEvents Provides the [Flow] of [FenixImporterEvent]s produced by the bookmarks import
+ * dialog. The middleware subscribes on [ViewAppeared] in the normal flow and dispatches [ImportAction.ImportFailed]
+ * when a [FenixImporterEvent.Failure] is emitted.
  * @param lifecycleScope lifecycle bound CoroutineScope scope used to cancel jobs when leaving bookmarks.
  */
 @Suppress("LongParameterList", "LargeClass")
@@ -69,11 +77,13 @@ internal class BookmarksMiddleware(
     private val resolveFolderTitle: (BookmarkNode) -> String,
     private val getBrowsingMode: () -> BrowsingMode,
     private val saveBookmarkSortOrder: suspend (BookmarksListSortOrder) -> Unit,
-    private val lastSavedFolderCache: LastSavedFolderCache,
+    private val editBookmarkUseCase: BookmarksUseCase.EditBookmarkUseCase,
     private val reportResultGlobally: (BookmarksGlobalResultReport) -> Unit,
-    private val importResults: () -> Flow<ImporterResult>,
+    private val importEvents: () -> Flow<FenixImporterEvent>,
     private val lifecycleScope: CoroutineScope,
 ) : Middleware<BookmarksState, BookmarksAction> {
+
+    private var searchJob: Job? = null
 
     @Suppress("LongMethod", "CognitiveComplexMethod", "CyclomaticComplexMethod")
     override fun invoke(
@@ -93,41 +103,47 @@ internal class BookmarksMiddleware(
         }
 
         when (action) {
-            Init -> {
-                store.tryDispatchLoadFor(BookmarkRoot.Mobile.id)
-                importResults()
-                    .onEach { result ->
-                        when (result) {
-                            ImporterResult.Canceled -> Unit
-                            ImporterResult.Failure -> store.dispatch(ImportAction.ImportFailed)
-                            is ImporterResult.Success -> store.dispatch(
-                                action = ImportAction.ImportSucceeded(result.importCount),
-                            )
+            is ViewAppeared -> {
+                if (action.bookmarkToLoad == null) {
+                    store.tryDispatchLoadFor(BookmarkRoot.Mobile.id)
+                    importEvents()
+                        .onEach { result ->
+                            when (result) {
+                                FenixImporterEvent.Started -> store.dispatch(ImportAction.ImportStarted)
+                                FenixImporterEvent.Canceled -> store.dispatch(ImportAction.ImportCancelled)
+                                is FenixImporterEvent.Failure ->
+                                    store.dispatch(ImportAction.ImportFailed(error = result.error))
+                                is FenixImporterEvent.Success -> store.dispatch(
+                                    action = ImportAction.ImportSucceeded(result.importCount),
+                                )
+                            }
                         }
-                    }
-                    .launchIn(lifecycleScope)
-            }
-            is InitEdit -> lifecycleScope.launch {
-                Result.runCatching {
-                    val bookmarkNode = bookmarksStorage.getBookmark(action.guid).getOrNull()
-                    val bookmark = bookmarkNode?.let {
-                        BookmarkItem.Bookmark(it.url!!, it.title ?: "", it.url!!, it.guid, it.position)
-                    }
-                    val folder = bookmarkNode?.parentGuid
-                        ?.let { bookmarksStorage.getBookmark(it).getOrNull() }
-                        ?.let {
-                            BookmarkItem.Folder(
-                                guid = it.guid,
-                                title = resolveFolderTitle(it),
-                                position = it.position,
-                            )
-                        }
+                        .launchIn(lifecycleScope)
+                } else {
+                    lifecycleScope.launch {
+                        Result.runCatching {
+                            val bookmarkNode = bookmarksStorage.getBookmark(action.bookmarkToLoad).getOrNull()
+                            val bookmark = bookmarkNode?.let {
+                                BookmarkItem.Bookmark(it.url!!, it.title ?: "", it.url!!, it.guid, it.position)
+                            }
+                            val folder = bookmarkNode?.parentGuid
+                                ?.let { bookmarksStorage.getBookmark(it).getOrNull() }
+                                ?.let {
+                                    BookmarkItem.Folder(
+                                        guid = it.guid,
+                                        title = resolveFolderTitle(it),
+                                        position = it.position,
+                                    )
+                                }
 
-                    InitEditLoaded(bookmark = bookmark!!, folder = folder!!)
-                }.getOrNull()?.also {
-                    store.dispatch(it)
+                            BookmarkToEditLoaded(bookmark = bookmark!!, folder = folder!!)
+                        }.getOrNull()?.also {
+                            store.dispatch(it)
+                        }
+                    }
                 }
             }
+
             is BookmarkClicked -> {
                 if (preReductionState.selectedItems.isNotEmpty()) {
                     store.tryDispatchReceivedRecursiveCountUpdate()
@@ -262,16 +278,13 @@ internal class BookmarksMiddleware(
                         val popped = getNavController().popBackStack()
                         lifecycleScope.launch {
                             preReductionState.createBookmarkInfo()?.also {
-                                val result = bookmarksStorage.updateNode(
+                                val success = editBookmarkUseCase(
                                     guid = preReductionState.bookmarksEditBookmarkState.bookmark.guid,
                                     info = it,
+                                    edited = preReductionState.bookmarksEditBookmarkState.edited,
                                 )
-                                if (result.isFailure) {
+                                if (!success) {
                                     reportResultGlobally(BookmarksGlobalResultReport.EditBookmarkFailed)
-                                } else {
-                                    if (preReductionState.bookmarksEditBookmarkState.edited) {
-                                        lastSavedFolderCache.setGuid(it.parentGuid)
-                                    }
                                 }
                             }
                             store.tryDispatchLoadFor(preReductionState.currentFolder.guid)
@@ -332,11 +345,6 @@ internal class BookmarksMiddleware(
                     preReductionState.bookmarksDeletionDialogState.guidsToDelete.forEach {
                         bookmarksStorage.deleteNode(it)
                     }
-                    lastSavedFolderCache.getGuid()?.let {
-                        if (bookmarksStorage.getBookmark(it).getOrNull() == null) {
-                            lastSavedFolderCache.setGuid(null)
-                        }
-                    }
                 }
 
                 if (preReductionState.bookmarksEditFolderState != null) {
@@ -384,15 +392,44 @@ internal class BookmarksMiddleware(
             is ImportAction.ImportFileClicked -> {
                 navigateToImportDialog()
             }
-            ImportAction.ImportFailed -> {
+            is ImportAction.ImportFailed -> {
                 store.dispatch(SnackbarAction.ImportFailed)
             }
-            SearchClicked,
+            is SearchAction.SearchQueryChanged -> {
+                searchJob?.cancel()
+                searchJob = lifecycleScope.launch {
+                    if (action.query.isEmpty()) {
+                        store.dispatch(SearchAction.ReceivedSearchResults(listOf()))
+                    } else {
+                        delay(SEARCH_DELAY_MS)
+                        val searchResults = bookmarksStorage.searchBookmarks(
+                            query = action.query,
+                            limit = SEARCH_LIMIT,
+                        ).getOrNull()
+                        val bookmarkItems = searchResults?.mapNotNull {
+                            Result.runCatching { it.toBookmarkItem() }.getOrNull()
+                        } ?: listOf()
+
+                        ensureActive()
+
+                        store.dispatch(SearchAction.ReceivedSearchResults(bookmarkItems))
+                    }
+                }
+            }
+            is SearchAction.SearchDismissed -> {
+                searchJob?.cancel()
+                store.tryDispatchLoadFor(preReductionState.currentFolder.guid)
+            }
+
+            ImportAction.ImportStarted,
+            ImportAction.ImportCancelled,
+            SearchAction.SearchClicked,
+            is SearchAction.ReceivedSearchResults,
             RootOverflowMenuClicked,
             RootOverflowMenuDismissed,
             SelectFolderAction.SearchClicked,
             SelectFolderAction.SearchDismissed,
-            is InitEditLoaded,
+            is BookmarkToEditLoaded,
             SnackbarAction.SelectFolderFailed,
             is OpenTabsConfirmationDialogAction.Present,
             OpenTabsConfirmationDialogAction.CancelTapped,
@@ -402,7 +439,6 @@ internal class BookmarksMiddleware(
             is EditBookmarkAction.TitleChanged,
             is EditBookmarkAction.URLChanged,
             is BookmarksLoaded,
-            is SearchDismissed,
             is EditFolderAction.TitleChanged,
             is AddFolderAction.FolderCreated,
             is AddFolderAction.TitleChanged,
@@ -568,29 +604,27 @@ internal class BookmarksMiddleware(
 
     private suspend fun BookmarkNode.childItems(): List<BookmarkItem> = this.children
         ?.mapNotNull { node ->
-            Result.runCatching {
-                when (node.type) {
-                    BookmarkNodeType.ITEM -> BookmarkItem.Bookmark(
-                        url = node.url!!,
-                        title = node.title ?: node.url ?: "",
-                        previewImageUrl = node.url!!,
-                        dateAdded = node.dateAdded,
-                        guid = node.guid,
-                        position = node.position,
-                    )
-
-                    BookmarkNodeType.FOLDER -> BookmarkItem.Folder(
-                        title = node.title ?: "",
-                        dateAdded = node.dateAdded,
-                        guid = node.guid,
-                        position = node.position,
-                        nestedItemCount = bookmarksStorage.countBookmarksInTrees(listOf(node.guid)).toInt(),
-                    )
-
-                    BookmarkNodeType.SEPARATOR -> null
-                }
-            }.getOrNull()
+            Result.runCatching { node.toBookmarkItem() }.getOrNull()
         } ?: listOf()
+
+    private suspend fun BookmarkNode.toBookmarkItem(): BookmarkItem? = when (this.type) {
+        BookmarkNodeType.ITEM -> BookmarkItem.Bookmark(
+            url = url!!,
+            title = title ?: url ?: "",
+            previewImageUrl = url!!,
+            guid = guid,
+            position = position,
+            dateAdded = dateAdded,
+        )
+        BookmarkNodeType.FOLDER -> BookmarkItem.Folder(
+            title = title ?: "",
+            guid = guid,
+            position = position,
+            dateAdded = dateAdded,
+            nestedItemCount = bookmarksStorage.countBookmarksInTrees(listOf(guid)).toInt(),
+        )
+        BookmarkNodeType.SEPARATOR -> null
+    }
 
     private suspend fun openSelectedInTabs(
         preReductionState: BookmarksState,
@@ -713,11 +747,6 @@ internal class BookmarksMiddleware(
     private fun handleDeleteBookmark(bookmark: BookmarkItem.Bookmark) {
         lifecycleScope.launch {
             bookmarksStorage.deleteNode(bookmark.guid)
-            lastSavedFolderCache.getGuid()?.let { cachedGuid ->
-                if (bookmarksStorage.getBookmark(cachedGuid).getOrNull() == null) {
-                    lastSavedFolderCache.setGuid(null)
-                }
-            }
         }
     }
 
@@ -747,13 +776,6 @@ internal class BookmarksMiddleware(
         lifecycleScope.launch {
             guidToDelete?.let { guid ->
                 bookmarksStorage.deleteNode(guid)
-
-                // Reset the folder cache if the folder being deleted was the last used for saving.
-                lastSavedFolderCache.getGuid()?.let { cachedGuid ->
-                    if (bookmarksStorage.getBookmark(cachedGuid).getOrNull() == null) {
-                        lastSavedFolderCache.setGuid(null)
-                    }
-                }
             }
 
             if (!getNavController().popBackStack()) {

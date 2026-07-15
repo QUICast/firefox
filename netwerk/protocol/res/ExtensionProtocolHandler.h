@@ -5,10 +5,10 @@
 #ifndef ExtensionProtocolHandler_h_
 #define ExtensionProtocolHandler_h_
 
-#include "mozilla/net/NeckoParent.h"
+#include "SubstitutingProtocolHandler.h"
 #include "mozilla/LazyIdleThread.h"
 #include "mozilla/Result.h"
-#include "SubstitutingProtocolHandler.h"
+#include "mozilla/net/NeckoParent.h"
 
 namespace mozilla {
 namespace net {
@@ -182,9 +182,11 @@ class ExtensionProtocolHandler final : public nsISubstitutingProtocolHandler,
 
   // On development builds, this points to development repo. Lazily set.
   nsCOMPtr<nsIFile> mDevRepo;
+  // objdir is usually in mDevRepo but can be customized with MOZ_OBJDIR.
+  nsCOMPtr<nsIFile> mDevObjDir;
 
   // Set to true once we've already tried to load the dev repo path,
-  // allowing for lazy initialization of |mDevRepo|.
+  // allowing for lazy initialization of |mDevRepo| and |mDevObjDir|.
   bool mAlreadyCheckedDevRepo{false};
 #endif /* XP_MACOSX */
 

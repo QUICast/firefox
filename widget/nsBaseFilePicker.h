@@ -6,9 +6,9 @@
 #ifndef nsBaseFilePicker_h_
 #define nsBaseFilePicker_h_
 
-#include "nsISupports.h"
-#include "nsIFilePicker.h"
 #include "nsCOMPtr.h"
+#include "nsIFilePicker.h"
+#include "nsISupports.h"
 #include "nsString.h"
 #include "nsTArray.h"
 

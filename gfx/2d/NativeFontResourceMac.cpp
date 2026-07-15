@@ -2,13 +2,14 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include <unordered_map>
 #include "NativeFontResourceMac.h"
-#include "UnscaledFontMac.h"
-#include "Types.h"
 
-#include "mozilla/RefPtr.h"
+#include <unordered_map>
+
+#include "Types.h"
+#include "UnscaledFontMac.h"
 #include "mozilla/DataMutex.h"
+#include "mozilla/RefPtr.h"
 
 #ifdef MOZ_WIDGET_UIKIT
 #  include <CoreFoundation/CoreFoundation.h>
@@ -161,8 +162,8 @@ already_AddRefed<NativeFontResourceMac> NativeFontResourceMac::Create(
 already_AddRefed<UnscaledFont> NativeFontResourceMac::CreateUnscaledFont(
     uint32_t aIndex, const uint8_t* aInstanceData,
     uint32_t aInstanceDataLength) {
-  RefPtr<UnscaledFont> unscaledFont =
-      new UnscaledFontMac(mFontDescRef, mFontRef, true);
+  RefPtr unscaledFont =
+      MakeRefPtr<UnscaledFontMac>(mFontDescRef, mFontRef, true);
 
   return unscaledFont.forget();
 }

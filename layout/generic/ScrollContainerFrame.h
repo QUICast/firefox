@@ -337,6 +337,10 @@ class ScrollContainerFrame : public nsContainerFrame,
    private:
     friend class ScrollContainerFrame;
     const nsRect& GetOrCompute();
+    // Drop any cached value so the next GetScrolledRect() recomputes it. Used
+    // when an operation legitimately changes the scrolled rect while the cache
+    // is alive.
+    void Invalidate() { mComputed = false; }
 
     ScrollContainerFrame* const mFrame;
     const nsIFrame* const mReferenceFrame;
@@ -497,7 +501,8 @@ class ScrollContainerFrame : public nsContainerFrame,
    * number of layer pixels (so the operation is fast and looks clean).
    */
   void ScrollToCSSPixelsForApz(const CSSPoint& aScrollPosition,
-                               ScrollSnapTargetIds&& aLastSnapTargetIds);
+                               ScrollSnapTargetIds&& aLastSnapTargetIds,
+                               const APZScrollGeneration& aGenerationOnApz);
 
   /**
    * Returns the scroll position in integer CSS pixels, rounded to the nearest
@@ -707,7 +712,6 @@ class ScrollContainerFrame : public nsContainerFrame,
    */
   enum class InScrollingGesture : bool { No, Yes };
   void ResetScrollInfoIfNeeded(const MainThreadScrollGeneration& aGeneration,
-                               const APZScrollGeneration& aGenerationOnApz,
                                APZScrollAnimationType aAPZScrollAnimationType,
                                InScrollingGesture aInScrollingGesture);
 

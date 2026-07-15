@@ -8,7 +8,6 @@
 
 #include "IMEData.h"
 #include "TextEvents.h"
-
 #include "mozilla/Assertions.h"
 #include "mozilla/IMEStateManager.h"
 #include "mozilla/IntegerPrintfMacros.h"
@@ -103,6 +102,7 @@ void ContentCache::AssertIfInvalid() const {
           ? "Nothing"
           : nsPrintfCString("%u", mCompositionStart.value()).get());
   CrashReporter::AppendAppNotesToCrashReport(info);
+  NS_WARNING(info.get());
   MOZ_DIAGNOSTIC_CRASH("Invalid ContentCache data");
 #endif  // #if MOZ_DIAGNOSTIC_ASSERT_ENABLED
 }

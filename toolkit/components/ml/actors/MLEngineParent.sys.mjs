@@ -50,8 +50,6 @@ const RS_RUNTIME_COLLECTION = "ml-onnx-runtime";
 const RS_INFERENCE_OPTIONS_COLLECTION = "ml-inference-options";
 const RS_ALLOW_DENY_COLLECTION = "ml-model-allow-deny-list";
 const TERMINATE_TIMEOUT = 5000;
-const RS_FALLBACK_BASE_URL =
-  "https://firefox-settings-attachments.cdn.mozilla.net";
 
 const RUNTIME_ROOT_IN_OPFS = "mlRuntimeFiles";
 
@@ -295,10 +293,13 @@ export class MLEngineParent extends JSProcessActorParent {
           return /** @type {MLEngine<FeatureId>} */ (currentEngine);
         }
         lazy.console.debug(`Replacing existing engine for ${engineId}`);
-        try {
-          Services.obs.removeObserver(currentEngine, "ipc:content-shutdown");
-        } catch (e) {
-          lazy.console.error("Failed to remove observer", e);
+        if (currentEngine.isObserving) {
+          try {
+            Services.obs.removeObserver(currentEngine, "ipc:content-shutdown");
+            currentEngine.isObserving = false;
+          } catch (e) {
+            lazy.console.error("Failed to remove observer", e);
+          }
         }
 
         await MLEngine.removeInstance(
@@ -343,6 +344,7 @@ export class MLEngineParent extends JSProcessActorParent {
       // and its pending request promises, which may prevent windows
       // that triggered inference from being cycle-collected.
       Services.obs.addObserver(engine, "ipc:content-shutdown", true);
+      engine.isObserving = true;
 
       const creationTime = ChromeUtils.now() - start;
 
@@ -777,14 +779,14 @@ export class MLEngineParent extends JSProcessActorParent {
   static async downloadRSAttachment({ wasmRecord, localRoot }) {
     const { attachment, version } = wasmRecord;
     const { location, filename, hash, size } = attachment;
-    let baseURL = RS_FALLBACK_BASE_URL;
+
+    // If the base URL cannot be obtained from Remote Settings, no need to go further.
+    let baseURL;
     try {
       baseURL = await lazy.Utils.baseAttachmentsURL();
     } catch (error) {
-      console.error(
-        `Error fetching remote settings base url from CDN. Falling back to ${RS_FALLBACK_BASE_URL}`,
-        error
-      );
+      console.error("Error fetching content from Remote settings:", error);
+      throw error;
     }
 
     // Validate inputs
@@ -1067,6 +1069,15 @@ export class MLEngine {
    * @type {"uninitialized" | "ready" | "error" | "closed" | "crashed"}
    */
   engineStatus = "uninitialized";
+
+  /**
+   * Whether this engine is currently registered as an "ipc:content-shutdown"
+   * observer. Used to avoid removing an observer that was never added, which
+   * would throw NS_ERROR_ILLEGAL_VALUE.
+   *
+   * @type {boolean}
+   */
+  isObserving = false;
 
   /**
    * Unique identifier for the engine.
@@ -1692,6 +1703,12 @@ export class MLEngine {
     let tokenCount = 0;
     let characterCount = 0;
 
+    // Only generated (non-prompt) chunks are counted for cadence telemetry.
+    let firstChunkTime = null;
+    let lastChunkTime = null;
+    let generatedChunkCount = 0;
+    let interChunkTimeTotal = 0;
+
     let chunkPromise = responseChunkResolvers.getAndAdvanceChunkPromise();
     let chunkStartTime = ChromeUtils.now();
 
@@ -1707,6 +1724,18 @@ export class MLEngine {
         );
         tokenCount += chunk.metadata.tokens?.length ?? 0;
         characterCount += chunk.metadata.text?.length ?? 0;
+
+        if (!chunk.metadata.isPrompt) {
+          const now = ChromeUtils.now();
+          if (firstChunkTime === null) {
+            firstChunkTime = now;
+          } else {
+            interChunkTimeTotal += now - lastChunkTime;
+          }
+          lastChunkTime = now;
+          generatedChunkCount++;
+        }
+
         yield {
           text: chunk.metadata.text,
           tokens: chunk.metadata.tokens,
@@ -1793,6 +1822,12 @@ export class MLEngine {
       backend: this.pipelineOptions.backend,
       tokenCount,
       characterCount,
+      timeToFirstChunk:
+        firstChunkTime === null ? null : firstChunkTime - startTime,
+      averageChunkTime:
+        generatedChunkCount > 1
+          ? interChunkTimeTotal / (generatedChunkCount - 1)
+          : null,
     });
 
     return result;

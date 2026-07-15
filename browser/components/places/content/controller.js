@@ -77,7 +77,8 @@ function PlacesController(aView) {
   });
 
   ChromeUtils.defineESModuleGetters(this, {
-    ForgetAboutSite: "resource://gre/modules/ForgetAboutSite.sys.mjs",
+    ForgetAboutSite:
+      "moz-src:///toolkit/components/forgetaboutsite/ForgetAboutSite.sys.mjs",
   });
 }
 
@@ -1427,15 +1428,23 @@ PlacesController.prototype = {
     // Open containing folder in left pane/sidebar bookmark tree
     let documentUrl = document.documentURI.toLowerCase();
     if (documentUrl.endsWith("browser.xhtml")) {
-      // We're in a menu or a panel.
+      // Invoked from the main browser window (e.g. the bookmarks menu or
+      // panel), so open the bookmarks sidebar and reveal the bookmark there.
       window.SidebarController._show("viewBookmarksSidebar").then(() => {
-        let theSidebar = document.getElementById("sidebar");
-        theSidebar.contentDocument
-          .getElementById("bookmarks-view")
-          .selectItems([aBookmarkGuid]);
-      });
+        let sidebar = document.getElementById("sidebar");
+        let updatedPanel =
+          sidebar.contentDocument.querySelector("sidebar-bookmarks");
+        if (updatedPanel) {
+          updatedPanel.showInFolder(aBookmarkGuid).catch(console.error);
+        } else {
+          sidebar.contentDocument
+            .getElementById("bookmarks-view")
+            .selectItems([aBookmarkGuid]);
+        }
+      }, console.error);
     } else if (documentUrl.includes("sidebar")) {
-      // We're in the sidebar - clear the search box first
+      // Invoked from within the bookmarks sidebar itself - clear the
+      // search box first
       let searchBox = document.getElementById("search-box");
       searchBox.clear();
 
@@ -1453,7 +1462,8 @@ PlacesController.prototype = {
           containers.splice(0, 0, "AllBookmarks");
           PlacesOrganizer.selectLeftPaneContainerByHierarchy(containers);
           this._view.selectItems([aBookmarkGuid], false);
-        });
+        })
+        .catch(e => console.error("showInFolder failed:", e));
     }
   },
 };

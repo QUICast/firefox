@@ -61,6 +61,7 @@ import org.mozilla.fenix.GleanMetrics.PrivateBrowsingLocked
 import org.mozilla.fenix.GleanMetrics.TabsTray
 import org.mozilla.fenix.HomeActivity
 import org.mozilla.fenix.R
+import org.mozilla.fenix.components.appstate.AppAction
 import org.mozilla.fenix.compose.navigation.BottomSheetSceneStrategy
 import org.mozilla.fenix.ext.actualInactiveTabs
 import org.mozilla.fenix.ext.components
@@ -69,7 +70,6 @@ import org.mozilla.fenix.ext.pixelSizeFor
 import org.mozilla.fenix.ext.registerForActivityResult
 import org.mozilla.fenix.ext.requireComponents
 import org.mozilla.fenix.ext.runIfFragmentIsAttached
-import org.mozilla.fenix.ext.settings
 import org.mozilla.fenix.home.HomeScreenViewModel
 import org.mozilla.fenix.navigation.DefaultNavControllerProvider
 import org.mozilla.fenix.navigation.NavControllerProvider
@@ -77,7 +77,7 @@ import org.mozilla.fenix.pbmlock.registerForVerification
 import org.mozilla.fenix.pbmlock.verifyUser
 import org.mozilla.fenix.settings.biometric.DefaultBiometricUtils
 import org.mozilla.fenix.settings.biometric.ext.isAuthenticatorAvailable
-import org.mozilla.fenix.settings.biometric.ext.isHardwareAvailable
+import org.mozilla.fenix.settings.biometric.ext.isDeviceLockCapable
 import org.mozilla.fenix.share.ShareFragment
 import org.mozilla.fenix.tabgroups.AddToTabGroup
 import org.mozilla.fenix.tabgroups.CloseLastTabAndDeleteTabGroupConfirmationDialog
@@ -86,6 +86,7 @@ import org.mozilla.fenix.tabgroups.EditTabGroup
 import org.mozilla.fenix.tabgroups.ExpandedTabGroup
 import org.mozilla.fenix.tabstray.InactiveTabsBinding
 import org.mozilla.fenix.tabstray.PbmLockStatusBinding
+import org.mozilla.fenix.tabstray.TabManagerCfrController
 import org.mozilla.fenix.tabstray.TabsTrayTelemetryMiddleware
 import org.mozilla.fenix.tabstray.binding.SecureTabManagerBinding
 import org.mozilla.fenix.tabstray.controller.DefaultTabManagerController
@@ -98,12 +99,14 @@ import org.mozilla.fenix.tabstray.data.TabsTrayItem
 import org.mozilla.fenix.tabstray.navigation.TabManagerNavDestination
 import org.mozilla.fenix.tabstray.redux.action.TabGroupAction
 import org.mozilla.fenix.tabstray.redux.action.TabsTrayAction
+import org.mozilla.fenix.tabstray.redux.middleware.TabManagerUiStateStorageMiddleware
 import org.mozilla.fenix.tabstray.redux.middleware.TabSearchMiddleware
 import org.mozilla.fenix.tabstray.redux.middleware.TabSearchNavigationMiddleware
 import org.mozilla.fenix.tabstray.redux.middleware.TabStorageMiddleware
 import org.mozilla.fenix.tabstray.redux.state.Page
 import org.mozilla.fenix.tabstray.redux.state.TabsTrayState
 import org.mozilla.fenix.tabstray.redux.store.TabsTrayStore
+import org.mozilla.fenix.tabstray.repository.uistate.DefaultTabManagerUiStateRepository
 import org.mozilla.fenix.tabstray.syncedtabs.SyncedTabsIntegration
 import org.mozilla.fenix.tabstray.ui.animation.defaultPredictivePopTransitionSpec
 import org.mozilla.fenix.tabstray.ui.animation.defaultTransitionSpec
@@ -116,7 +119,6 @@ import org.mozilla.fenix.theme.ThemeManager
 import org.mozilla.fenix.trackingprotection.TrackersBlockedFeature
 import org.mozilla.fenix.utils.Settings
 import org.mozilla.fenix.utils.getSnackbarTimeout
-import kotlin.math.abs
 
 /**
  * The fullscreen fragment for displaying the tabs management UI.
@@ -126,6 +128,7 @@ class TabManagementFragment : Fragment() {
 
     private lateinit var tabManagerInteractor: TabManagerInteractor
     private lateinit var tabManagerController: TabManagerController
+    private lateinit var tabManagerCfrController: TabManagerCfrController
     private lateinit var enablePbmPinLauncher: ActivityResultLauncher<Intent>
 
     @VisibleForTesting
@@ -158,16 +161,13 @@ class TabManagementFragment : Fragment() {
                         placeAfter = placeAfter,
                     ),
                 )
-                tabsTrayStore.dispatch(
-                    TabsTrayAction.TabDragCancel,
-                )
             }
 
             override fun onDrop(sourceKey: String, targetKey: String) {
                 tabsTrayStore.dispatch(
-                    TabGroupAction.DragAndDropCompleted(
-                        sourceKey,
-                        targetKey,
+                    TabGroupAction.DragAndDropInitiated(
+                        sourceId = sourceKey,
+                        destinationId = targetKey,
                     ),
                 )
             }
@@ -196,7 +196,7 @@ class TabManagementFragment : Fragment() {
             onSuccess = {
                 PrivateBrowsingLocked.authSuccess.record()
                 PrivateBrowsingLocked.featureEnabled.record()
-                requireContext().settings().privateBrowsingModeLocked = true
+                requireComponents.settings.privateBrowsingModeLocked = true
             },
             onFailure = {
                 PrivateBrowsingLocked.authFailure.record()
@@ -219,7 +219,7 @@ class TabManagementFragment : Fragment() {
             appStore = requireComponents.appStore,
             tabsTrayStore = tabsTrayStore,
             browserStore = requireComponents.core.store,
-            settings = requireContext().settings(),
+            settings = requireComponents.settings,
             browsingModeManager = (activity as HomeActivity).browsingModeManager,
             navController = findNavController(),
             navigateToHomeAndDeleteSession = ::navigateToHomeAndDeleteSession,
@@ -228,7 +228,7 @@ class TabManagementFragment : Fragment() {
             fenixBrowserUseCases = requireComponents.useCases.fenixBrowserUseCases,
             shareUseCases = requireComponents.useCases.shareUseCases,
             closeSyncedTabsUseCases = requireComponents.useCases.closeSyncedTabsUseCases,
-            bookmarksStorage = requireComponents.core.bookmarksStorage,
+            addBookmarkUseCase = requireComponents.useCases.bookmarksUseCases.addBookmark,
             collectionStorage = requireComponents.core.tabCollectionStorage,
             showUndoSnackbarForTab = ::showUndoSnackbarForTab,
             showUndoSnackbarForInactiveTab = ::showUndoSnackbarForInactiveTab,
@@ -238,16 +238,24 @@ class TabManagementFragment : Fragment() {
             showCollectionSnackbar = ::showCollectionSnackbar,
         )
 
+        tabManagerCfrController = TabManagerCfrController(
+            settings = requireComponents.settings,
+            tabsTrayStore = tabsTrayStore,
+        )
+
         tabManagerInteractor = DefaultTabManagerInteractor(controller = tabManagerController)
 
-        val settings = requireContext().settings()
+        val settings = requireComponents.settings
         val showPrivacyReport = settings.showPrivacyReportInTabManager
 
         return content {
             val state by tabsTrayStore.stateFlow.collectAsState()
             val appState by requireComponents.appStore.stateFlow.collectAsState()
             snackbarHostState = remember { SnackbarHostState() }
-            val trackersBlockedCount = if (showPrivacyReport) appState.trackersBlockedCount else null
+            val trackersBlockedCount = when (showPrivacyReport) {
+                true -> appState.blockedTrackersState.trackersBlockedCount
+                false -> null
+            }
 
             BackHandler {
                 when {
@@ -319,8 +327,9 @@ class TabManagementFragment : Fragment() {
                         entryProvider = entryProvider {
                             entry<TabManagerNavDestination.Root> {
                                 TabsTray(
-                                    tabsTrayStore = tabsTrayStore,
+                                    state = state,
                                     snackbarHostState = snackbarHostState,
+                                    onAction = tabsTrayStore::dispatch,
                                     onTabPageClick = { page ->
                                         onTabPageClick(
                                             tabsTrayInteractor = tabManagerInteractor,
@@ -341,7 +350,13 @@ class TabManagementFragment : Fragment() {
                                             }
                                         }
                                     },
-                                    onItemLongClick = tabManagerInteractor::onTabLongClicked,
+                                    onItemLongClick = { item ->
+                                        tabsTrayStore.dispatch(
+                                            TabsTrayAction.TabItemLongClicked(
+                                                item,
+                                            ),
+                                        )
+                                    },
                                     onInactiveTabsHeaderClick =
                                         tabManagerInteractor::onInactiveTabsHeaderClicked,
                                     onDeleteAllInactiveTabsClick =
@@ -385,45 +400,29 @@ class TabManagementFragment : Fragment() {
                                         tabManagerInteractor::onForceSelectedTabsAsInactiveClicked,
                                     onTabsTrayPbmLockedClick = ::onTabsTrayPbmLockedClick,
                                     onTabsTrayPbmLockedDismiss = {
-                                        requireContext().settings().shouldShowLockPbmBanner = false
+                                        requireComponents.settings.shouldShowLockPbmBanner = false
                                         PrivateBrowsingLocked.bannerNegativeClicked.record()
                                     },
                                     onTabAutoCloseBannerViewOptionsClick = {
+                                        tabManagerCfrController.onTabAutoCloseBannerDismiss()
                                         tabManagerController.onTabSettingsClicked()
-                                        requireContext().settings().shouldShowAutoCloseTabsBanner =
-                                            false
-                                        requireContext().settings().lastCfrShownTimeInMillis =
-                                            System.currentTimeMillis()
                                     },
-                                    onTabAutoCloseBannerDismiss = {
-                                        requireContext().settings().shouldShowAutoCloseTabsBanner =
-                                            false
-                                        requireContext().settings().lastCfrShownTimeInMillis =
-                                            System.currentTimeMillis()
-                                    },
+                                    onTabAutoCloseBannerDismiss = tabManagerCfrController::onTabAutoCloseBannerDismiss,
                                     onTabAutoCloseBannerShown = {},
                                     tabInteractionHandler = tabInteractionHandler,
                                     onInactiveTabsCFRShown = {
                                         TabsTray.inactiveTabsCfrVisible.record(NoExtras())
                                     },
                                     onInactiveTabsCFRClick = {
-                                        requireContext().settings().shouldShowInactiveTabsOnboardingPopup =
-                                            false
-                                        requireContext().settings().lastCfrShownTimeInMillis =
-                                            System.currentTimeMillis()
+                                        tabManagerCfrController.onInactiveTabsCfrClick()
                                         tabManagerController.onTabSettingsClicked()
-                                        TabsTray.inactiveTabsCfrSettings.record(NoExtras())
                                     },
-                                    onInactiveTabsCFRDismiss = {
-                                        requireContext().settings().shouldShowInactiveTabsOnboardingPopup =
-                                            false
-                                        requireContext().settings().lastCfrShownTimeInMillis =
-                                            System.currentTimeMillis()
-                                        TabsTray.inactiveTabsCfrDismissed.record(NoExtras())
-                                    },
+                                    onInactiveTabsCFRDismiss = tabManagerCfrController::onInactiveTabsCfrDismiss,
                                     onTabGroupOnboardingDismiss = {
-                                        // TODO (Bug 2038234): Persistence will be handled later by the middleware.
                                         tabsTrayStore.dispatch(TabGroupAction.OnboardingDismissed)
+                                    },
+                                    onTabGroupOnboardingShown = {
+                                        tabsTrayStore.dispatch(TabGroupAction.OnboardingShown)
                                     },
                                     onOpenNewNormalTabClicked = tabManagerInteractor::onNormalTabsFabClicked,
                                     onOpenNewPrivateTabClicked = tabManagerInteractor::onPrivateTabsFabClicked,
@@ -437,7 +436,10 @@ class TabManagementFragment : Fragment() {
                             }
 
                             entry<TabManagerNavDestination.TabSearch> {
-                                TabSearchScreen(store = tabsTrayStore)
+                                TabSearchScreen(
+                                    state = state.tabSearchState,
+                                    onAction = tabsTrayStore::dispatch,
+                                )
                             }
 
                             entry<TabManagerNavDestination.ExpandedTabGroup>(
@@ -483,6 +485,7 @@ class TabManagementFragment : Fragment() {
                                             action = TabGroupAction.CloseTabGroupClicked(group = expandedGroup),
                                         )
                                     },
+                                    tabInteractionHandler = tabInteractionHandler,
                                 )
                             }
 
@@ -508,7 +511,23 @@ class TabManagementFragment : Fragment() {
                                     showBetaLabel = true,
                                 ),
                             ) {
-                                EditTabGroup(tabsTrayStore = tabsTrayStore)
+                                val formState = state.tabGroupState.formState
+                                requireNotNull(formState) {
+                                    "Form state must not be null when navigating to the edit sheet"
+                                }
+
+                                EditTabGroup(
+                                    formState = formState,
+                                    onTabGroupNameChange = { newName ->
+                                        tabsTrayStore.dispatch(TabGroupAction.NameChanged(newName))
+                                    },
+                                    onTabGroupThemeChange = { newTheme ->
+                                        tabsTrayStore.dispatch(TabGroupAction.ThemeChanged(newTheme))
+                                    },
+                                    onConfirmSave = {
+                                        tabsTrayStore.dispatch(TabGroupAction.SaveClicked)
+                                    },
+                                )
                             }
 
                             entry<TabManagerNavDestination.AddToTabGroup>(
@@ -555,7 +574,7 @@ class TabManagementFragment : Fragment() {
 
     private fun setupStore(): TabsTrayStore {
         val args by navArgs<TabManagementFragmentArgs>()
-        val settings = requireContext().settings()
+        val settings = requireComponents.settings
 
         args.accessPoint.takeIf { it != AccessPoint.None }?.let {
             TabsTray.accessPoint[it.name.lowercase()].add()
@@ -564,7 +583,10 @@ class TabManagementFragment : Fragment() {
         return storeProvider.get { restoredState ->
             TabsTrayStore(
                 initialState = restoredState?.copy(
-                    config = restoredState.config.copy(displayTabsInGrid = settings.gridTabView),
+                    config = restoredState.config.copy(
+                        displayTabsInGrid = settings.gridTabView,
+                        homepageAsNewTabEnabled = settings.enableHomepageAsNewTab,
+                    ),
                 ) ?: createInitialState(args, settings),
                 middlewares = listOf(
                     TabsTrayTelemetryMiddleware(requireComponents.nimbus.events),
@@ -577,7 +599,15 @@ class TabManagementFragment : Fragment() {
                         tabGroupRepository = requireComponents.core.tabGroupRepository,
                         removeTabsUseCase = requireComponents.useCases.tabsUseCases.removeTabs,
                         moveTabsUseCase = requireComponents.useCases.tabsUseCases.moveTabs,
+                        fenixBrowserUseCases = requireComponents.useCases.fenixBrowserUseCases,
                         mainScope = lifecycleScope,
+                    ),
+                    TabManagerUiStateStorageMiddleware(
+                        uiStateRepository = DefaultTabManagerUiStateRepository(
+                            context = requireContext().applicationContext,
+                            stateFlowScope = lifecycleScope,
+                        ),
+                        scope = lifecycleScope,
                     ),
                 ),
             )
@@ -607,7 +637,7 @@ class TabManagementFragment : Fragment() {
                 showLockBanner = shouldShowLockPbmBanner(
                     isPrivateMode = appState.mode.isPrivate,
                     hasPrivateTabs = coreState.privateTabs.isNotEmpty(),
-                    biometricAvailable = BiometricManager.from(requireContext()).isHardwareAvailable(),
+                    biometricAvailable = BiometricManager.from(requireContext()).isDeviceLockCapable(),
                     privateLockEnabled = settings.privateBrowsingModeLocked,
                     shouldShowBanner = shouldShowBanner(settings),
                 ),
@@ -616,7 +646,9 @@ class TabManagementFragment : Fragment() {
             config = TabsTrayState.TabsTrayConfig(
                 tabGroupsEnabled = settings.tabGroupsEnabled,
                 tabGroupsDragAndDropEnabled = settings.tabGroupsDragAndDropEnabled,
+                tabGroupsLiveReorderEnabled = settings.tabGroupsLiveReorderEnabled,
                 tabGroupsOnboardingEnabled = settings.tabGroupsOnboardingEnabled,
+                homepageAsNewTabEnabled = settings.enableHomepageAsNewTab,
                 displayTabsInGrid = settings.gridTabView,
                 isInDebugMode = Config.channel.isDebug || requireComponents.settings.showSecretDebugMenuThisSession,
                 showTabAutoCloseBanner = settings.shouldShowAutoCloseTabsBanner &&
@@ -632,31 +664,13 @@ class TabManagementFragment : Fragment() {
      * onTabClick() in that an animation may play prior to handling the user action.
      */
     private fun performTabClick(tab: TabsTrayItem.Tab) {
-        if (shouldConsiderShowingTabSwipeCFR()) {
-            val normalTabs = tabsTrayStore.state.normalTabsState.items
-            val currentTabId = tabsTrayStore.state.selectedTabId
-
-            if (normalTabs.size >= 2 && currentTabId != null) {
-                val currentTabPosition = getTabPositionFromId(normalTabs, currentTabId)
-                val newTabPosition = getTabPositionFromId(normalTabs, tab.id)
-
-                if (abs(currentTabPosition - newTabPosition) == 1) {
-                    requireContext().settings().shouldShowTabSwipeCFR =
-                        true
-                }
-            }
-        }
+        tabManagerCfrController.maybeMarkTabSwipeCfrReady(tab)
 
         tabManagerInteractor.onTabSelected(
             tab = tab,
             source = TAB_MANAGER_FEATURE_NAME,
         )
     }
-
-    private fun shouldConsiderShowingTabSwipeCFR(settings: Settings = requireContext().settings()) =
-        with(settings) {
-            !hasShownTabSwipeCFR && !isTabStripEnabled && isSwipeToolbarToSwitchTabsEnabled
-        }
 
     override fun onPause() {
         super.onPause()
@@ -724,7 +738,7 @@ class TabManagementFragment : Fragment() {
             view = view,
         )
 
-        if (requireContext().settings().showPrivacyReportInTabManager) {
+        if (requireComponents.settings.showPrivacyReportInTabManager) {
             trackersBlockedFeature.set(
                 feature = TrackersBlockedFeature(
                     browserStore = requireComponents.core.store,
@@ -786,7 +800,7 @@ class TabManagementFragment : Fragment() {
             snackbarHostState.displaySnackbar(
                 message = getString(R.string.snackbar_tab_closed),
                 actionLabel = getString(R.string.snackbar_deleted_undo),
-                timeout = requireContext().getSnackbarTimeout(hasAction = true),
+                timeout = requireComponents.settings.getSnackbarTimeout(hasAction = true),
                 onActionPerformed = { closeOperation.undo() },
             )
         }
@@ -805,7 +819,7 @@ class TabManagementFragment : Fragment() {
             snackbarHostState.displaySnackbar(
                 message = snackbarMessage,
                 actionLabel = getString(R.string.snackbar_deleted_undo),
-                timeout = requireContext().getSnackbarTimeout(hasAction = true),
+                timeout = requireComponents.settings.getSnackbarTimeout(hasAction = true),
                 onActionPerformed = {
                     undoUseCases.invoke()
                     runIfFragmentIsAttached {
@@ -827,7 +841,7 @@ class TabManagementFragment : Fragment() {
             snackbarHostState.displaySnackbar(
                 message = snackbarMessage,
                 actionLabel = getString(R.string.snackbar_deleted_undo),
-                timeout = requireContext().getSnackbarTimeout(hasAction = true),
+                timeout = requireComponents.settings.getSnackbarTimeout(hasAction = true),
                 onActionPerformed = {
                     requireComponents.useCases.tabsUseCases.undo.invoke()
                     tabsTrayStore.dispatch(TabsTrayAction.PageSelected(Page.NormalTabs))
@@ -849,14 +863,6 @@ class TabManagementFragment : Fragment() {
             .navigate(TabManagementFragmentDirections.actionGlobalHome())
     }
 
-    @VisibleForTesting
-    internal fun getTabPositionFromId(tabsList: List<TabsTrayItem>, tabId: String): Int {
-        tabsList.forEachIndexed { index, tab ->
-            if (tab is TabsTrayItem.Tab && tab.id == tabId) return index
-        }
-        return -1
-    }
-
     /**
      * Dismisses the Tab Manager.
      *
@@ -870,6 +876,14 @@ class TabManagementFragment : Fragment() {
         // is guaranteed after that.
         recordBreadcrumb("TabManagementFragment dismissTabManager")
         navController.popBackStack()
+
+        val shouldLockPrivateMode = requireComponents.settings.privateBrowsingLockedFeatureEnabled &&
+            !requireComponents.appStore.state.mode.isPrivate
+        if (shouldLockPrivateMode) {
+            requireComponents.appStore.dispatch(
+                AppAction.PrivateBrowsingLockAction.UpdatePrivateBrowsingLock(isLocked = true),
+            )
+        }
     }
 
     /**
@@ -896,7 +910,7 @@ class TabManagementFragment : Fragment() {
         lifecycleScope.launch {
             snackbarHostState.displaySnackbar(
                 message = getString(messageResId),
-                timeout = requireContext().getSnackbarTimeout(hasAction = false),
+                timeout = requireComponents.settings.getSnackbarTimeout(hasAction = false),
             )
         }
     }
@@ -919,7 +933,7 @@ class TabManagementFragment : Fragment() {
             snackbarHostState.displaySnackbar(
                 message = getString(displayResId, displayFolderTitle),
                 actionLabel = getString(R.string.create_collection_view),
-                timeout = requireContext().getSnackbarTimeout(hasAction = true),
+                timeout = requireComponents.settings.getSnackbarTimeout(hasAction = true),
                 onActionPerformed = {
                     findNavController().navigate(
                         TabManagementFragmentDirections.actionGlobalBookmarkFragment(BookmarkRoot.Mobile.id),
@@ -938,7 +952,7 @@ class TabManagementFragment : Fragment() {
         lifecycleScope.launch {
             snackbarHostState.displaySnackbar(
                 message = getString(R.string.inactive_tabs_auto_close_message_snackbar),
-                timeout = requireContext().getSnackbarTimeout(hasAction = false),
+                timeout = requireComponents.settings.getSnackbarTimeout(hasAction = false),
             )
         }
     }
@@ -963,8 +977,8 @@ class TabManagementFragment : Fragment() {
                     PrivateBrowsingLocked.bannerPositiveClicked.record()
                     PrivateBrowsingLocked.authSuccess.record()
                     PrivateBrowsingLocked.featureEnabled.record()
-                    requireContext().settings().privateBrowsingModeLocked = true
-                    requireContext().settings().shouldShowLockPbmBanner = false
+                    requireComponents.settings.privateBrowsingModeLocked = true
+                    requireComponents.settings.shouldShowLockPbmBanner = false
                 },
                 onAuthFailure = {
                     PrivateBrowsingLocked.authFailure.record()
@@ -1004,7 +1018,7 @@ class TabManagementFragment : Fragment() {
         mode: TabsTrayState.Mode,
         tabState: TabsTrayItem.Tab?,
     ): Boolean {
-        return requireContext().settings().tabManagerOpeningAnimationEnabled &&
+        return requireComponents.settings.tabManagerOpeningAnimationEnabled &&
             tabMatchesPage(selectedPage, tabState) &&
             mode is TabsTrayState.Mode.Normal
     }

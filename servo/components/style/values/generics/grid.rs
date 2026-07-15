@@ -7,7 +7,7 @@
 
 use crate::derives::*;
 use crate::parser::{Parse, ParserContext};
-use crate::typed_om::{NumericValue, ToTyped, TypedValue, UnitValue};
+use crate::typed_om::{NumericType, NumericValue, ToTyped, TypedValue, UnitValue};
 use crate::values::specified;
 use crate::values::{CSSFloat, CustomIdent};
 use crate::{One, Zero};
@@ -212,6 +212,23 @@ impl Parse for GridLine<specified::Integer> {
     }
 }
 
+/// The unit of a `<frequency>` value.
+pub struct FlexUnit;
+
+impl FlexUnit {
+    /// Returns whether the given string is the flex unit.
+    #[inline]
+    pub fn matches(unit: &str) -> bool {
+        unit.eq_ignore_ascii_case("fr")
+    }
+
+    /// Returns the flex unit name as a string.
+    #[inline]
+    pub fn name() -> &'static str {
+        "fr"
+    }
+}
+
 /// A CSS `<flex>` value.
 ///
 /// https://drafts.csswg.org/css-grid-2/#typedef-flex
@@ -237,15 +254,17 @@ impl ToCss for Flex {
         W: Write,
     {
         self.0.to_css(dest)?;
-        dest.write_str("fr")
+        dest.write_str(FlexUnit::name())
     }
 }
 
 impl ToTyped for Flex {
     fn to_typed(&self, dest: &mut ThinVec<TypedValue>) -> Result<(), ()> {
+        let numeric_type = NumericType::flex();
         let value = self.0;
         let unit = CssString::from("fr");
         dest.push(TypedValue::Numeric(NumericValue::Unit(UnitValue {
+            numeric_type,
             value,
             unit,
         })));

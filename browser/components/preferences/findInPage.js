@@ -25,7 +25,7 @@ customElements.define("highlightable-button", HighlightableButton, {
 });
 
 var gSearchResultsPane = {
-  /** @type {string} */
+  /** @type {?string} */
   query: undefined,
   listSearchTooltips: new Set(),
   listSearchMenuitemIndicators: new Set(),
@@ -42,6 +42,9 @@ var gSearchResultsPane = {
   subItems: new Map(),
 
   searchResultsHighlighted: false,
+  /** @type {AbortController | null} */
+  searchAbortController: null,
+  searchCompleted: true,
 
   searchableNodes: new Set([
     "button",
@@ -70,6 +73,9 @@ var gSearchResultsPane = {
 
     if (!this.searchInput.hidden) {
       this.searchInput.addEventListener("input", this);
+      document
+        .getElementById("search-results-back-button")
+        .addEventListener("click", () => this.handleSearchResultsBack());
       window.addEventListener("DOMContentLoaded", () => {
         this.searchInput.updateComplete.then(() => {
           this.searchInput.focus();
@@ -82,9 +88,17 @@ var gSearchResultsPane = {
 
   /** @param {InputEvent} event */
   async handleEvent(event) {
-    // Ensure categories are initialized if idle callback didn't run sooo enough.
+    // Ensure categories are initialized if idle callback didn't run soon enough.
     await this.initializeCategories();
     this.searchFunction(event);
+  },
+
+  async handleSearchResultsBack() {
+    await this.initializeCategories();
+    this.searchInput.value = "";
+    // Ensure Back still navigates when the query is already empty.
+    this.query = null;
+    await this.searchFunction({ target: this.searchInput });
   },
 
   /**
@@ -104,31 +118,51 @@ var gSearchResultsPane = {
     return content.toLowerCase().includes(query.toLowerCase());
   },
 
-  categoriesInitialized: false,
+  /**
+   * Becomes a Promise on the first call so concurrent callers await the
+   * same initialization rather than racing past a half-finished setup.
+   *
+   * @type {null|Promise<void>}
+   */
+  _categoriesInitialized: null,
 
   /**
    * Will attempt to initialize all uninitialized categories
    */
-  async initializeCategories() {
-    //  Initializing all the JS for all the tabs
-    if (!this.categoriesInitialized) {
-      this.categoriesInitialized = true;
-      // Each element of gCategoryInits is a name
-      for (let category of gCategoryInits.values()) {
-        category.init();
-      }
-      if (document.hasPendingL10nMutations) {
-        await new Promise(r =>
-          document.addEventListener("L10nMutationsFinished", r, { once: true })
-        );
-      }
-      queueMicrotask(() =>
-        Services.obs.notifyObservers(
-          window,
-          "preferences-MaybeCategoriesInitializedSLOW"
-        )
+  initializeCategories() {
+    if (!this._categoriesInitialized) {
+      this._categoriesInitialized = this.runCategoryInitialization();
+    }
+    return this._categoriesInitialized;
+  },
+
+  /**
+   * Runs init() on every registered category, then waits for the work that
+   * init triggers to settle: Lit-driven setting-pane / setting-group renders
+   * (so setting-controls are in the DOM) and any pending L10n mutations (so
+   * their translated text is in place) before resolving. Callers should
+   * await the returned promise before searching.
+   */
+  async runCategoryInitialization() {
+    for (let category of gCategoryInits.values()) {
+      category.init();
+    }
+    await Promise.all(
+      [...document.querySelectorAll("setting-pane, setting-group")].map(
+        el => el.updateComplete
+      )
+    );
+    if (document.hasPendingL10nMutations) {
+      await new Promise(r =>
+        document.addEventListener("L10nMutationsFinished", r, { once: true })
       );
     }
+    queueMicrotask(() =>
+      Services.obs.notifyObservers(
+        window,
+        "preferences-MaybeCategoriesInitializedSLOW"
+      )
+    );
   },
 
   /**
@@ -280,7 +314,15 @@ var gSearchResultsPane = {
       return;
     }
 
-    let subQuery = this.query && query.includes(this.query);
+    if (this.searchAbortController) {
+      this.searchAbortController.abort();
+    }
+    this.searchAbortController = new AbortController();
+    let signal = this.searchAbortController.signal;
+
+    let subQuery =
+      this.searchCompleted && this.query && query.includes(this.query);
+    this.searchCompleted = false;
     this.query = query;
 
     // If there is a query, don't reshow the existing hidden subitems yet
@@ -292,6 +334,9 @@ var gSearchResultsPane = {
     let noResultsEl = document.getElementById("no-results-message");
     if (this.query) {
       await gotoPref("paneSearchResults");
+      if (signal.aborted) {
+        return;
+      }
       srHeader.hidden = false;
 
       let resultsFound = false;
@@ -340,7 +385,7 @@ var gSearchResultsPane = {
           ts = await new Promise(resolve =>
             window.requestAnimationFrame(resolve)
           );
-          if (query !== this.query) {
+          if (signal.aborted) {
             return;
           }
         }
@@ -361,6 +406,9 @@ var gSearchResultsPane = {
           let anyGroupMatched = false;
           for (let group of groups) {
             let matched = await this.searchWithinNode(group, this.query);
+            if (signal.aborted) {
+              return;
+            }
             if (matched) {
               group.classList.remove("visually-hidden");
               anyGroupMatched = true;
@@ -371,6 +419,9 @@ var gSearchResultsPane = {
           let paneMatched = anyGroupMatched;
           if (!paneMatched) {
             paneMatched = await this.searchWithinNode(child, this.query);
+            if (signal.aborted) {
+              return;
+            }
             if (paneMatched) {
               // Pane title or pane-level content matched but no specific group
               // did. Re-query with the base selector to make sure previously
@@ -391,11 +442,18 @@ var gSearchResultsPane = {
         }
 
         if (
-          !child.classList.contains("header") &&
-          (!child.classList.contains("subcategory") ||
-            child.localName == "setting-group") &&
-          (await this.searchWithinNode(child, this.query))
+          child.classList.contains("header") ||
+          (child.classList.contains("subcategory") &&
+            child.localName !== "setting-group")
         ) {
+          child.classList.add("visually-hidden");
+          continue;
+        }
+        let childMatched = await this.searchWithinNode(child, this.query);
+        if (signal.aborted) {
+          return;
+        }
+        if (childMatched) {
           child.classList.remove("visually-hidden");
 
           // Show the preceding search-header if one exists.
@@ -434,16 +492,45 @@ var gSearchResultsPane = {
         for (let anchorNode of this.listSearchTooltips) {
           this.createSearchTooltip(anchorNode, this.query);
         }
+        // Tooltips created during the search loop above may have been positioned
+        // against an intermediate layout (e.g. while the no-results message was
+        // still visible). Now that layout has settled, reposition them all.
+        await new Promise(resolve => requestAnimationFrame(resolve));
+        if (signal.aborted) {
+          return;
+        }
+        this._recomputeTooltipPositions();
       }
     } else {
       noResultsEl.hidden = true;
       document.getElementById("sorry-message-query").textContent = "";
-      // Going back to Account and sync or General when cleared
-      let redesignEnabled = Services.prefs.getBoolPref(
-        "browser.settings-redesign.enabled"
-      );
-      let defaultPane = redesignEnabled ? "paneSync" : "paneGeneral";
-      await gotoPref(defaultPane);
+      // Return via history.back() so the previous pane's history entry is
+      // reused and FocusHistory restores focus to the search input (the
+      // element focused right before results were shown). A forward gotoPref()
+      // mints a fresh entry with no saved focus. Fall back to gotoPref() when
+      // canGoBack is false (e.g. deep-linked directly to the search pane).
+      // If the Navigation API is unavailable, prefer history.back() anyway.
+      if (window.navigation?.canGoBack ?? true) {
+        // history.back() triggers hashchange, then gotoPref(null, "Hash")
+        // asynchronously. Await paneshown so that gotoPref has fully run
+        // (visually-hidden cleared, focus restored) before we signal
+        // completion, otherwise tests that inspect or search right after
+        // PreferencesSearchCompleted("") see stale state.
+        let paneRestored = new Promise(resolve =>
+          document.addEventListener("paneshown", resolve, { once: true })
+        );
+        window.history.back();
+        await paneRestored;
+      } else {
+        let redesignEnabled = Services.prefs.getBoolPref(
+          "browser.settings-redesign.enabled"
+        );
+        let defaultPane = redesignEnabled ? "paneSync" : "paneGeneral";
+        await gotoPref(defaultPane);
+      }
+      if (signal.aborted) {
+        return;
+      }
       srHeader.hidden = true;
 
       // Hide some special second level headers in normal view
@@ -452,6 +539,7 @@ var gSearchResultsPane = {
       }
     }
 
+    this.searchCompleted = true;
     window.dispatchEvent(
       new CustomEvent("PreferencesSearchCompleted", { detail: query })
     );
@@ -476,6 +564,9 @@ var gSearchResultsPane = {
    * @param {boolean} forceSearch Allow this node to be searched.
    * @returns {Promise<boolean>}
    *    Returns true when found in at least one childNode, false otherwise
+   *
+   * Follow-up: abort is checked between searchWithinNode calls, not inside one,
+   * so a stale call already running can add duplicate ranges.
    */
   async searchWithinNode(nodeObject, searchPhrase, forceSearch = false) {
     let matchesFound = false;
@@ -663,8 +754,12 @@ var gSearchResultsPane = {
       nodeObject.getAttribute("data-hidden-from-search") !== "true"
     ) {
       result = await this.searchWithinNode(child, searchPhrase);
-      // Creating tooltips for menulist element
-      if (result && nodeObject.localName === "menulist") {
+      // Creating tooltips for menulist and moz-select elements
+      if (
+        result &&
+        (nodeObject.localName === "menulist" ||
+          nodeObject.localName === "moz-select")
+      ) {
         this.listSearchTooltips.add(nodeObject);
       }
 
@@ -808,7 +903,14 @@ var gSearchResultsPane = {
     // putting tooltips on, we have to flush layout intentionally. Once
     // menulists don't use XUL layout we can remove this and use plain CSS to
     // position them, see bug 1363730.
-    let anchorRect = anchorNode.getBoundingClientRect();
+    let positioningNode = anchorNode;
+    if (anchorNode.localName == "moz-select") {
+      // Position relative to the visible select control rather than the
+      // full-width moz-select host element so the tooltip is centered on it.
+      positioningNode =
+        anchorNode.shadowRoot?.querySelector(".select-wrapper") ?? anchorNode;
+    }
+    let anchorRect = positioningNode.getBoundingClientRect();
     let tooltipContainerRect =
       this.searchTooltipContainer.getBoundingClientRect();
     let tooltipRect = searchTooltip.getBoundingClientRect();

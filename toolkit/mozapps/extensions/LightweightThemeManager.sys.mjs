@@ -222,8 +222,15 @@ function loadDetails(details, experiment, baseURI, id, version, logger) {
 }
 
 export var LightweightThemeManager = {
+  // Bump this number whenever the shape or interpretation of the theme data
+  // changes, in order to invalidate extensions startup cache.
+  DATA_VERSION: 1,
   aiThemeData: null,
   _aiThemeDataPromise: null,
+  aiNovaThemeData: null,
+  _aiNovaThemeDataPromise: null,
+  privateThemeData: null,
+  _privateThemeDataPromise: null,
 
   async promiseAIThemeData() {
     if (this.aiThemeData) {
@@ -243,6 +250,46 @@ export var LightweightThemeManager = {
     });
 
     return this._aiThemeDataPromise;
+  },
+
+  async promiseAINovathemeData() {
+    if (this.aiNovaThemeData) {
+      return this.aiNovaThemeData;
+    }
+
+    if (this._aiNovaThemeDataPromise) {
+      return this._aiNovaThemeDataPromise;
+    }
+
+    this._aiNovaThemeDataPromise = this._fetchThemeDataFromBuiltinManifest(
+      "resource://builtin-themes/aiwindow-nova/"
+    ).then(data => {
+      this.aiNovaThemeData = data;
+      this._aiNovaThemeDataPromise = null;
+      return data;
+    });
+
+    return this._aiNovaThemeDataPromise;
+  },
+
+  async promisePrivateThemeData() {
+    if (this.privateThemeData) {
+      return this.privateThemeData;
+    }
+
+    if (this._privateThemeDataPromise) {
+      return this._privateThemeDataPromise;
+    }
+
+    this._privateThemeDataPromise = this._fetchThemeDataFromBuiltinManifest(
+      "resource://builtin-themes/privatewindow/"
+    ).then(data => {
+      this.privateThemeData = data;
+      this._privateThemeDataPromise = null;
+      return data;
+    });
+
+    return this._privateThemeDataPromise;
   },
   async _fetchThemeDataFromBuiltinManifest(baseURI) {
     let baseURIObj = Services.io.newURI(baseURI);
@@ -286,6 +333,7 @@ export var LightweightThemeManager = {
       experiment.stylesheet = baseURI.resolve(experiment.stylesheet);
     }
     let lwtData = {
+      dataVersion: this.DATA_VERSION,
       experiment,
     };
     lwtData.theme = loadDetails(
@@ -310,7 +358,7 @@ export var LightweightThemeManager = {
   },
 
   set fallbackThemeData(data) {
-    if (data && Object.getOwnPropertyNames(data).length) {
+    if (data?.dataVersion === this.DATA_VERSION) {
       _fallbackThemeData = Object.assign({}, data);
     } else {
       _fallbackThemeData = null;

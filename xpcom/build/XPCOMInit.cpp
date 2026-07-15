@@ -4,107 +4,83 @@
 
 #include "ThreadEventTarget.h"
 #include "XPCOMModule.h"
-
 #include "base/basictypes.h"
-
+#include "mozJSModuleLoader.h"
 #include "mozilla/AbstractThread.h"
 #include "mozilla/AppShutdown.h"
 #include "mozilla/Assertions.h"
 #include "mozilla/DebugOnly.h"
 #include "mozilla/SharedThreadPool.h"
 #include "mozilla/TaskController.h"
-#include "mozJSModuleLoader.h"
 #include "nsXULAppAPI.h"
 
 #ifndef ANDROID
 #  include "nsTerminator.h"
 #endif
 
-#include "nsXPCOMPrivate.h"
-#include "nsXPCOMCIDInternal.h"
-
-#include "mozilla/dom/JSExecutionManager.h"
-#include "mozilla/dom/SharedScriptCache.h"
-#include "mozilla/SharedStyleSheetCache.h"
-#include "mozilla/layers/ImageBridgeChild.h"
-#include "mozilla/layers/CompositorBridgeParent.h"
-
-#include "prlink.h"
-
-#include "nsCycleCollector.h"
-#include "nsObserverService.h"
-
-#include "nsDebugImpl.h"
-#include "nsSystemInfo.h"
-
-#include "nsComponentManager.h"
-#include "nsCategoryManagerUtils.h"
-#include "nsIServiceManager.h"
-
-#include "nsThreadManager.h"
-#include "nsThreadPool.h"
-
-#include "nsTimerImpl.h"
-#include "TimerThread.h"
-
-#include "nsThread.h"
-#include "nsVersionComparatorImpl.h"
-
-#include "nsIFile.h"
-#include "nsLocalFile.h"
-#include "nsDirectoryService.h"
-#include "nsDirectoryServiceDefs.h"
-#include "nsCategoryManager.h"
-#include "nsMultiplexInputStream.h"
-
-#include "nsAtomTable.h"
-#include "nsISupportsImpl.h"
-#include "nsLanguageAtomService.h"
-
-#include "nsSystemInfo.h"
-#include "nsMemoryReporterManager.h"
-#include "nss.h"
-#include "nsNSSComponent.h"
-
 #include <locale.h>
-#include "mozilla/Services.h"
-#include "mozilla/Omnijar.h"
-#include "mozilla/ScriptPreloader.h"
-#include "mozilla/Telemetry.h"
-#include "mozilla/BackgroundHangMonitor.h"
 
-#include "mozilla/PoisonIOInterposer.h"
-#include "mozilla/LateWriteChecks.h"
-
-#include "mozilla/scache/StartupCache.h"
-
+#include "TimerThread.h"
 #include "base/at_exit.h"
 #include "base/command_line.h"
 #include "base/message_loop.h"
-
-#include "mozilla/ipc/IOThread.h"
 #include "mozilla/AvailableMemoryTracker.h"
+#include "mozilla/BackgroundHangMonitor.h"
 #include "mozilla/ClearOnShutdown.h"
 #include "mozilla/CountingAllocatorBase.h"
+#include "mozilla/LateWriteChecks.h"
+#include "mozilla/Omnijar.h"
+#include "mozilla/PoisonIOInterposer.h"
+#include "mozilla/ScriptPreloader.h"
+#include "mozilla/Services.h"
+#include "mozilla/SharedStyleSheetCache.h"
+#include "mozilla/Telemetry.h"
+#include "mozilla/dom/JSExecutionManager.h"
+#include "mozilla/dom/SharedScriptCache.h"
+#include "mozilla/ipc/IOThread.h"
+#include "mozilla/layers/CompositorBridgeParent.h"
+#include "mozilla/layers/ImageBridgeChild.h"
+#include "mozilla/scache/StartupCache.h"
+#include "nsAtomTable.h"
+#include "nsCategoryManager.h"
+#include "nsCategoryManagerUtils.h"
+#include "nsComponentManager.h"
+#include "nsCycleCollector.h"
+#include "nsDebugImpl.h"
+#include "nsDirectoryService.h"
+#include "nsDirectoryServiceDefs.h"
+#include "nsIFile.h"
+#include "nsIServiceManager.h"
+#include "nsISupportsImpl.h"
+#include "nsLanguageAtomService.h"
+#include "nsLocalFile.h"
+#include "nsMemoryReporterManager.h"
+#include "nsMultiplexInputStream.h"
+#include "nsNSSComponent.h"
+#include "nsObserverService.h"
+#include "nsSystemInfo.h"
+#include "nsThread.h"
+#include "nsThreadManager.h"
+#include "nsThreadPool.h"
+#include "nsTimerImpl.h"
+#include "nsVersionComparatorImpl.h"
+#include "nsXPCOMCIDInternal.h"
+#include "nsXPCOMPrivate.h"
+#include "nss.h"
+#include "prlink.h"
 #ifdef MOZ_PHC
 #  include "mozilla/PHCManager.h"
 #endif
-#include "mozilla/ServoStyleConsts.h"
-
-#include "mozilla/ipc/GeckoChildProcessHost.h"
-
-#include "ogg/ogg.h"
-
 #include "GeckoProfiler.h"
 #include "ProfilerControl.h"
-
-#include "jsapi.h"
-#include "js/Initialization.h"
 #include "XPCSelfHostedShmem.h"
-
 #include "gfxPlatform.h"
-
+#include "js/Initialization.h"
+#include "jsapi.h"
 #include "mozilla/GeckoTrace.h"
+#include "mozilla/ServoStyleConsts.h"
+#include "mozilla/ipc/GeckoChildProcessHost.h"
+#include "ogg/ogg.h"
 
 using base::AtExitManager;
 using mozilla::ipc::IOThreadParent;

@@ -7,8 +7,8 @@
 #define nsFilePicker_h_
 
 #include "nsBaseFilePicker.h"
-#include "nsString.h"
 #include "nsCOMArray.h"
+#include "nsString.h"
 #include "nsTArray.h"
 
 class nsIFile;

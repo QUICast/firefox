@@ -1833,6 +1833,11 @@ static bool ParseDate(JSContext* maybecx, const CharT* s, size_t length,
       }
       size_t partLength = index - partStart;
 
+      // Reject overlong number fields.
+      if (partLength > std::numeric_limits<int>::digits10) {
+        return false;
+      }
+
       // See above for why we have to normalize U+202F.
       if (c == 0x202F) {
         c = ' ';
@@ -4955,7 +4960,7 @@ const JSClass DateObject::protoClass_ = {
 };
 
 DateObject* DateObject::createTemplateObject(JSContext* cx) {
-  return NewTenuredBuiltinClassInstance<DateObject>(cx);
+  return NewBuiltinClassInstance<DateObject>(cx, {.newKind = TenuredObject});
 }
 
 JSObject* js::NewDateObjectMsec(JSContext* cx, ClippedTime t,

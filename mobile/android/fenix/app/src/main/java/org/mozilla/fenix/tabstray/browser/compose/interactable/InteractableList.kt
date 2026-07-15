@@ -5,9 +5,9 @@
 package org.mozilla.fenix.tabstray.browser.compose.interactable
 
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.AnimationVector1D
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.scrollBy
@@ -16,11 +16,11 @@ import androidx.compose.foundation.lazy.LazyItemScope
 import androidx.compose.foundation.lazy.LazyListItemInfo
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -39,6 +39,7 @@ import kotlinx.coroutines.launch
 import org.mozilla.fenix.tabstray.browser.compose.TabItemInteractionState
 import org.mozilla.fenix.tabstray.controller.TabInteractionHandler
 import org.mozilla.fenix.tabstray.ui.tabitems.Elevation
+import org.mozilla.fenix.tabstray.ui.tabitems.defaultListItemAnimation
 import kotlin.math.abs
 import kotlin.math.pow
 
@@ -47,6 +48,7 @@ import kotlin.math.pow
  *
  * @param listState State of the list.
  * @param ignoredItems Set of keys for non-draggable items.
+ * @param liveReorderEnabled Whether reordering should happen 'live' while a drag is active.
  * @param onLongPress Callback to be invoked when long pressing an item.
  * @param tabInteractionHandler Handler for tab interactions.
  * @param dragAndDropEnabled Whether the drag and drop feature is enabled for tab groups.
@@ -55,6 +57,7 @@ import kotlin.math.pow
 fun createListInteractionState(
     listState: LazyListState,
     ignoredItems: Set<Any>,
+    liveReorderEnabled: Boolean,
     onLongPress: (LazyListItemInfo) -> Unit = {},
     tabInteractionHandler: TabInteractionHandler,
     dragAndDropEnabled: Boolean = true,
@@ -62,21 +65,85 @@ fun createListInteractionState(
     val scope = rememberCoroutineScope()
     val touchSlop = LocalViewConfiguration.current.touchSlop
     val hapticFeedback = LocalHapticFeedback.current
-    val currentLongPress by rememberUpdatedState(onLongPress)
-    val currentHandler by rememberUpdatedState(tabInteractionHandler)
-    val state = remember(listState, dragAndDropEnabled, ignoredItems) {
-        ListInteractionState(
+    val state = remember(listState) {
+        ListInteractionStateImpl(
             listState = listState,
             scope = scope,
             touchSlop = touchSlop,
             hapticFeedback = hapticFeedback,
             ignoredItems = ignoredItems,
-            onLongPress = currentLongPress,
-            tabInteractionHandler = currentHandler,
+            onLongPress = onLongPress,
+            tabInteractionHandler = tabInteractionHandler,
             dragAndDropEnabled = dragAndDropEnabled,
+            liveReorderEnabled = liveReorderEnabled,
         )
     }
     return state
+}
+
+/**
+ * Stable snapshot interface for a list's interaction state.
+ */
+@Stable
+interface ListInteractionState {
+    /** The currently dragged item.  Can be [InteractionState.List.None] */
+    val draggedItem: InteractionState.List
+
+    /** The currently hovered item.  Can be [InteractionState.List.None] */
+    val hoveredItem: InteractionState.List
+
+    /**  The [Rect] used to display a reorder placement indicator */
+    val highlightedRect: Rect?
+
+    /** The current [InteractionMode], e.g. reordering, scrolling, drag and drop */
+    val interactionMode: InteractionMode.List
+
+    /**  The previously dragged item's key */
+    val previousKeyOfDraggedItem: Any?
+
+    /** The list's orientation */
+    val orientation: Orientation
+
+    /** Cached offset used to animate the item from a cancelled drag back into place */
+    val previousItemAnimatableOffset: Animatable<Float, AnimationVector1D>
+
+    /** A tab item's size */
+    val itemSize: Int?
+
+    /**
+     * Called when a slop threshold has been exceeded to start a drag event.
+     * @param offset The offset for the drag event
+     * @param shouldLongPress Whether long press is needed to initiate a drag event
+     */
+    fun onTouchSlopPassed(offset: Float, shouldLongPress: Boolean)
+
+    /**
+     * Called when a drag event is updated.
+     * @param offset the latest offset for the drag event
+     * @param preserveSelectMode whether select mode should be preserved
+     */
+    fun onDrag(offset: Float, preserveSelectMode: Boolean)
+
+    /**
+     * Called when a drag event ends.
+     */
+    fun onDragEnd()
+
+    /**
+     * Called when a drag is cancelled, for example, when a user lets go without performing an action.
+     */
+    fun onDragCancelled()
+
+    /**
+     * Computes the offset of an item at a given index.
+     * @param index the item's index
+     */
+    fun computeItemOffset(index: Int): Float
+
+    /**
+     * Called to indicate to the list that the drop handling has been completed and the state can be reset.
+     */
+    fun reset()
 }
 
 /**
@@ -89,10 +156,11 @@ fun createListInteractionState(
  * @param ignoredItems List of keys for non-draggable items.
  * @param tabInteractionHandler Handler for tab interactions.
  * @param dragAndDropEnabled Whether the drag and drop feature is enabled for tab groups.
+ * @param liveReorderEnabled Whether reordering should happen 'live' while a drag is active.
  * @param onLongPress Optional callback to be invoked when long pressing an item.
  */
 @Suppress("LongParameterList")
-class ListInteractionState internal constructor(
+class ListInteractionStateImpl internal constructor(
     private val listState: LazyListState,
     private val scope: CoroutineScope,
     private val hapticFeedback: HapticFeedback,
@@ -100,15 +168,16 @@ class ListInteractionState internal constructor(
     private val ignoredItems: Set<Any>,
     private val tabInteractionHandler: TabInteractionHandler,
     private val dragAndDropEnabled: Boolean,
+    private val liveReorderEnabled: Boolean,
     private val onLongPress: (LazyListItemInfo) -> Unit = {},
-) {
-    internal var draggedItem by mutableStateOf<InteractionState.List>(InteractionState.List.None)
+) : ListInteractionState {
+    override var draggedItem by mutableStateOf<InteractionState.List>(InteractionState.List.None)
         private set
-    internal var hoveredItem by mutableStateOf<InteractionState.List>(InteractionState.List.None)
+    override var hoveredItem by mutableStateOf<InteractionState.List>(InteractionState.List.None)
         private set
-    internal var highlightedRect by mutableStateOf<Rect?>(null)
+    override var highlightedRect by mutableStateOf<Rect?>(null)
         private set
-    internal var interactionMode by mutableStateOf<InteractionMode.List>(InteractionMode.List.None)
+    override var interactionMode by mutableStateOf<InteractionMode.List>(InteractionMode.List.None)
         private set
 
     private var scrollJob: Job? = null
@@ -116,10 +185,17 @@ class ListInteractionState internal constructor(
     internal var moved by mutableStateOf(false)
         private set
 
-    val itemSize: Int?
+    override var previousKeyOfDraggedItem by mutableStateOf<Any?>(null)
+        private set
+    override val previousItemAnimatableOffset = Animatable(0f)
+
+    override val orientation: Orientation
+        get() = listState.layoutInfo.orientation
+
+    override val itemSize: Int?
         get() = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key !in ignoredItems }?.size
 
-    internal fun computeItemOffset(index: Int): Float {
+    override fun computeItemOffset(index: Int): Float {
         val itemAtIndex =
             listState.layoutInfo.visibleItemsInfo.firstOrNull { info -> info.index == index }
         if (itemAtIndex != null) {
@@ -128,14 +204,7 @@ class ListInteractionState internal constructor(
         return draggedItem.initialOffset + draggedItem.cumulatedOffset
     }
 
-    internal var previousKeyOfDraggedItem by mutableStateOf<Any?>(null)
-        private set
-    internal val previousItemAnimatableOffset = Animatable(0f)
-
-    internal val orientation: Orientation
-        get() = listState.layoutInfo.orientation
-
-    internal fun onTouchSlopPassed(offset: Float, shouldLongPress: Boolean) {
+    override fun onTouchSlopPassed(offset: Float, shouldLongPress: Boolean) {
         listState.findItem(offset)?.also { item ->
             val key = item.key as? String
             if (shouldLongPress) {
@@ -152,33 +221,44 @@ class ListInteractionState internal constructor(
         }
     }
 
-    internal fun onDragEnd() {
+    override fun reset() {
+        resetState()
+    }
+
+    override fun onDragEnd() {
         if (draggedItem is InteractionState.List.Active) {
             handleDragEnd(interactionMode)
         }
-        resetState()
+    }
+
+    private fun doReorder(mode: InteractionMode.List.Reordering) {
+        if (draggedItem.index == listState.firstVisibleItemIndex) {
+            itemSize?.let { height ->
+                autoScroll(height.toFloat())
+            }
+        }
+        tabInteractionHandler.onMove(
+            sourceKey = mode.source.key,
+            targetKey = mode.target.key,
+            placeAfter = mode.placeAfter,
+        )
     }
 
     private fun handleDragEnd(mode: InteractionMode.List) {
         when (mode) {
             is InteractionMode.List.DragAndDrop -> {
                 tabInteractionHandler.onDrop(
-                    mode.source.key,
-                    mode.target.key,
+                    sourceKey = mode.source.key,
+                    targetKey = mode.target.key,
                 )
             }
 
             is InteractionMode.List.Reordering -> {
-                if (draggedItem.index == listState.firstVisibleItemIndex) {
-                    itemSize?.let { height ->
-                        autoScroll(height.toFloat())
-                    }
+                if (!liveReorderEnabled) {
+                    doReorder(mode)
                 }
-                tabInteractionHandler.onMove(
-                    sourceKey = mode.source.key,
-                    targetKey = mode.target.key,
-                    placeAfter = mode.placeAfter,
-                )
+                tabInteractionHandler.onDragCancel()
+                resetState()
             }
 
             is InteractionMode.List.Scroll, is InteractionMode.List.None -> {
@@ -186,11 +266,12 @@ class ListInteractionState internal constructor(
                 if (moved) {
                     tabInteractionHandler.onDragCancel()
                 }
+                resetState()
             }
         }
     }
 
-    internal fun onDragCancelled() {
+    override fun onDragCancelled() {
         if (moved) {
             tabInteractionHandler.onDragCancel()
         }
@@ -239,7 +320,16 @@ class ListInteractionState internal constructor(
 
     private fun handleReorderingModeOnDrag(mode: InteractionMode.List.Reordering) {
         hoveredItem = InteractionState.List.None
-        highlightedRect = mode.rect
+        if (liveReorderEnabled) {
+            doReorder(mode)
+            // Update the dragged item's index as reorders happen
+            val newIndex = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == draggedItem.key }?.index ?: -1
+            if (newIndex != -1) {
+                draggedItem = draggedItem.copyWithNewIndex(newIndex)
+            }
+        } else {
+            highlightedRect = mode.rect
+        }
     }
 
     private fun handleDragAndDropModeOnDrag(mode: InteractionMode.List.DragAndDrop) {
@@ -262,7 +352,7 @@ class ListInteractionState internal constructor(
         }
     }
 
-    internal fun onDrag(offset: Float, preserveSelectMode: Boolean) {
+    override fun onDrag(offset: Float, preserveSelectMode: Boolean) {
         draggedItem = draggedItem.incrementCumulatedOffset(offset)
         if (!moved && abs(draggedItem.cumulatedOffset) > touchSlop) {
             draggedItem = draggedItem.markAsMoved()
@@ -287,6 +377,11 @@ class ListInteractionState internal constructor(
             ignoredItems = ignoredItems,
             dragAndDropEnabled = dragAndDropEnabled,
         )
+        // Debounce duplicate reorder events.
+        // Note that multiple duplicate scroll events are valid
+        if (mode == interactionMode && interactionMode is InteractionMode.List.Reordering) {
+            return
+        }
         interactionMode = mode
         when (mode) {
             is InteractionMode.List.DragAndDrop -> {
@@ -550,6 +645,7 @@ private fun findOverscroll(
  * @param state List reordering state.
  * @param key Key of the item to be displayed.
  * @param position Position in the list of the item to be displayed.
+ * @param enteringGroupId The id of the group entering composition, if any.  Can be null.
  * @param content Content of the item to be displayed.
  */
 @Composable
@@ -557,6 +653,7 @@ fun LazyItemScope.InteractableDragItemContainer(
     state: ListInteractionState,
     key: Any,
     position: Int,
+    enteringGroupId: String? = null,
     content: @Composable (tabItemInteractionState: TabItemInteractionState) -> Unit,
 ) {
     val modifier = when (key) {
@@ -590,14 +687,17 @@ fun LazyItemScope.InteractableDragItemContainer(
         else -> {
             Modifier
                 .zIndex(Elevation.NO_INTERACTION)
-                .animateItem(tween())
         }
-    }
+    }.defaultListItemAnimation(
+        lazyListItemScope = this,
+        enteringGroupId = enteringGroupId,
+    )
     Box(modifier = modifier, propagateMinConstraints = true) {
         content(
             TabItemInteractionState(
                 isHoveredByItem = key == state.hoveredItem.key,
                 isDragged = key == state.draggedItem.key,
+                isEnteringGroup = key == enteringGroupId,
             ),
         )
     }

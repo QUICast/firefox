@@ -7,6 +7,7 @@
 
 #include "js/TypeDecls.h"
 #include "mozilla/RefPtr.h"
+#include "mozilla/UniquePtr.h"
 #include "mozilla/dom/CSSMathValue.h"
 #include "mozilla/dom/CSSNumericArrayBindingFwd.h"
 #include "mozilla/dom/CSSNumericValueBindingFwd.h"
@@ -23,6 +24,9 @@ namespace mozilla {
 
 struct CSSPropertyId;
 class ErrorResult;
+template <typename T>
+class MovingNotNull;
+struct StyleMathProduct;
 
 namespace dom {
 
@@ -34,7 +38,11 @@ class Sequence;
 class CSSMathProduct final : public CSSMathValue {
  public:
   CSSMathProduct(nsCOMPtr<nsISupports> aParent,
+                 MovingNotNull<UniquePtr<StyleNumericType>> aNumericType,
                  RefPtr<CSSNumericArray> aValues);
+
+  static RefPtr<CSSMathProduct> Create(nsCOMPtr<nsISupports> aParent,
+                                       const StyleMathProduct& aMathProduct);
 
   NS_DECL_ISUPPORTS_INHERITED
   NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(CSSMathProduct, CSSMathValue)
@@ -56,6 +64,8 @@ class CSSMathProduct final : public CSSMathValue {
   void ToCssTextWithProperty(const CSSPropertyId& aPropertyId,
                              const SerializationContext& aContext,
                              nsACString& aDest) const;
+
+  StyleMathProduct ToStyleMathProduct() const;
 
  private:
   virtual ~CSSMathProduct() = default;

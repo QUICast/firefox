@@ -29,7 +29,9 @@ const lazy = XPCOMUtils.declareLazy({
   MemoryStore:
     "moz-src:///browser/components/aiwindow/services/MemoryStore.sys.mjs",
   getCachedModelsData:
-    "moz-src:///browser/components/aiwindow/ui/modules/AIWindowConstants.sys.mjs",
+    "moz-src:///browser/components/aiwindow/models/Utils.sys.mjs",
+  getModelDisplayOrder:
+    "moz-src:///browser/components/aiwindow/models/Utils.sys.mjs",
 });
 
 let previousAssistantModel = "No model";
@@ -37,6 +39,7 @@ let previousAssistantModel = "No model";
 Preferences.addAll([
   // browser.ai.control.* prefs defined in main.js
   { id: "browser.ml.chat.provider", type: "string" },
+  { id: "browser.ml.chat.shortcuts.smartwindow", type: "bool" },
   { id: "browser.smartwindow.apiKey", type: "string" },
   { id: "browser.smartwindow.enabled", type: "bool" },
   { id: "browser.smartwindow.endpoint", type: "string" },
@@ -44,7 +47,7 @@ Preferences.addAll([
   { id: "browser.smartwindow.memories.generateFromConversation", type: "bool" },
   { id: "browser.smartwindow.memories.generateFromHistory", type: "bool" },
   { id: "browser.smartwindow.model", type: "string" },
-  { id: "browser.smartwindow.preferences.endpoint", type: "string" },
+  { id: "browser.smartwindow.customEndpoint", type: "string" },
   { id: "browser.smartwindow.isDefaultWindow", type: "bool" },
   { id: "browser.smartwindow.sidebar.openByDefault", type: "bool" },
   { id: "browser.smartwindow.tos.consentTime", type: "int" },
@@ -303,10 +306,72 @@ const AI_CONTROL_OPTIONS = [
   },
 ];
 
+/**
+ * @param {string} key - Model choice ID (e.g., "1", "2", "3")
+ */
 const modelL10nArgs = key => ({
+  shortName: lazy.getCachedModelsData()[key].shortName,
   model: lazy.getCachedModelsData()[key].model,
   ownerName: lazy.getCachedModelsData()[key].ownerName,
 });
+
+// TODO Bug 2053495: remove with mistral release pref
+const MISTRAL_RELEASE_PREF = "browser.smartwindow.mistralRelease";
+
+const isMistralRelease = () =>
+  Services.prefs.getBoolPref(MISTRAL_RELEASE_PREF, false);
+
+/**
+ * Keyed by choice ID; entry order here does not matter. Radio display order is
+ * controlled by getModelDisplayOrder().
+ *
+ * TODO Bug 2053495
+ * When the mistral release pref is removed, delete MODEL_CHOICE_STRINGS and
+ * make MODEL_CHOICE_STRINGS_V2 the only set.
+ */
+/** @type {Record<string, {l10nId: string, descriptionL10nId?: string}>} */
+const MODEL_CHOICE_STRINGS = {
+  1: { l10nId: "smart-window-model-fast" },
+  2: { l10nId: "smart-window-model-flexible" },
+  3: { l10nId: "smart-window-model-personal" },
+};
+
+/** @type {Record<string, {l10nId: string, descriptionL10nId?: string}>} */
+const MODEL_CHOICE_STRINGS_V2 = {
+  1: {
+    l10nId: "smart-window-model-fast-v2",
+  },
+  2: {
+    l10nId: "smart-window-model-flexible-v2",
+  },
+  3: {
+    l10nId: "smart-window-model-personal-v2",
+  },
+};
+
+/**
+ * Builds the preset (non-custom) model radio options. Ordering comes from
+ * getModelDisplayOrder(); label and description string IDs come from the static
+ * maps above; l10n args (display values) come from the cached model data.
+ *
+ * @returns {object[]}
+ */
+const buildPresetModelOptions = () => {
+  const strings = isMistralRelease()
+    ? MODEL_CHOICE_STRINGS_V2
+    : MODEL_CHOICE_STRINGS;
+  return lazy.getModelDisplayOrder().map(choiceId => {
+    const { l10nId } = strings[choiceId];
+    const option = /** @type {Record<string, any>} */ ({
+      value: choiceId,
+      l10nId,
+      get l10nArgs() {
+        return modelL10nArgs(choiceId);
+      },
+    });
+    return option;
+  });
+};
 
 /**
  * Validates that a URL is trustworthy (HTTPS or localhost).
@@ -710,13 +775,13 @@ Preferences.addSetting({
 });
 
 Preferences.addSetting({
-  id: "smartWindowIsDefaultWindow",
-  pref: "browser.smartwindow.isDefaultWindow",
+  id: "smartCursorInSmartWindow",
+  pref: "browser.ml.chat.shortcuts.smartwindow",
 });
 
 Preferences.addSetting({
-  id: "smartWindowEndpoint",
-  pref: "browser.smartwindow.endpoint",
+  id: "smartWindowIsDefaultWindow",
+  pref: "browser.smartwindow.isDefaultWindow",
 });
 
 Preferences.addSetting({
@@ -730,8 +795,8 @@ Preferences.addSetting({
 });
 
 Preferences.addSetting({
-  id: "smartWindowPreferencesEndpoint",
-  pref: "browser.smartwindow.preferences.endpoint",
+  id: "smartWindowCustomEndpoint",
+  pref: "browser.smartwindow.customEndpoint",
 });
 
 Preferences.addSetting({
@@ -748,9 +813,22 @@ Preferences.addSetting({
     deps: [
       "smartWindowModel",
       "smartWindowFirstRunModelChoice",
-      "smartWindowEndpoint",
-      "smartWindowPreferencesEndpoint",
+      "smartWindowCustomEndpoint",
     ],
+    // TODO Bug 2053495: remove with mistral release pref.
+    setup(emitChange) {
+      const observer = () => emitChange();
+      Services.prefs.addObserver(MISTRAL_RELEASE_PREF, observer);
+      return () =>
+        Services.prefs.removeObserver(MISTRAL_RELEASE_PREF, observer);
+    },
+    getControlConfig(config) {
+      const customOption = config.options.find(option => option.value === "0");
+      return {
+        ...config,
+        options: [...buildPresetModelOptions(), customOption],
+      };
+    },
     get(_, deps) {
       if (customRadioSelected) {
         return "0";
@@ -775,21 +853,13 @@ Preferences.addSetting({
         // If the user has previously saved a custom model, switching back to
         // the custom radio re-activates that saved configuration so the form
         // reflects the active state and Save stays disabled until edited.
-        const savedEndpoint = deps.smartWindowPreferencesEndpoint.value;
-        if (savedEndpoint && prev !== "0") {
-          deps.smartWindowEndpoint.value = savedEndpoint;
+        if (deps.smartWindowCustomEndpoint.value && prev !== "0") {
           deps.smartWindowFirstRunModelChoice.value = "0";
         }
         setting.onChange();
         return;
       }
       // Switching to preset
-      const endpointEl = document.getElementById("customModelEndpoint");
-      const currentEndpoint = endpointEl?.value?.trim();
-      if (currentEndpoint) {
-        deps.smartWindowPreferencesEndpoint.value = currentEndpoint;
-      }
-      Services.prefs.clearUserPref("browser.smartwindow.endpoint");
       deps.smartWindowFirstRunModelChoice.value = value;
     },
     onUserChange(value, _) {
@@ -826,24 +896,6 @@ function getCustomModelFieldValue(id, fallback = "") {
   return field.value?.trim() ?? "";
 }
 
-function getCustomModelEndpointValue(deps) {
-  const defaultEndpoint = Services.prefs
-    .getDefaultBranch("")
-    .getStringPref("browser.smartwindow.endpoint", "");
-
-  if (
-    deps.smartWindowEndpoint.value &&
-    deps.smartWindowEndpoint.value !== defaultEndpoint
-  ) {
-    return deps.smartWindowEndpoint.value;
-  }
-
-  if (deps.smartWindowPreferencesEndpoint.value) {
-    return deps.smartWindowPreferencesEndpoint.value;
-  }
-  return "";
-}
-
 function getCustomModelFormValues(deps) {
   return {
     modelName: getCustomModelFieldValue(
@@ -852,7 +904,7 @@ function getCustomModelFormValues(deps) {
     ),
     endpoint: getCustomModelFieldValue(
       "customModelEndpoint",
-      getCustomModelEndpointValue(deps)
+      deps.smartWindowCustomEndpoint.value || ""
     ),
     authToken: getCustomModelFieldValue(
       "customModelAuthToken",
@@ -862,14 +914,11 @@ function getCustomModelFormValues(deps) {
 }
 
 function hasUnsavedCustomModelChanges(deps) {
-  // Compare each form value to what is actually saved. The endpoint reference
-  // uses getCustomModelEndpointValue because smartWindowEndpoint is cleared
-  // when the user temporarily switches to a preset radio - in that state, the
-  // last saved custom endpoint lives in smartWindowPreferencesEndpoint.
+  // Compare each form value to what is actually saved.
   const { modelName, endpoint, authToken } = getCustomModelFormValues(deps);
   return (
     modelName !== (deps.smartWindowModel.value || "") ||
-    endpoint !== getCustomModelEndpointValue(deps) ||
+    endpoint !== (deps.smartWindowCustomEndpoint.value || "") ||
     authToken !== (deps.smartWindowApiKey.value || "")
   );
 }
@@ -908,14 +957,10 @@ Preferences.addSetting({
 
 Preferences.addSetting({
   id: "customModelEndpoint",
-  deps: [
-    "smartWindowEndpoint",
-    "smartWindowPreferencesEndpoint",
-    "modelSelection",
-  ],
+  deps: ["smartWindowCustomEndpoint", "modelSelection"],
   visible: deps => deps.modelSelection.value === "0",
   get(_, deps) {
-    return getCustomModelEndpointValue(deps);
+    return deps.smartWindowCustomEndpoint.value || "";
   },
 });
 
@@ -949,9 +994,8 @@ Preferences.addSetting({
   deps: [
     "smartWindowFirstRunModelChoice",
     "smartWindowModel",
-    "smartWindowEndpoint",
     "smartWindowApiKey",
-    "smartWindowPreferencesEndpoint",
+    "smartWindowCustomEndpoint",
     "modelSelection",
     "customModelSaveRow",
   ],
@@ -966,9 +1010,8 @@ Preferences.addSetting({
   deps: [
     "smartWindowFirstRunModelChoice",
     "smartWindowModel",
-    "smartWindowEndpoint",
     "smartWindowApiKey",
-    "smartWindowPreferencesEndpoint",
+    "smartWindowCustomEndpoint",
     "modelSelection",
     "customModelSaveRow",
   ],
@@ -998,9 +1041,8 @@ Preferences.addSetting({
     // Save custom selection pref
     deps.smartWindowFirstRunModelChoice.value = "0";
     deps.smartWindowModel.value = modelName;
-    deps.smartWindowEndpoint.value = modelEndpoint;
     deps.smartWindowApiKey.value = modelAuthToken;
-    deps.smartWindowPreferencesEndpoint.value = modelEndpoint;
+    deps.smartWindowCustomEndpoint.value = modelEndpoint;
   },
 });
 
@@ -1516,6 +1558,11 @@ SettingGroupManager.registerGroups({
         l10nId: "ai-window-open-sidebar",
         control: "moz-checkbox",
       },
+      {
+        id: "smartCursorInSmartWindow",
+        l10nId: "ai-window-smart-cursor-in-smart-window",
+        control: "moz-checkbox",
+      },
     ],
   },
   assistantModelGroup: {
@@ -1527,27 +1574,7 @@ SettingGroupManager.registerGroups({
         id: "modelSelection",
         control: "moz-radio-group",
         options: [
-          {
-            value: "1",
-            l10nId: "smart-window-model-fast",
-            get l10nArgs() {
-              return modelL10nArgs("1");
-            },
-          },
-          {
-            value: "2",
-            l10nId: "smart-window-model-flexible",
-            get l10nArgs() {
-              return modelL10nArgs("2");
-            },
-          },
-          {
-            value: "3",
-            l10nId: "smart-window-model-personal",
-            get l10nArgs() {
-              return modelL10nArgs("3");
-            },
-          },
+          ...buildPresetModelOptions(),
           {
             value: "0",
             l10nId: "smart-window-model-custom",

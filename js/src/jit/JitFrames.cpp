@@ -388,6 +388,9 @@ static void OnLeaveBaselineFrame(JSContext* cx, const JSJitFrameIter& frame,
   BaselineFrame* baselineFrame = frame.baselineFrame();
   bool returnFromThisFrame = jit::DebugEpilogue(cx, baselineFrame, pc, frameOk);
   if (returnFromThisFrame) {
+    if (!baselineFrame->hasReturnValue()) {
+      baselineFrame->setReturnValue(UndefinedValue());
+    }
     rfe->kind = ExceptionResumeKind::ForcedReturnBaseline;
     rfe->framePointer = frame.fp();
     rfe->stackPointer = reinterpret_cast<uint8_t*>(baselineFrame);
@@ -1507,7 +1510,9 @@ void TraceWasmSuspendedContStacks(JSContext* cx, JSTracer* trc) {
 
   cx->wasm().contStacks().forEachAllocatedStack([trc](wasm::ContStack* stack) {
     if (stack->canResume()) {
-      stack->traceSuspended(trc);
+      // The tenuring tracer has no owning ContObject as a source; inferred
+      // ContObject to Debugger.Frame edges are only traced while marking.
+      stack->traceSuspended(trc, nullptr);
     }
   });
 }
@@ -1811,10 +1816,10 @@ Value SnapshotIterator::allocationValue(const RValueAllocation& alloc,
       return DoubleValue(fromRegister<double>(alloc.fpuReg()));
 
     case RValueAllocation::FLOAT32_REG:
-      return Float32Value(fromRegister<float>(alloc.fpuReg()));
+      return DoubleValue(fromRegister<float>(alloc.fpuReg()));
 
     case RValueAllocation::FLOAT32_STACK:
-      return Float32Value(ReadFrameFloat32Slot(fp_, alloc.stackOffset()));
+      return DoubleValue(ReadFrameFloat32Slot(fp_, alloc.stackOffset()));
 
     case RValueAllocation::TYPED_REG:
       return FromTypedPayload(alloc.knownType(), fromRegister(alloc.reg2()));
@@ -2180,7 +2185,7 @@ const RResumePoint* SnapshotIterator::resumePoint() const {
 }
 
 uint32_t SnapshotIterator::numAllocations() const {
-  return instruction()->numOperands();
+  return recover_.numOperands();
 }
 
 uint32_t SnapshotIterator::pcOffset() const {
@@ -2193,7 +2198,7 @@ ResumeMode SnapshotIterator::resumeMode() const {
 
 void SnapshotIterator::skipInstruction() {
   MOZ_ASSERT(snapshot_.numAllocationsRead() == 0);
-  size_t numOperands = instruction()->numOperands();
+  size_t numOperands = recover_.numOperands();
   for (size_t i = 0; i < numOperands; i++) {
     skip();
   }
@@ -2612,13 +2617,13 @@ uintptr_t MachineState::read(Register reg) const {
 
 template <typename T>
 T MachineState::read(FloatRegister reg) const {
-  MOZ_ASSERT(reg.size() == sizeof(T));
+  MOZ_RELEASE_ASSERT(reg.size() == sizeof(T));
 
 #if !defined(JS_CODEGEN_NONE) && !defined(JS_CODEGEN_WASM32)
   if (state_.is<BailoutState>()) {
     uint32_t offset = reg.getRegisterDumpOffsetInBytes();
-    MOZ_ASSERT((offset % sizeof(T)) == 0);
-    MOZ_ASSERT((offset + sizeof(T)) <= sizeof(RegisterDump::FPUArray));
+    MOZ_RELEASE_ASSERT((offset % sizeof(T)) == 0);
+    MOZ_RELEASE_ASSERT(offset <= sizeof(RegisterDump::FPUArray) - sizeof(T));
 
     const BailoutState& state = state_.as<BailoutState>();
     char* addr = reinterpret_cast<char*>(state.floatRegs.begin()) + offset;

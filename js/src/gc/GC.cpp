@@ -1632,6 +1632,7 @@ void GCRuntime::assertNoMarkingWork() const {
     MOZ_ASSERT(marker->isDrained());
   }
   MOZ_ASSERT(!hasDelayedMarking());
+  MOZ_ASSERT(!hasAnyDeferredWeakMaps());
 }
 #endif
 
@@ -2371,7 +2372,7 @@ void js::gc::BackgroundDecommitTask::run(AutoLockHelperThreadState& lock) {
 
       // To help minimize the total number of chunks needed over time, sort the
       // available chunks list so that we allocate into more-used chunks first.
-      for (AllZonesIter zone(gc->rt); !zone.done(); zone.next()) {
+      for (AllZonesIter zone(gc); !zone.done(); zone.next()) {
         zone->availableChunks(gcLock).sort();
       }
 
@@ -3392,6 +3393,8 @@ void GCRuntime::beginMarkPhase(AutoGCSession& session) {
   }
 
   MOZ_ASSERT(!hasDelayedMarking());
+  MOZ_ASSERT(!hasAnyDeferredWeakMaps());
+  haveAllImplicitEdges_ = true;
   for (auto& marker : markers) {
     marker->start();
   }
@@ -3742,7 +3745,9 @@ GCRuntime::MarkQueueProgress GCRuntime::processTestMarkQueue() {
       }
 
       // Mark the object.
-      if (!marker().markOneObjectForTest(obj)) {
+      bool hadDelayed = delayedMarkingWorkAdded;
+      marker().markOneObjectForTest(obj);
+      if (!hadDelayed && delayedMarkingWorkAdded) {
         // If we overflowed the stack here and delayed marking, then we won't be
         // testing what we think we're testing.
         MOZ_ASSERT(obj->asTenured().arena()->onDelayedMarkingList());
@@ -3787,6 +3792,9 @@ GCRuntime::MarkQueueProgress GCRuntime::processTestMarkQueue() {
         marker().setMarkColor(MarkColor::Black);
       } else if (js::StringEqualsLiteral(str, "unset-color")) {
         queueMarkColor.reset();
+      } else if (js::StringEqualsLiteral(str, "trace-deferred")) {
+        marker().markDeferredWeakMapChildren(
+            deferredMapsList(marker().markColor()));
       }
     }
   }
@@ -3808,6 +3816,7 @@ void GCRuntime::finishCollection() {
   assertBackgroundSweepingFinished();
 
   MOZ_ASSERT(!hasDelayedMarking());
+  MOZ_ASSERT(!hasAnyDeferredWeakMaps());
   for (size_t i = 0; i < markers.length(); i++) {
     const auto& marker = markers[i];
     marker->stop();
@@ -3853,6 +3862,7 @@ void GCRuntime::checkGCStateNotInUse() {
     MOZ_ASSERT(marker->isDrained());
   }
   MOZ_ASSERT(!hasDelayedMarking());
+  MOZ_ASSERT(!hasAnyDeferredWeakMaps());
   MOZ_ASSERT(!lastMarkSlice);
 
   MOZ_ASSERT(!disableBarriersForSweeping);
@@ -4111,6 +4121,7 @@ GCRuntime::IncrementalResult GCRuntime::resetIncrementalGC(
         marker->reset();
       }
       resetDelayedMarking();
+      resetDeferredWeakMaps();
 
       for (GCCompartmentsIter c(rt); !c.done(); c.next()) {
         resetGrayList(c);

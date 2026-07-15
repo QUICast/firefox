@@ -97,7 +97,6 @@ ml-llama-summarizer-perf:
             --hooks toolkit/components/ml/tests/tools/hooks_local_hub.py
             toolkit/components/ml/tests/browser/browser_ml_llama_summarizer_perf.js
 
-
 ml-security-perf:
     fetches:
         fetch:
@@ -367,3 +366,13 @@ perftest-accessibility:
             --flavor mochitest
             --output $MOZ_FETCHES_DIR/../artifacts
             accessible/tests/browser/performance/browser_implicitRoleARIAExpanded.js
+            && python3 python/mozperftest/mozperftest/runner.py
+            --mochitest-binary ${MOZ_FETCHES_DIR}/firefox/firefox.exe
+            --flavor mochitest
+            --output $MOZ_FETCHES_DIR/../artifacts
+            accessible/tests/browser/performance/browser_bounds.js
+            && python3 python/mozperftest/mozperftest/runner.py
+            --mochitest-binary ${MOZ_FETCHES_DIR}/firefox/firefox.exe
+            --flavor mochitest
+            --output $MOZ_FETCHES_DIR/../artifacts
+            accessible/tests/browser/performance/browser_displayContentsBounds.js

@@ -8,7 +8,6 @@
 #include "mozilla/StaticPrefs_network.h"
 // Put DNSLogging.h at the end to avoid LOG being overwritten by other headers.
 #include "DNSLogging.h"
-
 #include "nsIInputStream.h"
 
 namespace mozilla {
@@ -645,6 +644,9 @@ nsresult DNSPacket::DecodeInternal(
   LOG(("doh decode %s %d bytes\n", aHost.get(), aLen));
 
   aCname.Truncate();
+
+  // Reset any type record accumulated by a previous decode of this packet.
+  aTypeResult = mozilla::AsVariant(Nothing());
 
   if (aLen < 12) {
     LOG(("TRR bad incoming DOH, eject!\n"));

@@ -7,6 +7,7 @@ package org.mozilla.fenix.ui
 import org.junit.Rule
 import org.junit.Test
 import org.mozilla.fenix.R
+import org.mozilla.fenix.customannotations.Converted
 import org.mozilla.fenix.customannotations.SmokeTest
 import org.mozilla.fenix.helpers.Constants.defaultTopSitesList
 import org.mozilla.fenix.helpers.DataGenerationHelper.generateRandomString
@@ -40,13 +41,18 @@ class TopSitesTest {
 
     @get:Rule(order = 1)
     val composeTestRule = AndroidComposeTestRuleV2(
-        HomeActivityIntentTestRule.withDefaultSettingsOverrides(skipOnboarding = true),
+        HomeActivityIntentTestRule.withDefaultSettingsOverrides(),
     ) { it.activity }
 
     @get:Rule(order = 2)
     val memoryLeaksRule = DetectMemoryLeaksRule(composeTestRule = { composeTestRule })
 
     // TestRail link: https://mozilla.testrail.io/index.php?/cases/view/532598
+    @Converted(
+        replacedBy = ["org.mozilla.fenix.ui.efficiency.tests.ShortcutsTest#addAWebsiteAsATopSiteTest"],
+        bug = 2048243,
+        since = "2026-06",
+    )
     @SmokeTest
     @Test
     fun addAWebsiteAsATopSiteTest() {

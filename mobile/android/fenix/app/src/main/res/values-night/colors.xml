@@ -17,11 +17,11 @@
     <color name="fx_mobile_on_tertiary">@color/novaGray80</color>
     <color name="fx_mobile_tertiary_container">@color/novaVioletDesaturated90</color>
     <color name="fx_mobile_on_tertiary_container">@color/novaVioletDesaturated0</color>
-    <color name="fx_mobile_background">@color/novaGray80</color>
+    <color name="fx_mobile_background">@color/novaGray75</color>
     <color name="fx_mobile_on_background">@color/novaVioletDesaturated0</color>
-    <color name="fx_mobile_surface">@color/novaGray80</color>
+    <color name="fx_mobile_surface">@color/novaGray75</color>
     <color name="fx_mobile_on_surface">@color/novaVioletDesaturated0</color>
-    <color name="fx_mobile_surface_variant">@color/novaGray70</color>
+    <color name="fx_mobile_surface_variant">@color/novaGray65</color>
     <color name="fx_mobile_on_surface_variant">@color/novaVioletDesaturated0A70</color>
     <color name="fx_mobile_surface_inverse">@color/novaGray30</color>
     <color name="fx_mobile_on_surface_inverse">@color/novaGray80</color>
@@ -30,23 +30,28 @@
     <color name="fx_mobile_error_container">@color/novaRed70</color>
     <color name="fx_mobile_on_error_container">@color/novaVioletDesaturated0</color>
     <color name="fx_mobile_information">@color/novaBlue30</color>
+    <color name="fx_mobile_on_information">@color/novaGray80</color>
     <color name="fx_mobile_information_container">@color/novaBlue70</color>
     <color name="fx_mobile_on_information_container">@color/novaVioletDesaturated0</color>
     <color name="fx_mobile_success">@color/novaGreen30</color>
+    <color name="fx_mobile_on_success">@color/novaGray80</color>
     <color name="fx_mobile_warning">@color/novaYellow30</color>
+    <color name="fx_mobile_on_warning">@color/novaGray80</color>
     <color name="fx_mobile_warning_container">@color/novaYellow70</color>
     <color name="fx_mobile_on_warning_container">@color/novaVioletDesaturated0</color>
     <color name="fx_mobile_outline">@color/novaGray45</color>
-    <color name="fx_mobile_outline_variant">@color/novaGray65</color>
-    <color name="fx_mobile_surface_bright">@color/novaGray70</color>
-    <color name="fx_mobile_surface_dim">@color/novaGray90</color>
-    <color name="fx_mobile_surface_container">@color/novaGray80</color>
-    <color name="fx_mobile_surface_container_high">@color/novaGray75</color>
-    <color name="fx_mobile_surface_container_highest">@color/novaGray70</color>
-    <color name="fx_mobile_surface_container_low">@color/novaGray85</color>
-    <color name="fx_mobile_surface_container_lowest">@color/novaGray90</color>
+    <color name="fx_mobile_outline_variant">@color/novaGray60</color>
+    <color name="fx_mobile_surface_bright">@color/novaGray65</color>
+    <color name="fx_mobile_surface_dim">@color/novaGray85</color>
+    <color name="fx_mobile_surface_container">@color/novaGray75</color>
+    <color name="fx_mobile_surface_container_high">@color/novaGray70</color>
+    <color name="fx_mobile_surface_container_highest">@color/novaGray65</color>
+    <color name="fx_mobile_surface_container_low">@color/novaGray80</color>
+    <color name="fx_mobile_surface_container_lowest">@color/novaGray85</color>
     <color name="fx_mobile_autofill_text">@color/novaVioletDesaturated30A55</color>
     <color name="fx_mobile_selected_text">@color/novaGray45A80</color>
+    <color name="fx_mobile_icon_private">@color/novaViolet50</color>
+    <color name="fx_mobile_scrim">@color/novaBlackA50</color>
 
     <color name="fx_mobile_splashscreen_background">#210340</color>
 
@@ -57,11 +62,6 @@
     <color name="fx_mobile_layer_color_2">@color/photonDarkGrey30</color>
     <!-- Search -->
     <color name="fx_mobile_layer_color_3">@color/photonDarkGrey80</color>
-    <color name="fx_mobile_layer_color_scrim">@color/photonDarkGrey90A95</color>
-    <!-- Tooltip -->
-    <color name="fx_mobile_layer_color_gradient_start">@color/photonViolet70</color>
-    <!-- Tooltip -->
-    <color name="fx_mobile_layer_color_gradient_end">@color/photonViolet60</color>
     <!-- Warning background -->
     <color name="fx_mobile_layer_color_warning">@color/photonYellow70A77</color>
     <!-- Error background -->
@@ -89,10 +89,6 @@
     <color name="fx_mobile_icon_color_accent_pink">@color/photonPink20</color>
     <color name="fx_mobile_icon_color_accent_green">@color/photonGreen20</color>
     <color name="fx_mobile_icon_color_accent_yellow">@color/photonYellow20</color>
-
-    <!-- Border -->
-    <!-- Active tab (Nav), Selected tab, Active form -->
-    <color name="fx_mobile_border_color_accent">@color/photonViolet40</color>
 
     <!-- Normal theme colors for dark mode -->
     <color name="accent_normal_theme">@color/photonViolet50</color>
@@ -132,19 +128,5 @@
     <color name="mozac_ui_tabcounter_default_tint" tools:ignore="UnusedResources">@color/fx_mobile_on_surface</color>
     <color name="mozac_ui_tabcounter_default_text" tools:ignore="UnusedResources">@color/fx_mobile_on_surface</color>
 
-    <!-- Private Mode mask icon circle fill colors -->
-    <color name="mozac_ui_private_mode_circle_fill" tools:ignore="UnusedResources">@color/photonPurple60</color>
-
-    <!-- Account Sync Avatar fill colors -->
-    <color name="mozac_ui_avatar_warning_bg_fill_critical">@color/fx_mobile_on_surface_variant</color>
-    <color name="mozac_ui_avatar_warning_fill_critical">@color/fx_mobile_error</color>
-
-    <!-- Extensions disabled icon fill colors -->
-    <color name="mozac_ui_extensions_warning_bg_fill_critical">@color/fx_mobile_on_surface_variant</color>
-    <color name="mozac_ui_extensions_warning_fill_critical">@color/fx_mobile_error</color>
-
-    <!-- Lock slash critical fill colors for mozac_ic_lock_slash_critical_24 -->
-    <color name="mozac_ui_lock_slash_bg_fill_critical">@color/fx_mobile_on_surface_variant</color>
-    <color name="mozac_ui_lock_slash_fill_critical">@color/fx_mobile_error</color>
     <color name="preference_scroll_highlight">@color/fx_mobile_surface_container_highest</color>
 </resources>

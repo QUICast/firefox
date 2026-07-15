@@ -125,6 +125,16 @@ AnimationUtils::GetElementPseudoPair(const Element* aElementOrPseudo) {
             PseudoStyleRequest::Backdrop()};
   }
 
+  if (aElementOrPseudo->IsGeneratedContentContainerForCheckmark()) {
+    return {aElementOrPseudo->GetParent()->AsElement(),
+            PseudoStyleRequest(PseudoStyleType::Checkmark)};
+  }
+
+  if (aElementOrPseudo->IsGeneratedContentContainerForPickerIcon()) {
+    return {aElementOrPseudo->GetParent()->AsElement(),
+            PseudoStyleRequest(PseudoStyleType::PickerIcon)};
+  }
+
   const PseudoStyleType type = aElementOrPseudo->GetPseudoElementType();
   if (PseudoStyle::IsViewTransitionPseudoElement(type)) {
     // Note: ::view-transition doesn't have a name, so we check if it has a name
@@ -140,8 +150,20 @@ AnimationUtils::GetElementPseudoPair(const Element* aElementOrPseudo) {
   return {aElementOrPseudo, PseudoStyleRequest::NotPseudo()};
 }
 
+static bool IsPercentUnit(const CSSNumericValue& aValue) {
+  // TODO: this can use a bit more efficient check once it's available, see:
+  // https://drafts.css-houdini.org/css-typed-om-1/#cssnumericvalue-match
+  if (RefPtr<CSSUnitValue> asPercent =
+          aValue.To("percent"_ns, IgnoreErrors())) {
+    return true;
+  }
+  return false;
+}
+
 // https://www.w3.org/TR/css-values-4/#time-value
-static bool IsDurationUnits(const CSSNumericValue& aValue) {
+static bool IsDurationUnit(const CSSNumericValue& aValue) {
+  // TODO: this can use a bit more efficient check once it's available, see:
+  // https://drafts.css-houdini.org/css-typed-om-1/#cssnumericvalue-match
   if (RefPtr<CSSUnitValue> asMs = aValue.To("ms"_ns, IgnoreErrors())) {
     return true;
   }
@@ -165,16 +187,26 @@ bool AnimationUtils::ValidateCSSNumberishTime(const CSSNumberish& aValue,
     return false;
   }
 
-  if (aProgressBased && !isCSSNumericValue) {
-    aRv.ThrowTypeError(
-        "Setting time using absolute time values is not supported for "
-        "progress-based animations.");
-    return false;
+  if (aProgressBased) {
+    if (!isCSSNumericValue) {
+      aRv.ThrowTypeError(
+          "Setting time using absolute time values is not supported for "
+          "progress-based animations.");
+      return false;
+    }
+
+    CSSNumericValue& numeric = aValue.GetAsCSSNumericValue();
+    if (!IsPercentUnit(numeric)) {
+      aRv.ThrowTypeError(
+          "CSSNumericValue must be a percentage for progress-based "
+          "animations.");
+      return false;
+    }
   }
 
   if (!aProgressBased && isCSSNumericValue) {
     CSSNumericValue& numeric = aValue.GetAsCSSNumericValue();
-    if (!IsDurationUnits(numeric)) {
+    if (!IsDurationUnit(numeric)) {
       aRv.ThrowTypeError(
           "CSSNumericValue must be a <time> for non-progress-based "
           "animations.");
@@ -192,8 +224,8 @@ void AnimationUtils::DoubleToCSSNumberish(double aMs, bool aProgressBased,
   if (aProgressBased) {
     const double progress =
         aMs / static_cast<double>(PROGRESS_TIMELINE_DURATION_MILLISEC) * 100.0;
-    aRetVal.SetAsCSSNumericValue() =
-        MakeRefPtr<CSSUnitValue>(aGlobal, progress, "percent"_ns);
+    aRetVal.SetAsCSSNumericValue() = MakeCSSUnitValue(
+        aGlobal, StyleNumericType::Percent(), progress, "percent"_ns);
     return;
   }
   aRetVal.SetAsDouble() = aMs;

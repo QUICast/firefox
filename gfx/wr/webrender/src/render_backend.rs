@@ -573,8 +573,12 @@ impl Document {
         let mut profile = TransactionProfile::new();
         self.stamp.advance();
 
-        let mut data_stores = DataStores::default();
-        data_stores.apply_updates(txn.interner_updates, &mut profile);
+        // The offscreen scene was interned into this document's interners, so
+        // its items have already been materialized into the document data store
+        // (whose templates are immutable at frame-build time) by the combined
+        // interner-update delta applied earlier in this transaction. The frame
+        // build below simply borrows that store; the transient offscreen items
+        // are GC'd by a later end_frame once the temporary pipeline is gone.
 
         let mut spatial_tree = SpatialTree::new();
         spatial_tree.apply_updates(txn.spatial_tree_updates);
@@ -596,7 +600,7 @@ impl Document {
             self.stamp, // TODO(nical)
             self.view.scene.device_rect.min,
             &self.dynamic_properties,
-            &mut data_stores,
+            &self.data_stores,
             &mut self.scratch,
             debug_flags,
             &mut tile_caches,
@@ -1163,6 +1167,53 @@ impl RenderBackend {
                         }
 
                         return RenderBackendStatus::Continue;
+                    }
+                    #[cfg(feature = "debugger")]
+                    DebugCommand::CaptureRenderDoc(..) => {
+                        // A single-frame RenderDoc capture can't replay WebRender's
+                        // persistent caches (picture tiles, glyph atlas, image cache)
+                        // populated in earlier frames. So make the captured frame
+                        // re-render everything from scratch: clear cached resources so
+                        // glyphs/images re-rasterize and re-upload, and force a full
+                        // invalidated rebuild so all picture cache tiles re-rasterize.
+                        // Then forward the command so the renderer captures that frame.
+                        self.resource_cache.clear(ClearCache::all());
+
+                        let documents: Vec<DocumentId> = self.documents.keys()
+                            .cloned()
+                            .collect();
+                        for document_id in documents {
+                            let mut invalidation_config = false;
+                            if let Some(doc) = self.documents.get_mut(&document_id) {
+                                doc.frame_is_valid = false;
+                                invalidation_config = doc.scene.config.force_invalidation;
+                                doc.scene.config.force_invalidation = true;
+                            }
+
+                            self.update_document(
+                                document_id,
+                                Vec::default(),
+                                Vec::default(),
+                                Vec::default(),
+                                true,
+                                true,
+                                false,
+                                RenderReasons::empty(),
+                                None,
+                                true,
+                                frame_counter,
+                                false,
+                                None,
+                            );
+
+                            if let Some(doc) = self.documents.get_mut(&document_id) {
+                                doc.scene.config.force_invalidation = invalidation_config;
+                            }
+                        }
+
+                        // Forward to the renderer to arm the capture for the frame
+                        // just published by the rebuild above.
+                        ResultMsg::DebugCommand(option)
                     }
                     #[cfg(feature = "capture")]
                     DebugCommand::SaveCapture(root, bits) => {

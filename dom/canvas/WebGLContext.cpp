@@ -317,10 +317,6 @@ bool WebGLContext::CreateAndInitGL(
       // Request and prefer ES2 context for WebGL1.
       flags |= gl::CreateContextFlags::PREFER_EXACT_VERSION;
     }
-
-    if (!StaticPrefs::webgl_1_allow_core_profiles()) {
-      flags |= gl::CreateContextFlags::REQUIRE_COMPAT_PROFILE;
-    }
   }
 
   {
@@ -366,6 +362,15 @@ bool WebGLContext::CreateAndInitGL(
       PR_GetEnv("MOZ_WEBGL_FORCE_OPENGL") || useEGL) {
     tryNativeGL = true;
     tryANGLE = false;
+  }
+#elif defined(XP_MACOSX)
+  if (gfx::gfxVars::AllowMetalAngleWebGL() &&
+      !StaticPrefs::webgl_disable_angle() &&
+      // Metal does not expose a software renderer. Fall back to native (CGL) if
+      // a hardware context is forbidden.
+      !(flags & gl::CreateContextFlags::FORBID_HARDWARE)) {
+    tryNativeGL = false;
+    tryANGLE = true;
   }
 #endif
 

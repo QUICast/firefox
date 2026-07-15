@@ -5,19 +5,17 @@
 #ifndef GFX_DWRITEFONTLIST_H
 #define GFX_DWRITEFONTLIST_H
 
-#include "mozilla/FontPropertyTypes.h"
-#include "mozilla/MemoryReporting.h"
-#include "gfxDWriteCommon.h"
-#include "dwrite_3.h"
-
-#include "gfxFont.h"
-#include "gfxUserFontSet.h"
-#include "cairo-win32.h"
-
-#include "gfxPlatformFontList.h"
-#include "gfxPlatform.h"
 #include <algorithm>
 
+#include "cairo-win32.h"
+#include "dwrite_3.h"
+#include "gfxDWriteCommon.h"
+#include "gfxFont.h"
+#include "gfxPlatform.h"
+#include "gfxPlatformFontList.h"
+#include "gfxUserFontSet.h"
+#include "mozilla/FontPropertyTypes.h"
+#include "mozilla/MemoryReporting.h"
 #include "mozilla/gfx/UnscaledFontDWrite.h"
 
 /**
@@ -177,8 +175,6 @@ class gfxDWriteFontEntry final : public gfxFontEntry {
 
   gfxFontEntry* Clone() const override;
 
-  virtual ~gfxDWriteFontEntry();
-
   hb_blob_t* GetFontTable(uint32_t aTableTag) override;
 
   nsresult ReadCMAP(FontInfoData* aFontInfoData = nullptr) override;
@@ -205,6 +201,9 @@ class gfxDWriteFontEntry final : public gfxFontEntry {
   friend class gfxDWriteFont;
   friend class gfxDWriteFontList;
   friend class gfxDWriteFontFamily;
+
+  // Protected destructor, to discourage deletion outside of Release():
+  virtual ~gfxDWriteFontEntry();
 
   virtual nsresult CopyFontTable(uint32_t aTableTag,
                                  nsTArray<uint8_t>& aBuffer) override;
@@ -374,10 +373,10 @@ class gfxDWriteFontList final : public gfxPlatformFontList {
 
   FontVisibility GetVisibilityForFamily(const nsACString& aName) const;
 
-  gfxFontFamily* CreateFontFamily(const nsACString& aName,
-                                  FontVisibility aVisibility) const override;
+  already_AddRefed<gfxFontFamily> CreateFontFamily(
+      const nsACString& aName, FontVisibility aVisibility) const override;
 
-  gfxFontEntry* CreateFontEntry(
+  already_AddRefed<gfxFontEntry> CreateFontEntry(
       mozilla::fontlist::Face* aFace,
       const mozilla::fontlist::Family* aFamily) override;
 
@@ -394,18 +393,15 @@ class gfxDWriteFontList final : public gfxPlatformFontList {
       nsTArray<mozilla::fontlist::Face::InitData>& aFaces,
       bool aLoadCmaps) const override;
 
-  gfxFontEntry* LookupLocalFont(FontVisibilityProvider* aFontVisibilityProvider,
-                                const nsACString& aFontName,
-                                WeightRange aWeightForEntry,
-                                StretchRange aStretchForEntry,
-                                SlantStyleRange aStyleForEntry) override;
+  already_AddRefed<gfxFontEntry> LookupLocalFont(
+      FontVisibilityProvider* aFontVisibilityProvider,
+      const nsACString& aFontName, WeightRange aWeightForEntry,
+      StretchRange aStretchForEntry, SlantStyleRange aStyleForEntry) override;
 
-  gfxFontEntry* MakePlatformFont(const nsACString& aFontName,
-                                 WeightRange aWeightForEntry,
-                                 StretchRange aStretchForEntry,
-                                 SlantStyleRange aStyleForEntry,
-                                 const uint8_t* aFontData,
-                                 uint32_t aLength) override;
+  already_AddRefed<gfxFontEntry> MakePlatformFont(
+      const nsACString& aFontName, WeightRange aWeightForEntry,
+      StretchRange aStretchForEntry, SlantStyleRange aStyleForEntry,
+      const uint8_t* aFontData, uint32_t aLength) override;
 
   IDWriteGdiInterop* GetGDIInterop() { return mGDIInterop; }
   bool UseGDIFontTableAccess() const;

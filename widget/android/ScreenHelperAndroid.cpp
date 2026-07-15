@@ -3,15 +3,15 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "ScreenHelperAndroid.h"
-#include "AndroidRect.h"
-#include "nsThreadUtils.h"
 
 #include <mozilla/jni/Refs.h>
 
+#include "AndroidRect.h"
 #include "AndroidVsync.h"
 #include "mozilla/java/GeckoAppShellWrappers.h"
 #include "mozilla/java/ScreenManagerHelperNatives.h"
 #include "mozilla/widget/ScreenManager.h"
+#include "nsThreadUtils.h"
 #include "nsXULAppAPI.h"
 
 using namespace mozilla;
@@ -43,8 +43,7 @@ static already_AddRefed<Screen> MakePrimaryScreen() {
   return MakeAndAddRef<Screen>(
       bounds, bounds, depth, depth, refreshRate,
       DesktopToLayoutDeviceScale(density), CSSToLayoutDeviceScale(1.0f), dpi,
-      Screen::IsPseudoDisplay::No, Screen::IsHDR(isHDR), Screen::IsHDR(isHDR),
-      orientation, angle);
+      Screen::IsPseudoDisplay::No, Screen::IsHDR(isHDR), orientation, angle);
 }
 
 ScreenHelperAndroid::ScreenHelperAndroid() {

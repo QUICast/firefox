@@ -3,34 +3,40 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "nsIWinTaskbar.h"
 #include "WinTaskbar.h"
-#include "TaskbarPreview.h"
-#include "nsITaskbarPreviewController.h"
 
-#include "mozilla/RefPtr.h"
-#include "mozilla/widget/JumpListBuilder.h"
-#include <nsError.h>
+#include <io.h>
 #include <nsCOMPtr.h>
-#include <nsIWidget.h>
+#include <nsError.h>
 #include <nsIBaseWindow.h>
+#include <nsIWidget.h>
 #include <nsServiceManagerUtils.h>
-#include "nsIXULAppInfo.h"
-#include "nsWindow.h"
-#include "WinUtils.h"
+#include <propkey.h>
+#include <propvarutil.h>
+#include <shellapi.h>
+
+#include "TaskbarPreview.h"
 #include "TaskbarTabPreview.h"
 #include "TaskbarWindowPreview.h"
-#include "nsWidgetsCID.h"
-#include "nsPIDOMWindow.h"
-#include "nsAppDirectoryServiceDefs.h"
+#include "WinUtils.h"
 #include "mozilla/Preferences.h"
-#include "nsAppRunner.h"
-#include "nsXREDirProvider.h"
+#include "mozilla/RefPtr.h"
+#include "mozilla/ScopeExit.h"
+#include "mozilla/SimpleEnumerator.h"
+#include "mozilla/StaticPtr.h"
+#include "mozilla/widget/JumpListBuilder.h"
 #include "mozilla/widget/WinRegistry.h"
-#include <io.h>
-#include <propvarutil.h>
-#include <propkey.h>
-#include <shellapi.h>
+#include "nsAppDirectoryServiceDefs.h"
+#include "nsAppRunner.h"
+#include "nsITaskbarPreviewController.h"
+#include "nsIWinTaskbar.h"
+#include "nsIWindowMediator.h"
+#include "nsIXULAppInfo.h"
+#include "nsPIDOMWindow.h"
+#include "nsPIDOMWindowInlines.h"
+#include "nsWidgetsCID.h"
+#include "nsWindow.h"
+#include "nsXREDirProvider.h"
 
 namespace {
 
@@ -50,6 +56,26 @@ HWND GetHWNDFromDOMWindow(mozIDOMWindow* dw) {
 
   nsCOMPtr<nsPIDOMWindowInner> window = nsPIDOMWindowInner::From(dw);
   return GetHWNDFromDocShell(window->GetDocShell());
+}
+
+static bool GetWindowAumid(HWND aHwnd, nsAString& aAumid) {
+  RefPtr<IPropertyStore> propStore;
+  if (FAILED(SHGetPropertyStoreForWindow(aHwnd, IID_IPropertyStore,
+                                         getter_AddRefs(propStore)))) {
+    return false;
+  }
+
+  PROPVARIANT pv;
+  PropVariantInit(&pv);
+  auto cleanup = mozilla::MakeScopeExit([&] { PropVariantClear(&pv); });
+
+  if (FAILED(propStore->GetValue(PKEY_AppUserModel_ID, &pv)) ||
+      pv.vt != VT_LPWSTR) {
+    // No window-specific AUMID here, I guess.
+    return false;
+  }
+  aAumid.Assign(char16ptr_t(pv.pwszVal));
+  return true;
 }
 
 nsresult SetWindowAppUserModelProp(mozIDOMWindow* aParent,
@@ -457,6 +483,51 @@ WinTaskbar::PrepareFullScreen(void* aHWND, bool aFullScreen) {
   HRESULT hr = mTaskbar->MarkFullscreenWindow((HWND)aHWND, aFullScreen);
   if (FAILED(hr)) {
     return NS_ERROR_UNEXPECTED;
+  }
+
+  return NS_OK;
+}
+
+static uint16_t sProcessIconOverrideResId = 0;
+
+uint16_t WinTaskbar::GetWindowIconOverride() {
+  MOZ_ASSERT(NS_IsMainThread());
+  return sProcessIconOverrideResId;
+}
+
+NS_IMETHODIMP
+WinTaskbar::SetAllWindowIcons(uint16_t aIconResourceId) {
+  MOZ_ASSERT(NS_IsMainThread());
+
+  sProcessIconOverrideResId = aIconResourceId;
+
+  nsAutoString expectedAumid;
+  GetAppUserModelID(expectedAumid, /* aPrivateBrowsing */ false);
+
+  nsCOMPtr<nsIWindowMediator> wm = do_GetService(NS_WINDOWMEDIATOR_CONTRACTID);
+  if (!wm) {
+    return NS_ERROR_FAILURE;
+  }
+
+  nsCOMPtr<nsISimpleEnumerator> windows;
+  if (NS_FAILED(wm->GetEnumerator(nullptr, getter_AddRefs(windows)))) {
+    return NS_ERROR_FAILURE;
+  }
+
+  for (const auto& outer : SimpleEnumerator<nsPIDOMWindowOuter>(windows)) {
+    HWND hwnd = GetHWNDFromDocShell(outer->GetDocShell());
+    if (!hwnd) {
+      continue;
+    }
+    RefPtr<nsWindow> win = WinUtils::GetNSWindowPtr(hwnd);
+    if (!win) {
+      continue;
+    }
+    nsAutoString windowAumid;
+    if (GetWindowAumid(hwnd, windowAumid) &&
+        windowAumid.Equals(expectedAumid)) {
+      win->SetIconFromExeResource(aIconResourceId);
+    }
   }
 
   return NS_OK;

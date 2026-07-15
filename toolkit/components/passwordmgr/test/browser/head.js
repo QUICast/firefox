@@ -188,18 +188,15 @@ async function getFormSubmitResponseResult(
   { username = "#user", password = "#pass" } = {}
 ) {
   // default selectors are for the response page produced by formsubmit.sjs
-  // TODO: Switch to SpecialPowers.spawn
-  // eslint-disable-next-line mozilla/reject-contenttask-spawn
-  let fieldValues = await ContentTask.spawn(
+  if (!new URL(browser.currentURI.spec).pathname.endsWith(resultURL)) {
+    await BrowserTestUtils.browserLoaded(browser, false, url => {
+      return new URL(url).pathname.endsWith(resultURL);
+    });
+  }
+  let fieldValues = await SpecialPowers.spawn(
     browser,
-    { resultURL, usernameSelector: username, passwordSelector: password },
-    async function ({ resultURL, usernameSelector, passwordSelector }) {
-      await ContentTaskUtils.waitForCondition(() => {
-        return (
-          content.location.pathname.endsWith(resultURL) &&
-          content.document.readyState == "complete"
-        );
-      }, `Wait for form submission load (${resultURL})`);
+    [username, password],
+    (usernameSelector, passwordSelector) => {
       let username =
         content.document.querySelector(usernameSelector).textContent;
       // Bug 1686071: Since generated passwords can have special characters in them,
@@ -485,7 +482,7 @@ async function clearMessageCache(browser) {
  * @param {string} password The password.
  */
 async function checkDoorhangerUsernamePassword(username, password) {
-  await BrowserTestUtils.waitForCondition(() => {
+  await TestUtils.waitForCondition(() => {
     return (
       document.getElementById("password-notification-username").value ==
         username &&
@@ -558,25 +555,7 @@ async function updateDoorhangerInputValues(
  *                 Noop if `text` is falsy.
  */
 async function selectDoorhangerUsername(text) {
-  await _selectDoorhanger(
-    text,
-    "#password-notification-username",
-    "#password-notification-username-dropmarker"
-  );
-}
-
-/**
- * Open doorhanger autocomplete popup and select a password value.
- *
- * @param {string} text the text value of the password that should be selected.
- *                 Noop if `text` is falsy.
- */
-async function selectDoorhangerPassword(text) {
-  await _selectDoorhanger(
-    text,
-    "#password-notification-password",
-    "#password-notification-password-dropmarker"
-  );
+  await _selectDoorhanger(text, "#password-notification-username", null);
 }
 
 async function _selectDoorhanger(text, inputSelector, dropmarkerSelector) {
@@ -587,7 +566,9 @@ async function _selectDoorhanger(text, inputSelector, dropmarkerSelector) {
   info("Opening doorhanger suggestion popup");
 
   let doorhangerPopup = document.getElementById("password-notification");
-  let dropmarker = doorhangerPopup.querySelector(dropmarkerSelector);
+  let dropmarker = dropmarkerSelector
+    ? doorhangerPopup.querySelector(dropmarkerSelector)
+    : doorhangerPopup.querySelector(inputSelector).dropmarkerEl;
 
   let autocompletePopup = document.getElementById("PopupAutoComplete");
   let popupShown = BrowserTestUtils.waitForEvent(
@@ -607,9 +588,9 @@ async function _selectDoorhanger(text, inputSelector, dropmarkerSelector) {
       .getElementsByTagName("richlistitem"),
   ].filter(richlistitem => !richlistitem.collapsed);
 
-  let suggestionText = suggestions.map(
-    richlistitem => richlistitem.querySelector(".ac-title-text").innerHTML
-  );
+  let suggestionText = suggestions.map(richlistitem => {
+    return richlistitem.querySelector("autocomplete-row-item").label;
+  });
 
   let targetIndex = suggestionText.indexOf(text);
   Assert.notEqual(targetIndex, -1, "Suggestions include expected text");

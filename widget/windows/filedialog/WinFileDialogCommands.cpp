@@ -4,10 +4,12 @@
 
 #include "mozilla/widget/filedialog/WinFileDialogCommands.h"
 
-#include <type_traits>
 #include <shobjidl.h>
 #include <shtypes.h>
 #include <winerror.h>
+
+#include <type_traits>
+
 #include "WinUtils.h"
 #include "mozilla/Logging.h"
 #include "mozilla/RefPtr.h"

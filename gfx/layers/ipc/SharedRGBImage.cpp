@@ -3,21 +3,22 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "SharedRGBImage.h"
+
 #include "ImageTypes.h"         // for ImageFormat::SHARED_RGB, etc
-#include "mozilla/ipc/Shmem.h"  // for Shmem
 #include "gfx2DGlue.h"          // for ImageFormatToSurfaceFormat, etc
 #include "gfxPlatform.h"        // for gfxPlatform, gfxImageFormat
 #include "mozilla/gfx/Point.h"  // for IntSIze
+#include "mozilla/ipc/Shmem.h"  // for Shmem
 #include "mozilla/layers/BufferTexture.h"
 #include "mozilla/layers/ISurfaceAllocator.h"  // for ISurfaceAllocator, etc
+#include "mozilla/layers/ImageBridgeChild.h"   // for ImageBridgeChild
 #include "mozilla/layers/ImageClient.h"        // for ImageClient
 #include "mozilla/layers/LayersSurfaces.h"     // for SurfaceDescriptor, etc
 #include "mozilla/layers/TextureClient.h"      // for BufferTextureClient, etc
 #include "mozilla/layers/TextureClientRecycleAllocator.h"  // for ITextureClientAllocationHelper
-#include "mozilla/layers/ImageBridgeChild.h"  // for ImageBridgeChild
-#include "mozilla/mozalloc.h"                 // for operator delete, etc
-#include "nsDebug.h"                          // for NS_WARNING, NS_ASSERTION
-#include "nsISupportsImpl.h"                  // for Image::AddRef, etc
+#include "mozilla/mozalloc.h"  // for operator delete, etc
+#include "nsDebug.h"           // for NS_WARNING, NS_ASSERTION
+#include "nsISupportsImpl.h"   // for Image::AddRef, etc
 #include "nsProxyRelease.h"
 #include "nsRect.h"  // for mozilla::gfx::IntRect
 

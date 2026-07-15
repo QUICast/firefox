@@ -21,6 +21,88 @@ newtab-personalize-dialog-label =
 newtab-logo-and-wordmark =
     .aria-label = { -brand-full-name }
 
+## Strings for "Homepage" and "Firefox Home" sections of about:settings#home.
+## Homepage panel
+
+home-homepage-new-tabs =
+    .label = Jaunas cilnes
+
+## Firefox Home content
+
+# Variables:
+#   $num (number) - Number of rows displayed
+home-prefs-sections-rows-option-srd =
+    .label =
+        { $num ->
+            [zero] { $num } rindu
+            [one] { $num } rinda
+           *[other] { $num } rindas
+        }
+home-restore-defaults-srd =
+    .label = Atjaunot noklusējumus
+    .accesskey = n
+home-mode-choice-default-fx-srd =
+    .label = { -firefox-home-brand-name } (noklusējuma)
+home-mode-choice-custom-srd =
+    .label = Pielāgotas adreses...
+home-mode-choice-blank-srd =
+    .label = Tukša lapa
+home-prefs-shortcuts-header-srd =
+    .label = Saīsnes
+home-prefs-shortcuts-select =
+    .aria-label = Saīsnes
+home-prefs-shortcuts-by-option-sponsored-srd =
+    .label = Sponsorētās saīsnes
+home-prefs-recommended-by-option-sponsored-stories-srd =
+    .label = Sponsorētie stāsti
+home-prefs-highlights-option-visited-pages-srd =
+    .label = Apmeklētās lapas
+home-prefs-highlights-options-bookmarks-srd =
+    .label = Grāmatzīmes
+home-prefs-highlights-option-most-recent-download-srd =
+    .label = Nesenās lejupielādes
+home-prefs-recent-activity-header-srd =
+    .label = Nesenās aktivitātes
+home-prefs-recent-activity-select =
+    .aria-label = Nesenās aktivitātes
+home-prefs-weather-header-srd =
+    .label = Laikapstākļi
+
+## Strings for the Stocks widget
+
+# "Stocks widget options" is an icon-only button in the widget toolbar — the
+# attributes are consumed as tooltip/screen-reader label only. The button
+# never renders visible text.
+newtab-stocks-widget-menu-button =
+    .title = Akciju logrīka opcijas
+    .aria-label = Akciju logrīka opcijas
+# Heading for the Stocks widget.
+newtab-stocks-widget-title = Akcijas
+
+## Screen-reader summary of a stock ticker.
+## Variables:
+##   $name (String) - the full fund/ETF name, e.g. "SPDR S&P 500 ETF Trust".
+##   $change (String) - the day's percentage change, e.g. "+2.1%".
+##   $price (String) - the last price, e.g. "$559.44".
+
+# Stock increased (went up) during the day
+newtab-stocks-ticker-status-up = { $name }, { $change } augšup, { $price }
+# Stock decreased (went down) during the day
+newtab-stocks-ticker-status-down = { $name }, { $change } lejup, { $price }
+# Stock didn't change during the day
+newtab-stocks-ticker-status-flat = { $name }, bez izmaiņām, { $change }, { $price }
+
+## Strings for the Picture of the Day widget
+
+# Attribution line shown under the title once a picture loads: an author
+# credit, a link to the picture's source page, and a link to its license.
+# "©" is the copyright symbol.
+# $author (string) - the name of the image's author.
+newtab-picture-attribution-author = © { $author }
+# Link to the picture's source page (its Wikimedia Commons file page).
+# "Wikimedia Commons" is a brand name and should not be translated.
+newtab-picture-attribution-source-link = Wikimedia Commons
+
 ## Search box component.
 
 # "Search" is a verb/action
@@ -123,6 +205,8 @@ newtab-menu-about-fakespot = Par { -fakespot-brand-name }
 # Context menu option to personalize New Tab recommended stories by blocking a section of stories,
 # e.g. "Sports". "Block" is a verb here.
 newtab-menu-section-block = Bloķēt
+# Context menu option to open a support page explaining the New Tab personalization features and privacy controls.
+newtab-menu-section-learn-more = Uzzināt vairāk
 # "Follow", "unfollow", and "following" are social media terms that refer to subscribing to or unsubscribing from a section of stories.
 # e.g. Following the travel section of stories.
 newtab-menu-section-unfollow = Pārtraukt sekot tēmai

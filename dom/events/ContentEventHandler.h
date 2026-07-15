@@ -178,6 +178,18 @@ class MOZ_STACK_CLASS ContentEventHandler {
   SimpleRange mFirstSelectedSimpleRange;
   RefPtr<Element> mRootElement;
 
+  dom::EditContext* GetEditContext() const {
+    MOZ_ASSERT(mRootElement);
+    if (MOZ_LIKELY(!mRootElement->HasFlag(ELEMENT_HAS_EDIT_CONTEXT))) {
+      return nullptr;
+    }
+    auto* htmlElement = nsGenericHTMLElement::FromNode(mRootElement);
+    MOZ_ASSERT(htmlElement);
+    dom::EditContext* editContext = htmlElement->GetEditContext();
+    MOZ_ASSERT(editContext);
+    return editContext;
+  }
+
   MOZ_CAN_RUN_SCRIPT nsresult Init(WidgetQueryContentEvent* aEvent);
   MOZ_CAN_RUN_SCRIPT nsresult Init(WidgetSelectionEvent* aEvent);
 
@@ -187,13 +199,15 @@ class MOZ_STACK_CLASS ContentEventHandler {
              SelectionType aSelectionType = SelectionType::eNormal,
              bool aRequireFlush = true);
   /**
-   * InitRootContent() computes the root content of current focused editor.
+   * InitRootContent() initializes mRootElement and return the first selection
+   * range in it.
    *
    * @param aNormalSelection    This must be a Selection instance whose type is
    *                            SelectionType::eNormal.
+   * @return The first valid range of aNormalSelection.
    */
-  MOZ_CAN_RUN_SCRIPT nsresult
-  InitRootContent(const Selection& aNormalSelection);
+  MOZ_CAN_RUN_SCRIPT Result<nsRange*, nsresult> InitRootContent(
+      const Selection& aNormalSelection);
 
  public:
   // FlatText means the text that is generated from DOM tree. The BR elements

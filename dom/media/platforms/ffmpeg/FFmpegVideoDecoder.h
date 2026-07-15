@@ -16,6 +16,9 @@
 #include "nsTHashMap.h"
 #if defined(MOZ_USE_HWDECODE) && defined(MOZ_WIDGET_GTK)
 #  include "FFmpegVideoFramePool.h"
+#  if LIBAVCODEC_VERSION_MAJOR >= 60 && !defined(FFVPX_VERSION)
+#    include "VulkanDeviceHolder.h"
+#  endif
 #endif
 #include "libavutil/pixfmt.h"
 #if LIBAVCODEC_VERSION_MAJOR < 54
@@ -57,8 +60,9 @@ struct AVFrame;
 
 namespace mozilla {
 namespace layers {
+class AndroidImageReader;
 class BufferRecycleBin;
-}
+}  // namespace layers
 
 #ifdef CUSTOMIZED_BUFFER_ALLOCATION_ASSERT_ENABLED
 class ImageBufferTracker;
@@ -235,9 +239,13 @@ class FFmpegVideoDecoder<LIBAV_VER>
   void ReleaseFramesMediaCodec();
   int32_t mTextureAlignment;
   AVBufferRef* mMediaCodecDeviceContext = nullptr;
-  java::GeckoSurface::GlobalRef mSurface;
+  // Only used for the SurfaceTexture case
+  java::GeckoSurface::GlobalRef mSurfaceTextureSurface;
+  // Only used for the ImageReader case
+  java::sdk::Surface::GlobalRef mImageReaderSurface;
   AndroidSurfaceTextureHandle mSurfaceHandle{};
   SimpleMap<void*, AVFrame*, ThreadSafePolicy> mFrameMap;
+  RefPtr<layers::AndroidImageReader> mAndroidImageReader;
 #endif
 
 #if defined(MOZ_USE_HWDECODE) && defined(MOZ_WIDGET_GTK)
@@ -281,6 +289,7 @@ class FFmpegVideoDecoder<LIBAV_VER>
   AVBufferRef* mVAAPIDeviceContext = nullptr;
   AVBufferRef* mVulkanDeviceContext = nullptr;
 #  if LIBAVCODEC_VERSION_MAJOR >= 60 && !defined(FFVPX_VERSION)
+  RefPtr<VulkanDeviceHolder> mVulkanDeviceHolder;
   FFmpegVulkanVideoDecoder mVulkanDecoder;
   VkImageDrmFormatModifierListCreateInfoEXT mVulkanDrmModifierList = {};
   VkImageFormatListCreateInfo mVulkanImageFormatList = {};

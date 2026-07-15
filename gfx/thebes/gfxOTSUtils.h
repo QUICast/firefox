@@ -6,7 +6,7 @@
 #define GFX_OTS_UTILS_H
 
 #include "gfxFontUtils.h"
-
+#include "mozilla/StaticPrefs_gfx.h"
 #include "opentype-sanitiser.h"
 
 struct gfxOTSMozAlloc {

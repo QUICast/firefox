@@ -4,33 +4,28 @@
 
 #include "gfxFontEntry.h"
 
-#include "mozilla/FontPropertyTypes.h"
+#include <algorithm>
 
-#include "mozilla/Logging.h"
-
-#include "gfxTextRun.h"
-#include "gfxPlatform.h"
-
-#include "gfxTypes.h"
+#include "COLRFonts.h"
+#include "ThebesRLBox.h"
 #include "gfxContext.h"
 #include "gfxGraphiteShaper.h"
 #include "gfxHarfBuzzShaper.h"
-#include "gfxUserFontSet.h"
+#include "gfxPlatform.h"
 #include "gfxPlatformFontList.h"
+#include "gfxSVGGlyphs.h"
+#include "gfxTextRun.h"
+#include "gfxTypes.h"
+#include "gfxUserFontSet.h"
+#include "graphite2/Font.h"
+#include "harfbuzz/hb-ot.h"
+#include "harfbuzz/hb.h"
+#include "mozilla/FontPropertyTypes.h"
 #include "mozilla/Likely.h"
+#include "mozilla/Logging.h"
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/ProfilerLabels.h"
 #include "mozilla/StaticPrefs_layout.h"
-#include "gfxSVGGlyphs.h"
-#include "COLRFonts.h"
-
-#include "harfbuzz/hb.h"
-#include "harfbuzz/hb-ot.h"
-#include "graphite2/Font.h"
-
-#include "ThebesRLBox.h"
-
-#include <algorithm>
 
 using namespace mozilla;
 using namespace mozilla::gfx;
@@ -111,8 +106,6 @@ gfxFontEntry::~gfxFontEntry() {
   MOZ_ASSERT(!mGrFaceInitialized);
 }
 
-// Only used during initialization, before any other thread has a chance to see
-// the entry, so locking not required.
 void gfxFontEntry::InitializeFrom(fontlist::Face* aFace,
                                   const fontlist::Family* aFamily) {
   mShmemFace = aFace;
@@ -123,7 +116,12 @@ void gfxFontEntry::InitializeFrom(fontlist::Face* aFace,
   mFixedPitch = aFace->mFixedPitch;
   mIsBadUnderlineFont = aFamily->IsBadUnderlineFamily();
   auto* list = gfxPlatformFontList::PlatformFontList()->SharedFontList();
+  // This method is only used during initialization, before any other thread
+  // has a chance to see the entry, so although mFamilyName is "guarded" by
+  // mLock, locking is not required here.
+  MOZ_PUSH_IGNORE_THREAD_SAFETY
   mFamilyName = aFamily->DisplayName().AsString(list);
+  MOZ_POP_THREAD_SAFETY
   mHasCmapTable = TrySetShmemCharacterMap();
 }
 
@@ -308,10 +306,11 @@ bool gfxFontEntry::GetSVGGlyphExtents(DrawTarget* aDrawTarget,
 }
 
 void gfxFontEntry::RenderSVGGlyph(gfxContext* aContext, uint32_t aGlyphId,
-                                  SVGContextPaint* aContextPaint) {
+                                  SVGContextPaint* aContextPaint,
+                                  imgDrawingParams& aImgParams) {
   MOZ_ASSERT(mSVGInitialized,
              "SVG data has not yet been loaded. TryGetSVGData() first.");
-  GetSVGGlyphs()->RenderGlyph(aContext, aGlyphId, aContextPaint);
+  GetSVGGlyphs()->RenderGlyph(aContext, aGlyphId, aContextPaint, aImgParams);
 }
 
 bool gfxFontEntry::TryGetSVGData(const gfxFont* aFont) {

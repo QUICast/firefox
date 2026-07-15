@@ -968,7 +968,8 @@ class nsFlexContainerFrame::FlexLine final {
   explicit FlexLine(nscoord aMainGapSize) : mMainGapSize(aMainGapSize) {}
 
   nscoord SumOfGaps() const {
-    return NumItems() > 0 ? (NumItems() - 1) * mMainGapSize : 0;
+    return mNumNonCollapsedItems ? (mNumNonCollapsedItems - 1) * mMainGapSize
+                                 : 0;
   }
 
   // Returns the sum of our FlexItems' outer hypothetical main sizes plus the
@@ -1016,14 +1017,17 @@ class nsFlexContainerFrame::FlexLine final {
       mNumFrozenItems++;
     }
 
+    // If the item added was not the first non-collapsed item in the line,
+    // we add in any gap space as needed.
+    if (!lastItem.IsStrut()) {
+      if (mNumNonCollapsedItems) {
+        mTotalOuterHypotheticalMainSize += mMainGapSize;
+      }
+      mNumNonCollapsedItems++;
+    }
+
     mTotalItemMBP += lastItem.MarginBorderPaddingSizeInMainAxis();
     mTotalOuterHypotheticalMainSize += lastItem.OuterMainSize();
-
-    // If the item added was not the first item in the line, we add in any gap
-    // space as needed.
-    if (NumItems() >= 2) {
-      mTotalOuterHypotheticalMainSize += mMainGapSize;
-    }
   }
 
   // Computes the cross-size and baseline position of this FlexLine, based on
@@ -1114,6 +1118,8 @@ class nsFlexContainerFrame::FlexLine final {
   // Mostly used for optimization purposes, e.g. to bail out early from loops
   // when we can tell they have nothing left to do.
   uint32_t mNumFrozenItems = 0;
+  // Number of items that are not collapsed.
+  uint32_t mNumNonCollapsedItems = 0;
 
   // Sum of margin/border/padding for the FlexItems in this FlexLine.
   nscoord mTotalItemMBP = 0;
@@ -2073,6 +2079,7 @@ const CachedBAxisMeasurement& nsFlexContainerFrame::MeasureBSizeForFlexItem(
               aChildReflowInput, outerWM, dummyPosition, dummyContainerSize,
               flags, childStatus);
   aItem.SetHadMeasuringReflow();
+  MaybePropagateRelativeBSizeFlagFrom(aItem);
 
   // We always use unconstrained available block-size to measure flex items,
   // which means they should always complete.
@@ -4536,7 +4543,13 @@ void FlexLine::PositionItemsInMainAxis(
     nscoord aContentBoxMainSize, const FlexboxAxisTracker& aAxisTracker) {
   MainAxisPositionTracker mainAxisPosnTracker(
       aAxisTracker, this, aJustifyContent, aContentBoxMainSize);
+  bool hadItemBefore = false;
   for (FlexItem& item : Items()) {
+    const bool strut = item.IsStrut();
+    if (hadItemBefore && !strut) {
+      mainAxisPosnTracker.TraverseGap(mMainGapSize);
+    }
+
     nscoord itemMainBorderBoxSize =
         item.MainSize() + item.BorderPaddingSizeInMainAxis();
 
@@ -4553,9 +4566,7 @@ void FlexLine::PositionItemsInMainAxis(
     mainAxisPosnTracker.ExitChildFrame(itemMainBorderBoxSize);
     mainAxisPosnTracker.ExitMargin(item.Margin());
     mainAxisPosnTracker.TraversePackingSpace();
-    if (&item != &Items().LastElement()) {
-      mainAxisPosnTracker.TraverseGap(mMainGapSize);
-    }
+    hadItemBefore |= !strut;
   }
 }
 
@@ -4624,6 +4635,8 @@ void nsFlexContainerFrame::Reflow(nsPresContext* aPresContext,
                                   ReflowOutput& aReflowOutput,
                                   const ReflowInput& aReflowInput,
                                   nsReflowStatus& aStatus) {
+  NormalizeChildLists();
+
   if (IsHiddenByContentVisibilityOfInFlowParentForLayout()) {
     return;
   }
@@ -4643,8 +4656,6 @@ void nsFlexContainerFrame::Reflow(nsPresContext* aPresContext,
     return;
   }
 
-  NormalizeChildLists();
-
 #ifdef DEBUG
   mDidPushItemsBitMayLie = false;
   SanityCheckChildListsBeforeReflow();
@@ -4654,7 +4665,9 @@ void nsFlexContainerFrame::Reflow(nsPresContext* aPresContext,
   // a percent-bsize, or if we're positioned and we have "block-start" and
   // "block-end" set and have block-size:auto.  (There are actually other cases,
   // too -- e.g. if our parent is itself a block-dir flex container and we're
-  // flexible -- but we'll let our ancestors handle those sorts of cases.)
+  // flexible -- but we'll let our ancestors handle those sorts of cases, by
+  // by propagating the bsize dependency through
+  // `MaybePropagateRelativeBSizeFlagFrom`)
   //
   // TODO(emilio): the !bsize.IsLengthPercentage() preserves behavior, but it's
   // too conservative. min/max-content don't really depend on the container.
@@ -6492,8 +6505,6 @@ nscoord nsFlexContainerFrame::ComputeIntrinsicISize(
                                                     NS_UNCONSTRAINEDSIZE);
   }
 
-  const bool useMozBoxCollapseBehavior =
-      StyleVisibility()->UseLegacyCollapseBehavior();
   const bool isSingleLine = IsSingleLine(this, stylePos);
   const auto flexWM = GetWritingMode();
 
@@ -6507,10 +6518,8 @@ nscoord nsFlexContainerFrame::ComputeIntrinsicISize(
       continue;
     }
 
-    if (useMozBoxCollapseBehavior &&
-        childFrame->StyleVisibility()->IsCollapse()) {
-      // If we're using legacy "visibility:collapse" behavior, then we don't
-      // care about the sizes of any collapsed children.
+    if (childFrame->StyleVisibility()->IsCollapse()) {
+      // If we're collapsed, we don't take space in the main axis.
       continue;
     }
 
@@ -6723,4 +6732,31 @@ nsFlexContainerFrame::FindFrameAt(int32_t aLineNumber, nsPoint aPos,
   }
   finder.Finish(aFrameFound, aPosIsBeforeFirstFrame, aPosIsAfterLastFrame);
   return NS_OK;
+}
+
+void nsFlexContainerFrame::MaybePropagateRelativeBSizeFlagFrom(
+    const FlexItem& aItem) {
+  const auto* itemFrame = aItem.Frame();
+  if (!itemFrame->HasAnyStateBits(NS_FRAME_CONTAINS_RELATIVE_BSIZE)) {
+    return;
+  }
+
+  if (HasAnyStateBits(NS_FRAME_CONTAINS_RELATIVE_BSIZE) || !IsFlexItem()) {
+    // No additional action required, `NeedsFinalReflow` should handle it
+    // correctly.
+    return;
+  }
+
+  if (!aItem.TreatBSizeAsIndefinite()) {
+    // The item's block-size is already definite, so its descendants with
+    // relative block-size won't depend on our block-size becoming definite
+    // from our parent's final reflow.
+    return;
+  }
+
+  // At this point, our block size may become definite from our parent flex
+  // container's final reflow. However, parent container will not examine our
+  // children for `NS_FRAME_CONTAINS_RELATIVE_BSIZE`, so we need propagate it
+  // up the chain.
+  AddStateBits(NS_FRAME_CONTAINS_RELATIVE_BSIZE);
 }

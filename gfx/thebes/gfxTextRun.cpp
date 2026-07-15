@@ -4,6 +4,8 @@
 
 #include "gfxTextRun.h"
 
+#include "SharedFontList-impl.h"
+#include "TextDrawTarget.h"
 #include "gfx2DGlue.h"
 #include "gfxContext.h"
 #include "gfxFontConstants.h"
@@ -13,6 +15,13 @@
 #include "gfxPlatformFontList.h"
 #include "gfxUserFontSet.h"
 #include "mozilla/ClearOnShutdown.h"
+#include "mozilla/Likely.h"
+#include "mozilla/MruCache.h"
+#include "mozilla/ServoStyleSet.h"
+#include "mozilla/Sprintf.h"
+#include "mozilla/StaticPresData.h"
+#include "mozilla/UniquePtr.h"
+#include "mozilla/Utf16.h"
 #include "mozilla/dom/WorkerCommon.h"
 #include "mozilla/gfx/2D.h"
 #include "mozilla/gfx/Logging.h"  // for gfxCriticalError
@@ -20,18 +29,10 @@
 #include "mozilla/intl/Locale.h"
 #include "mozilla/intl/String.h"
 #include "mozilla/intl/UnicodeProperties.h"
-#include "mozilla/Likely.h"
-#include "mozilla/MruCache.h"
-#include "mozilla/ServoStyleSet.h"
-#include "mozilla/Sprintf.h"
-#include "mozilla/StaticPresData.h"
-#include "mozilla/UniquePtr.h"
 #include "nsLayoutUtils.h"
 #include "nsStyleConsts.h"
 #include "nsStyleUtil.h"
 #include "nsUnicodeProperties.h"
-#include "SharedFontList-impl.h"
-#include "TextDrawTarget.h"
 
 #ifdef XP_WIN
 #  include "gfxWindowsPlatform.h"
@@ -243,17 +244,20 @@ gfxTextRun::LigatureData gfxTextRun::ComputeLigatureData(
   LigatureData result;
   const CompressedGlyph* charGlyphs = mCharacterGlyphs;
 
-  uint32_t i;
-  for (i = aPartRange.start; !charGlyphs[i].IsLigatureGroupStart(); --i) {
-    NS_ASSERTION(i > 0, "Ligature at the start of the run??");
+  uint32_t i = aPartRange.start;
+  while (i && !charGlyphs[i].IsLigatureGroupStart()) {
+    --i;
   }
+  NS_ASSERTION(charGlyphs[i].IsLigatureGroupStart(), "Ligature at run start?");
   result.mRange.start = i;
+
   for (i = aPartRange.start + 1;
        i < GetLength() && !charGlyphs[i].IsLigatureGroupStart(); ++i) {
   }
   result.mRange.end = i;
 
-  int32_t ligatureWidth = GetAdvanceForGlyphs(result.mRange);
+  int32_t ligatureWidth = GetAdvanceForGlyphs(
+      result.mRange, aProvider ? aProvider->LetterSpacing() : 0);
   // Count the number of started clusters we have seen
   uint32_t totalClusterCount = 0;
   uint32_t partClusterIndex = 0;
@@ -324,10 +328,11 @@ gfxFloat gfxTextRun::ComputePartialLigatureWidth(
   return data.mPartWidth;
 }
 
-int32_t gfxTextRun::GetAdvanceForGlyphs(Range aRange) const {
+int32_t gfxTextRun::GetAdvanceForGlyphs(Range aRange,
+                                        nscoord aLetterSpacing) const {
   int32_t advance = 0;
   for (auto i = aRange.start; i < aRange.end; ++i) {
-    advance += GetAdvanceForGlyph(i);
+    advance += GetAdvanceForGlyph(i, aLetterSpacing);
   }
   return advance;
 }
@@ -410,12 +415,14 @@ bool gfxTextRun::ShrinkToLigatureBoundaries(Range* aRange) const {
 void gfxTextRun::DrawGlyphs(gfxFont* aFont, Range aRange, gfx::Point* aPt,
                             const PropertyProvider* aProvider,
                             Range aSpacingRange, TextRunDrawParams& aParams,
+                            imgDrawingParams& aImgParams,
                             gfx::ShapedTextFlags aOrientation) const {
   AutoTArray<PropertyProvider::Spacing, 200> spacingBuffer;
   bool haveSpacing =
       GetAdjustedSpacingArray(aRange, aProvider, aSpacingRange, &spacingBuffer);
   aParams.spacing = haveSpacing ? spacingBuffer.Elements() : nullptr;
-  aFont->Draw(this, aRange.start, aRange.end, aPt, aParams, aOrientation);
+  aFont->Draw(this, aRange.start, aRange.end, aPt, aParams, aImgParams,
+              aOrientation);
 }
 
 static void ClipPartialLigature(const gfxTextRun* aTextRun, gfxFloat* aStart,
@@ -443,6 +450,7 @@ void gfxTextRun::DrawPartialLigature(gfxFont* aFont, Range aRange,
                                      gfx::Point* aPt,
                                      const PropertyProvider* aProvider,
                                      TextRunDrawParams& aParams,
+                                     imgDrawingParams& aImgParams,
                                      gfx::ShapedTextFlags aOrientation) const {
   if (aRange.start >= aRange.end) {
     return;
@@ -485,7 +493,8 @@ void gfxTextRun::DrawPartialLigature(gfxFont* aFont, Range aRange,
     pt = Point(aPt->x - aParams.direction * data.mPartAdvance, aPt->y);
   }
 
-  DrawGlyphs(aFont, data.mRange, &pt, aProvider, aRange, aParams, aOrientation);
+  DrawGlyphs(aFont, data.mRange, &pt, aProvider, aRange, aParams, aImgParams,
+             aOrientation);
 
   if (aParams.isVerticalRun) {
     aPt->y += aParams.direction * data.mPartWidth;
@@ -541,7 +550,8 @@ struct MOZ_STACK_CLASS BufferAlphaColor {
 };
 
 void gfxTextRun::Draw(const Range aRange, const gfx::Point aPt,
-                      const DrawParams& aParams) const {
+                      const DrawParams& aParams,
+                      imgDrawingParams& aImgParams) const {
   NS_ASSERTION(aRange.end <= GetLength(), "Substring out of range");
   NS_ASSERTION(aParams.drawMode == DrawMode::GLYPH_PATH ||
                    !(aParams.drawMode & DrawMode::GLYPH_PATH),
@@ -619,6 +629,8 @@ void gfxTextRun::Draw(const Range aRange, const gfx::Point aPt,
     params.clipRect = textDrawer->GeckoClipRect();
   }
   params.allowGDI = aParams.allowGDI;
+  params.letterSpacing =
+      aParams.provider ? aParams.provider->LetterSpacing() : 0;
 
   gfxFloat advance = 0.0;
   gfx::Point pt = aPt;
@@ -663,16 +675,16 @@ void gfxTextRun::Draw(const Range aRange, const gfx::Point aPt,
 
     if (drawPartial) {
       DrawPartialLigature(font, Range(runRange.start, ligatureRange.start), &pt,
-                          aParams.provider, params,
+                          aParams.provider, params, aImgParams,
                           iter.GlyphRun()->mOrientation);
     }
 
     DrawGlyphs(font, ligatureRange, &pt, aParams.provider, ligatureRange,
-               params, iter.GlyphRun()->mOrientation);
+               params, aImgParams, iter.GlyphRun()->mOrientation);
 
     if (drawPartial) {
       DrawPartialLigature(font, Range(ligatureRange.end, runRange.end), &pt,
-                          aParams.provider, params,
+                          aParams.provider, params, aImgParams,
                           iter.GlyphRun()->mOrientation);
     }
 
@@ -697,7 +709,8 @@ void gfxTextRun::Draw(const Range aRange, const gfx::Point aPt,
 void gfxTextRun::DrawEmphasisMarks(
     gfxContext* aContext, gfxTextRun* aMark, gfxFloat aMarkAdvance,
     gfx::Point aPt, Range aRange, const PropertyProvider* aProvider,
-    mozilla::gfx::PaletteCache& aPaletteCache) const {
+    mozilla::gfx::PaletteCache& aPaletteCache,
+    mozilla::image::imgDrawingParams& aImgParams) const {
   MOZ_ASSERT(aRange.end <= GetLength());
 
   EmphasisMarkDrawParams params(aContext, aPaletteCache);
@@ -727,7 +740,7 @@ void gfxTextRun::DrawEmphasisMarks(
                                                ligatureRange, &spacingBuffer);
     params.spacing = haveSpacing ? spacingBuffer.Elements() : nullptr;
     font->DrawEmphasisMarks(this, &aPt, ligatureRange.start,
-                            ligatureRange.Length(), params);
+                            ligatureRange.Length(), params, aImgParams);
 
     if (adjusted) {
       inlineCoord += direction * ComputePartialLigatureWidth(
@@ -746,7 +759,8 @@ void gfxTextRun::AccumulateMetricsForRun(
       GetAdjustedSpacingArray(aRange, aProvider, aSpacingRange, &spacingBuffer);
   Metrics metrics = aFont->Measure(
       this, aRange.start, aRange.end, aBoundingBoxType, aRefDrawTarget,
-      haveSpacing ? spacingBuffer.Elements() : nullptr, aOrientation);
+      haveSpacing ? spacingBuffer.Elements() : nullptr,
+      aProvider ? aProvider->LetterSpacing() : 0, aOrientation);
   aMetrics->CombineWith(metrics, IsRightToLeft());
 }
 
@@ -831,7 +845,7 @@ void gfxTextRun::GetLineHeightMetrics(Range aRange, gfxFloat& aAscent,
     gfxFont* font = iter.GlyphRun()->mFont;
     auto metrics =
         font->Measure(this, 0, 0, gfxFont::LOOSE_INK_EXTENTS, nullptr, nullptr,
-                      iter.GlyphRun()->mOrientation);
+                      0, iter.GlyphRun()->mOrientation);
     accumulatedMetrics.CombineWith(metrics, false);
   }
   aAscent = accumulatedMetrics.mAscent;
@@ -930,14 +944,22 @@ uint32_t gfxTextRun::BreakAndMeasureText(
   AutoTArray<HyphenType, 4096> hyphenBuffer;
   HyphenationState wordState;
   wordState.mostRecentBoundary = aStart;
+  // GetHyphensOption() is a virtual call returning a value that is constant
+  // for the whole measurement, so fetch it once instead of on every use.
+  const StyleHyphens hyphensOption = aProvider.GetHyphensOption();
+  // Hyphenation data is only consulted in the break-detection block below,
+  // which is skipped entirely when all breaks are suppressed. In that case we
+  // avoid fetching and classifying hyphenation data (which can involve per-word
+  // dictionary lookups) since it would never be used.
   bool haveHyphenation =
-      (aProvider.GetHyphensOption() == StyleHyphens::Auto ||
-       (aProvider.GetHyphensOption() == StyleHyphens::Manual &&
+      aSuppressBreak != eSuppressAllBreaks &&
+      (hyphensOption == StyleHyphens::Auto ||
+       (hyphensOption == StyleHyphens::Manual &&
         !!(mFlags & gfx::ShapedTextFlags::TEXT_ENABLE_HYPHEN_BREAKS)));
   if (haveHyphenation) {
     if (hyphenBuffer.AppendElements(bufferRange.Length(), fallible)) {
       aProvider.GetHyphenationBreaks(bufferRange, hyphenBuffer.Elements());
-      if (aProvider.GetHyphensOption() == StyleHyphens::Auto) {
+      if (hyphensOption == StyleHyphens::Auto) {
         ClassifyAutoHyphenations(aStart, bufferRange, hyphenBuffer, &wordState);
       }
     } else {
@@ -966,6 +988,15 @@ uint32_t gfxTextRun::BreakAndMeasureText(
   Range ligatureRange(aStart, end);
   ShrinkToLigatureBoundaries(&ligatureRange);
 
+  // Cache the glyph array pointer in a local so the compiler doesn't reload
+  // the member on every iteration across the calls made in the loop below;
+  // it does not change while we're measuring.
+  const CompressedGlyph* charGlyphs = mCharacterGlyphs;
+
+  // LetterSpacing() is a virtual call returning a value that is constant for
+  // the whole measurement, so hoist it out of the per-character loop.
+  const nscoord letterSpacing = aProvider.LetterSpacing();
+
   // We may need to move `i` backwards in the following loop, and re-scan
   // part of the textrun; we'll use `rescanLimit` so we can tell when that
   // is happening: if `i < rescanLimit` then we're rescanning.
@@ -993,7 +1024,7 @@ uint32_t gfxTextRun::BreakAndMeasureText(
         if (hyphenBuffer.AppendElements(bufferRange.Length(), fallible)) {
           aProvider.GetHyphenationBreaks(
               bufferRange, hyphenBuffer.Elements() + oldHyphenBufferLength);
-          if (aProvider.GetHyphensOption() == StyleHyphens::Auto) {
+          if (hyphensOption == StyleHyphens::Auto) {
             uint32_t prevMostRecentWordBoundary = wordState.mostRecentBoundary;
             ClassifyAutoHyphenations(aStart, bufferRange, hyphenBuffer,
                                      &wordState);
@@ -1019,7 +1050,7 @@ uint32_t gfxTextRun::BreakAndMeasureText(
     // would trigger an infinite loop.
     if (aSuppressBreak != eSuppressAllBreaks &&
         (aSuppressBreak != eSuppressInitialBreak || i > aStart)) {
-      bool atNaturalBreak = mCharacterGlyphs[i].CanBreakBefore() ==
+      bool atNaturalBreak = charGlyphs[i].CanBreakBefore() ==
                             CompressedGlyph::FLAG_BREAK_TYPE_NORMAL;
       // atHyphenationBreak indicates we're at a "soft" hyphen, where an extra
       // hyphen glyph will need to be painted. It is NOT set for breaks at an
@@ -1037,15 +1068,15 @@ uint32_t gfxTextRun::BreakAndMeasureText(
       bool wordWrapping =
           (aCanWordWrap ||
            (aCanWhitespaceWrap &&
-            mCharacterGlyphs[i].CanBreakBefore() ==
+            charGlyphs[i].CanBreakBefore() ==
                 CompressedGlyph::FLAG_BREAK_TYPE_EMERGENCY_WRAP)) &&
-          mCharacterGlyphs[i].IsClusterStart() &&
+          charGlyphs[i].IsClusterStart() &&
           aBreakPriority <= gfxBreakPriority::eWordWrapBreak;
 
       bool whitespaceWrapping = false;
       if (i > aStart) {
         // The spec says the breaking opportunity is *after* whitespace.
-        auto const& g = mCharacterGlyphs[i - 1];
+        auto const& g = charGlyphs[i - 1];
         whitespaceWrapping =
             aIsBreakSpaces &&
             (g.CharIsSpace() || g.CharIsTab() || g.CharIsNewline());
@@ -1107,7 +1138,7 @@ uint32_t gfxTextRun::BreakAndMeasureText(
 
     gfxFloat charAdvance;
     if (i >= ligatureRange.start && i < ligatureRange.end) {
-      charAdvance = GetAdvanceForGlyphs(Range(i, i + 1));
+      charAdvance = GetAdvanceForGlyph(i, letterSpacing);
       if (haveSpacing) {
         PropertyProvider::Spacing* space =
             &spacingBuffer[i - bufferRange.start];
@@ -1119,7 +1150,7 @@ uint32_t gfxTextRun::BreakAndMeasureText(
 
     advance += charAdvance;
     if (aOutTrimmableWhitespace) {
-      if (mCharacterGlyphs[i].CharIsSpace()) {
+      if (charGlyphs[i].CharIsSpace()) {
         ++trimmableChars;
         trimmableAdvance += charAdvance;
       } else {
@@ -1219,10 +1250,13 @@ gfxFloat gfxTextRun::GetAdvanceWidth(
     }
   }
 
-  return result + GetAdvanceForGlyphs(ligatureRange);
+  return result +
+         GetAdvanceForGlyphs(ligatureRange,
+                             aProvider ? aProvider->LetterSpacing() : 0);
 }
 
-gfxFloat gfxTextRun::GetMinAdvanceWidth(Range aRange) const {
+gfxFloat gfxTextRun::GetMinAdvanceWidth(Range aRange,
+                                        nscoord aLetterSpacing) const {
   MOZ_ASSERT(aRange.end <= GetLength(), "Substring out of range");
 
   Range ligatureRange = aRange;
@@ -1245,7 +1279,7 @@ gfxFloat gfxTextRun::GetMinAdvanceWidth(Range aRange) const {
       // result. That is, don't consider a space can be in its own line.
       continue;
     }
-    clusterAdvance += GetAdvanceForGlyph(i);
+    clusterAdvance += GetAdvanceForGlyph(i, aLetterSpacing);
     if (i + 1 == ligatureRange.end || IsClusterStart(i + 1)) {
       result = std::max(result, clusterAdvance);
       clusterAdvance = 0;
@@ -1398,8 +1432,8 @@ void gfxTextRun::SanitizeGlyphRuns() {
     // ligature glyphs from wrong font (seen with U+FEFF in reftest 474417-1, as
     // Core Text eliminates the glyph, which makes it appear as if a ligature
     // has been formed)
-    while (charGlyphs[aRun.mCharacterOffset].IsLigatureContinuation() &&
-           aRun.mCharacterOffset < GetLength()) {
+    while (aRun.mCharacterOffset < GetLength() &&
+           charGlyphs[aRun.mCharacterOffset].IsLigatureContinuation()) {
       aRun.mCharacterOffset++;
     }
 
@@ -2049,24 +2083,27 @@ already_AddRefed<gfxFont> gfxFontGroup::GetFontAt(uint32_t i, uint32_t aCh,
 
   RefPtr<gfxFont> font = ff.Font();
   if (!font) {
-    gfxFontEntry* fe = ff.FontEntry();
+    RefPtr<gfxFontEntry> fe = ff.FontEntry();
     if (!fe) {
       return nullptr;
     }
-    gfxCharacterMap* unicodeRangeMap = nullptr;
+    RefPtr<gfxCharacterMap> unicodeRangeMap;
     if (fe->mIsUserFontContainer) {
-      gfxUserFontEntry* ufe = static_cast<gfxUserFontEntry*>(fe);
+      // This raw pointer is OK because fe holds a strong ref to the object.
+      gfxUserFontEntry* ufe = static_cast<gfxUserFontEntry*>(fe.get());
       if (ufe->LoadState() == gfxUserFontEntry::STATUS_NOT_LOADED &&
           ufe->CharacterInUnicodeRange(aCh) && !*aLoading) {
         ufe->Load();
         ff.CheckState(mSkipDrawing);
         *aLoading = ff.IsLoading();
       }
+      unicodeRangeMap = ufe->GetUnicodeRangeMap();
+      // Update fe to refer to the actual platform font entry, rather than the
+      // webfont wrapper. After this, we no longer have a strong ref to ufe.
       fe = ufe->GetPlatformFontEntry();
       if (!fe) {
         return nullptr;
       }
-      unicodeRangeMap = ufe->GetUnicodeRangeMap();
     }
     font = fe->FindOrMakeFont(&mStyle, unicodeRangeMap);
     if (!font || !font->Valid()) {
@@ -2980,8 +3017,8 @@ void gfxFontGroup::InitScriptRun(DrawTarget* aDrawTarget, gfxTextRun* aTextRun,
         // special Unicode spaces; omit these checks in 8-bit runs
         if constexpr (sizeof(T) == sizeof(char16_t)) {
           if (index + 1 < aLength &&
-              NS_IS_SURROGATE_PAIR(ch, aString[index + 1])) {
-            uint32_t usv = SURROGATE_TO_UCS4(ch, aString[index + 1]);
+              mozilla::IsSurrogatePair(ch, aString[index + 1])) {
+            uint32_t usv = mozilla::SurrogateToUCS4(ch, aString[index + 1]);
             aTextRun->SetMissingGlyph(aOffset + index, usv, mainFont);
             index++;
             if (!mSkipDrawing && !IsPUA(usv)) {
@@ -3564,8 +3601,8 @@ void gfxFontGroup::ComputeRanges(nsTArray<TextRange>& aRanges, const T* aString,
   uint32_t prevCh = 0;
   uint32_t nextCh = aString[0];
   if constexpr (sizeof(T) == sizeof(char16_t)) {
-    if (aLength > 1 && NS_IS_SURROGATE_PAIR(nextCh, aString[1])) {
-      nextCh = SURROGATE_TO_UCS4(nextCh, aString[1]);
+    if (aLength > 1 && mozilla::IsSurrogatePair(nextCh, aString[1])) {
+      nextCh = mozilla::SurrogateToUCS4(nextCh, aString[1]);
     }
   }
 
@@ -3605,8 +3642,9 @@ void gfxFontGroup::ComputeRanges(nsTArray<TextRange>& aRanges, const T* aString,
       // Get the next character, if any, decoding any surrogate pair.
       if (i < maxIndex) {
         nextCh = aString[i + 1];
-        if (i + 2 <= maxIndex && NS_IS_SURROGATE_PAIR(nextCh, aString[i + 2])) {
-          nextCh = SURROGATE_TO_UCS4(nextCh, aString[i + 2]);
+        if (i + 2 <= maxIndex &&
+            mozilla::IsSurrogatePair(nextCh, aString[i + 2])) {
+          nextCh = mozilla::SurrogateToUCS4(nextCh, aString[i + 2]);
         }
       } else {
         nextCh = 0;
@@ -3677,8 +3715,9 @@ void gfxFontGroup::ComputeRanges(nsTArray<TextRange>& aRanges, const T* aString,
         uint32_t charLen = 1;
         if constexpr (sizeof(T) == sizeof(char16_t)) {
           // Decode surrogate pair.
-          if (i + 2 <= maxIndex && NS_IS_SURROGATE_PAIR(c, aString[i + 2])) {
-            c = SURROGATE_TO_UCS4(c, aString[i + 2]);
+          if (i + 2 <= maxIndex &&
+              mozilla::IsSurrogatePair(c, aString[i + 2])) {
+            c = mozilla::SurrogateToUCS4(c, aString[i + 2]);
             charLen = 2;
           }
           // If we've found a join control or variation selector, back up to
@@ -3739,14 +3778,14 @@ void gfxFontGroup::ComputeRanges(nsTArray<TextRange>& aRanges, const T* aString,
         // Update prevCh and nextCh for the end of the fast-path run.
         prevCh = aString[i];
         if constexpr (sizeof(T) == sizeof(char16_t)) {
-          if (i > 0 && NS_IS_SURROGATE_PAIR(aString[i - 1], prevCh)) {
-            prevCh = SURROGATE_TO_UCS4(aString[i - 1], prevCh);
+          if (i > 0 && mozilla::IsSurrogatePair(aString[i - 1], prevCh)) {
+            prevCh = mozilla::SurrogateToUCS4(aString[i - 1], prevCh);
           }
           if (i < maxIndex) {
             nextCh = aString[i + 1];
             if (i + 2 <= maxIndex &&
-                NS_IS_SURROGATE_PAIR(nextCh, aString[i + 2])) {
-              nextCh = SURROGATE_TO_UCS4(nextCh, aString[i + 2]);
+                mozilla::IsSurrogatePair(nextCh, aString[i + 2])) {
+              nextCh = mozilla::SurrogateToUCS4(nextCh, aString[i + 2]);
             }
           } else {
             nextCh = 0;

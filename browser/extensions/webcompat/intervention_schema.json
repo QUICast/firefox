@@ -42,7 +42,7 @@
             }
           },
           "replacement": {
-            "type": "string"
+            "type": ["string", "null"]
           },
           "fallback": {
             "type": "string"
@@ -137,6 +137,9 @@
           "type": "boolean"
         },
         "match_origin_as_fallback": {
+          "type": "boolean"
+        },
+        "user_styles": {
           "type": "boolean"
         },
         "css": {
@@ -260,6 +263,9 @@
                   "type": "boolean"
                 },
                 "match_origin_as_fallback": {
+                  "type": "boolean"
+                },
+                "user_styles": {
                   "type": "boolean"
                 },
                 "which": {

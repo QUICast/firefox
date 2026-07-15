@@ -183,7 +183,7 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
   }
 
   NS_INLINE_DECL_STATIC_IID(DOM_BROWSERCHILD_IID)
-  NS_DECL_CYCLE_COLLECTING_ISUPPORTS
+  NS_DECL_CYCLE_COLLECTING_ISUPPORTS_FINAL
   NS_DECL_NSIWEBBROWSERCHROME
   NS_DECL_NSIINTERFACEREQUESTOR
   NS_DECL_NSIWINDOWPROVIDER
@@ -235,8 +235,9 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
   mozilla::ipc::IPCResult RecvLoadURL(nsDocShellLoadState* aLoadState,
                                       const ParentShowInfo& aInfo);
 
-  mozilla::ipc::IPCResult RecvCreateAboutBlankDocumentViewer(
-      nsIPrincipal* aPrincipal, nsIPrincipal* aPartitionedPrincipal);
+  MOZ_CAN_RUN_SCRIPT_BOUNDARY mozilla::ipc::IPCResult
+  RecvCreateAboutBlankDocumentViewer(nsIPrincipal* aPrincipal,
+                                     nsIPrincipal* aPartitionedPrincipal);
 
   mozilla::ipc::IPCResult RecvResumeLoad(const uint64_t& aPendingSwitchID,
                                          const ParentShowInfo&);
@@ -439,7 +440,7 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
 #ifdef ACCESSIBILITY
   PDocAccessibleChild* AllocPDocAccessibleChild(
       PDocAccessibleChild*, const uint64_t&,
-      const MaybeDiscardedBrowsingContext&);
+      const MaybeDiscardedBrowsingContext&, const bool&);
   bool DeallocPDocAccessibleChild(PDocAccessibleChild*);
 #endif
 

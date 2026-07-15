@@ -85,6 +85,12 @@ async function testAboutWelcomeLogoFor(logo = {}) {
   browser.closeBrowser();
 }
 
+add_setup(async function () {
+  registerCleanupFunction(function () {
+    Services.prefs.clearUserPref("browser.aboutwelcome.didSeeFinalScreen");
+  });
+});
+
 /**
  * Test rendering a screen in about welcome with decorative noodles
  */
@@ -495,6 +501,7 @@ add_task(async function test_aboutwelcome_with_progress_bar() {
     set: [
       ["ui.systemUsesDarkTheme", 0],
       ["ui.prefersReducedMotion", 0],
+      ["ui.useAccessibilityTheme", 0],
     ],
   });
   let screens = [];

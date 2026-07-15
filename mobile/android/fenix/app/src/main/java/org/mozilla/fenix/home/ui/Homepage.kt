@@ -22,6 +22,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -40,20 +41,25 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.tooling.preview.PreviewLightDark
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.core.net.toUri
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import mozilla.components.feature.top.sites.TopSite
+import mozilla.components.support.ktx.android.net.hostWithoutCommonPrefixes
 import mozilla.telemetry.glean.private.NoExtras
 import org.mozilla.fenix.GleanMetrics.History
 import org.mozilla.fenix.GleanMetrics.HomeBookmarks
 import org.mozilla.fenix.GleanMetrics.RecentlyVisitedHomepage
 import org.mozilla.fenix.R
 import org.mozilla.fenix.browser.browsingmode.BrowsingMode
+import org.mozilla.fenix.components.appstate.AppAction
+import org.mozilla.fenix.components.appstate.AppAction.ShortcutAction
 import org.mozilla.fenix.components.appstate.setup.checklist.SetupChecklistState
 import org.mozilla.fenix.components.appstate.sports.SportsWidgetState
 import org.mozilla.fenix.components.components
 import org.mozilla.fenix.compose.MessageCard
 import org.mozilla.fenix.compose.home.HomeSectionHeader
 import org.mozilla.fenix.debugsettings.sportswidget.SportsWidgetDebugTool
-import org.mozilla.fenix.ext.settings
 import org.mozilla.fenix.home.bookmarks.Bookmark
 import org.mozilla.fenix.home.bookmarks.interactor.BookmarksInteractor
 import org.mozilla.fenix.home.bookmarks.view.Bookmarks
@@ -78,6 +84,7 @@ import org.mozilla.fenix.home.sessioncontrol.CollectionInteractor
 import org.mozilla.fenix.home.sessioncontrol.MessageCardInteractor
 import org.mozilla.fenix.home.setup.ui.SetupChecklist
 import org.mozilla.fenix.home.sports.CountrySelectorSource
+import org.mozilla.fenix.home.sports.hasWorldCupEnded
 import org.mozilla.fenix.home.sports.ui.SportsCountrySelectorBottomSheet
 import org.mozilla.fenix.home.sports.ui.SportsWidget
 import org.mozilla.fenix.home.store.HeaderState
@@ -85,9 +92,16 @@ import org.mozilla.fenix.home.store.HomepageState
 import org.mozilla.fenix.home.store.NimbusMessageState
 import org.mozilla.fenix.home.termsofuse.PrivacyNoticeBanner
 import org.mozilla.fenix.home.termsofuse.PrivacyNoticeBannerInteractor
+import org.mozilla.fenix.home.topsites.AddShortcutEntryPoint
+import org.mozilla.fenix.home.topsites.AddShortcutSource
+import org.mozilla.fenix.home.topsites.TOP_SITES_TO_SHOW
 import org.mozilla.fenix.home.topsites.TopSiteColors
 import org.mozilla.fenix.home.topsites.TopSites
 import org.mozilla.fenix.home.topsites.interactor.TopSiteInteractor
+import org.mozilla.fenix.home.topsites.store.DialogState
+import org.mozilla.fenix.home.topsites.store.toPopularSite
+import org.mozilla.fenix.home.topsites.ui.AddShortcutBottomSheet
+import org.mozilla.fenix.home.topsites.ui.AddShortcutDialog
 import org.mozilla.fenix.home.ui.HomepageTestTag.HOMEPAGE
 import org.mozilla.fenix.theme.FirefoxTheme
 import org.mozilla.fenix.theme.Theme
@@ -95,6 +109,8 @@ import org.mozilla.fenix.trackingprotection.TrackersBlockedCard
 import org.mozilla.fenix.utils.isLargeScreenSize
 import org.mozilla.fenix.wallpapers.WallpaperState
 import mozilla.components.ui.icons.R as iconsR
+
+private const val POPULAR_SITES_TO_SHOW = 8
 
 /**
  * Top level composable for the homepage.
@@ -114,7 +130,9 @@ internal fun Homepage(
 ) {
     val scrollState = rememberScrollState()
     val browsingModeChanged = interactor::onPrivateModeButtonClicked
+    val appStore = components.appStore
     var showSportsCountrySelector by remember { mutableStateOf(false) }
+    var shortcutsDialogState by remember { mutableStateOf<DialogState>(DialogState.Closed) }
 
     BoxWithConstraints(
         modifier = modifier
@@ -151,7 +169,8 @@ internal fun Homepage(
                 is HeaderState.Experimental.Normal -> {
                     val settings = components.settings
                     val shouldDisplaySportsLogo =
-                        settings.enableHomepageSportsWidget && settings.showHomepageSportsWidget
+                        settings.enableHomepageSportsWidget && settings.showHomepageSportsWidget &&
+                            !hasWorldCupEnded()
 
                     ExperimentalHomepageHeader(
                         wordmarkTextColor = headerState.wordmarkTextColor,
@@ -179,7 +198,8 @@ internal fun Homepage(
                 is HeaderState.Normal -> {
                     val settings = components.settings
                     val shouldDisplaySportsLogo =
-                        settings.enableHomepageSportsWidget && settings.showHomepageSportsWidget
+                        settings.enableHomepageSportsWidget && settings.showHomepageSportsWidget &&
+                            !hasWorldCupEnded()
 
                     HomepageHeader(
                         wordmarkTextColor = headerState.wordmarkTextColor,
@@ -207,6 +227,24 @@ internal fun Homepage(
                         }
 
                         is HomepageState.Normal -> {
+                            val settings = components.settings
+                            val appStore = components.appStore
+                            LaunchedEffect(showLongfoxAnimation) {
+                                if (showLongfoxAnimation) {
+                                    settings.longfoxPeekAnimationShownCount++
+                                    appStore.dispatch(
+                                        AppAction.UpdateShowFoxPeekAnimation(false),
+                                    )
+                                }
+                            }
+
+                            val longfoxEntryPointShown = longfoxEnabled && showPrivacyReport
+                            LaunchedEffect(longfoxEntryPointShown) {
+                                if (longfoxEntryPointShown) {
+                                    interactor.onLongfoxEntryPointShown()
+                                }
+                            }
+
                             if (showTopSites) {
                                 TopSitesSection(
                                     topSites = topSites,
@@ -214,6 +252,16 @@ internal fun Homepage(
                                     showHeader = showTopSitesHeader,
                                     interactor = interactor,
                                     onTopSitesItemBound = onTopSitesItemBound,
+                                    showAddShortcut = components.settings.enableAddShortcutsImprovement &&
+                                        topSites.size < TOP_SITES_TO_SHOW,
+                                    onAddShortcutClicked = {
+                                        appStore.dispatch(
+                                            ShortcutAction.AddShortcutSheetShown(
+                                                entryPoint = AddShortcutEntryPoint.HOMEPAGE,
+                                            ),
+                                        )
+                                        shortcutsDialogState = DialogState.AddShortcutBottomSheet
+                                    },
                                 )
                             }
 
@@ -223,7 +271,8 @@ internal fun Homepage(
                                     onPrivacyReportTapped = interactor::onPrivacyReportTapped,
                                     onLongfoxEntryPointClicked = interactor::onLongfoxEntryPointClicked,
                                     modifier = Modifier.padding(top = 16.dp),
-                                    showLongfoxEntryPoint = showLongfoxEntryPoint,
+                                    longfoxEnabled = longfoxEnabled,
+                                    showLongfoxAnimation = showLongfoxAnimation,
                                 )
                             }
 
@@ -239,6 +288,7 @@ internal fun Homepage(
                                     },
                                     onSkip = interactor::onSkippedFollowTeam,
                                     onGetCustomWallpaper = interactor::onGetCustomWallpaperClicked,
+                                    onShare = interactor::onSportsWidgetShareClicked,
                                     onRefresh = { source ->
                                         interactor.onRefreshClicked(source)
                                     },
@@ -256,7 +306,7 @@ internal fun Homepage(
                                     interactor = interactor,
                                     cardBackgroundColor = cardBackgroundColor,
                                     recentTabs = recentTabs,
-                                    reducedTopSpacing = showPrivacyReport && showLongfoxEntryPoint,
+                                    reducedTopSpacing = showPrivacyReport && showLongfoxAnimation,
                                 )
 
                                 if (showRecentSyncedTab) {
@@ -343,6 +393,63 @@ internal fun Homepage(
                                 )
                             }
 
+                            when (shortcutsDialogState) {
+                                DialogState.AddShortcutBottomSheet -> {
+                                    val merinoManifestProvider = components.core.merinoManifestProvider
+                                    val popularSites by produceState(
+                                        initialValue = emptyList(),
+                                        key1 = merinoManifestProvider,
+                                        key2 = topSites,
+                                    ) {
+                                        value = withContext(Dispatchers.IO) {
+                                            merinoManifestProvider.getTopDomains(
+                                                limit = POPULAR_SITES_TO_SHOW,
+                                                excludedDomains = topSites.mapNotNullTo(mutableSetOf()) {
+                                                    it.url.toUri().hostWithoutCommonPrefixes
+                                                },
+                                            ).map { it.toPopularSite() }
+                                        }
+                                    }
+
+                                    AddShortcutBottomSheet(
+                                        popularSites = popularSites,
+                                        onDismiss = { shortcutsDialogState = DialogState.Closed },
+                                        onAddWebsiteClicked = {
+                                            appStore.dispatch(
+                                                ShortcutAction.AddWebsiteDialogShown,
+                                            )
+                                            shortcutsDialogState = DialogState.AddShortcut
+                                        },
+                                        onAddPopularSiteClick = { site ->
+                                            interactor.onSaveShortcut(
+                                                title = site.title,
+                                                url = site.url,
+                                                source = AddShortcutSource.POPULAR,
+                                                entryPoint = AddShortcutEntryPoint.HOMEPAGE,
+                                            )
+                                            shortcutsDialogState = DialogState.Closed
+                                        },
+                                    )
+                                }
+
+                                DialogState.AddShortcut -> {
+                                    AddShortcutDialog(
+                                        onDismiss = { shortcutsDialogState = DialogState.Closed },
+                                        onConfirm = { title, url ->
+                                            interactor.onSaveShortcut(
+                                                title = title,
+                                                url = url,
+                                                source = AddShortcutSource.MANUAL,
+                                                entryPoint = AddShortcutEntryPoint.HOMEPAGE,
+                                            )
+                                            shortcutsDialogState = DialogState.Closed
+                                        },
+                                    )
+                                }
+
+                                DialogState.Closed -> Unit
+                            }
+
                             if (sportsWidgetState.isDebugToolVisible) {
                                 SportsWidgetDebugTool(
                                     state = sportsWidgetState,
@@ -403,8 +510,10 @@ internal fun TopSitesSection(
     topSites: List<TopSite>,
     topSiteColors: TopSiteColors = TopSiteColors.colors(),
     showHeader: Boolean = true,
+    showAddShortcut: Boolean = false,
     interactor: TopSiteInteractor,
     onTopSitesItemBound: () -> Unit,
+    onAddShortcutClicked: () -> Unit,
 ) {
     if (showHeader) {
         HomeSectionHeader(
@@ -421,8 +530,10 @@ internal fun TopSitesSection(
         topSites = topSites,
         interactor = interactor,
         onTopSitesItemBound = onTopSitesItemBound,
+        onAddShortcutClicked = onAddShortcutClicked,
         topSiteColors = topSiteColors,
-        isPager = LocalContext.current.settings().topSitesPager,
+        isPager = components.settings.topSitesPager,
+        showAddShortcut = showAddShortcut,
     )
 }
 
@@ -601,7 +712,8 @@ private fun HomepagePreview() {
                     showPocketStoriesCarousel = true,
                     showCollections = true,
                     showPrivacyReport = true,
-                    showLongfoxEntryPoint = false,
+                    longfoxEnabled = false,
+                    showLongfoxAnimation = false,
                     trackersBlockedCount = 754,
                     sportsWidgetState = SportsWidgetState(),
                     headerState = HeaderState.Normal(
@@ -656,7 +768,8 @@ private fun HomepageBannerPreview() {
                     showPocketStoriesCarousel = true,
                     showCollections = true,
                     showPrivacyReport = true,
-                    showLongfoxEntryPoint = false,
+                    longfoxEnabled = false,
+                    showLongfoxAnimation = false,
                     trackersBlockedCount = 754,
                     sportsWidgetState = SportsWidgetState(),
                     headerState = HeaderState.Normal(
@@ -711,7 +824,8 @@ private fun HomepagePreviewCollections() {
                     showPocketStoriesCarousel = true,
                     showCollections = true,
                     showPrivacyReport = true,
-                    showLongfoxEntryPoint = false,
+                    longfoxEnabled = false,
+                    showLongfoxAnimation = false,
                     trackersBlockedCount = 754,
                     sportsWidgetState = SportsWidgetState(),
                     headerState = HeaderState.Normal(
@@ -766,7 +880,8 @@ private fun MinimalHomepagePreview() {
                     showPocketStoriesCarousel = true,
                     showCollections = false,
                     showPrivacyReport = true,
-                    showLongfoxEntryPoint = false,
+                    longfoxEnabled = false,
+                    showLongfoxAnimation = false,
                     trackersBlockedCount = 754,
                     sportsWidgetState = SportsWidgetState(),
                     headerState = HeaderState.Normal(

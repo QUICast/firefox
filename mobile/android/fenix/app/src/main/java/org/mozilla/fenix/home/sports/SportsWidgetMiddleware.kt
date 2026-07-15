@@ -26,6 +26,12 @@ private val BRACKET_FINISHING_STAGES = setOf(
     TournamentRound.THIRD_PLACE_PLAYOFF,
 )
 
+// From this round onward the remaining bracket is locked in, so the no-team pager shows the whole
+// rest of the schedule the API returns — including not-yet-determined rounds (e.g. a TBD-vs-TBD
+// semi-final while the quarter-finals are live). Before it, the pager only reveals the next round's
+// already-decided fixtures, so earlier stages don't fill with "TBD vs TBD" placeholder cards.
+private val FULL_SCHEDULE_FROM_ROUND = TournamentRound.QUARTER_FINAL
+
 // Default minimum gap, in seconds, between consecutive attempted fetches. Used when the
 // [SportsWidgetMiddleware] caller doesn't override fetchMinIntervalSeconds (e.g. tests). The
 // shipping default is the Nimbus-controlled `homepage-sports-widget.fetch-throttle-seconds`,
@@ -177,20 +183,36 @@ class SportsWidgetMiddleware(
             countryCodes
         }
         return if (effectiveCodes.isEmpty()) {
-            // Filter to the active round before handing to the builder. The response —
-            // which spans multiple rounds in the mock and a ±10-day window in prod —
-            // would otherwise mix stages in the pager and surface group-stage matches
-            // even after R32 has begun. The bracket-finishing matches are kept on top of
-            // the active round so the schedule (and eventual result) of the tournament's
-            // last matches stays visible even before they become the active round —
-            // mirroring the followed-team path.
             val activeRound = result.activeRound() ?: return emptyList()
-            MatchCardBuilder.buildForNoTeam(
-                (result.previous + result.current + result.next)
-                    .filter { it.stage == activeRound || it.stage in BRACKET_FINISHING_STAGES },
-            )
+            MatchCardBuilder.buildForNoTeam(noTeamMatches(result, activeRound))
         } else {
             MatchCardBuilder.buildForTeam(filterByTeam(result, effectiveCodes))
+        }
+    }
+
+    // Matches the no-team (bracket-wide) pager should show for the given [activeRound].
+    //
+    // Before the knockout endgame (active round earlier than [FULL_SCHEDULE_FROM_ROUND]) the pager
+    // stays focused: just the active round and the next round's already-decided fixtures. The final
+    // and third-place are deliberately NOT surfaced yet, and there are no "TBD vs TBD" placeholders,
+    // so the group stage / early knockouts don't fill with cards for matches weeks away.
+    //
+    // From the quarter-finals onward the whole run-in is locked in, so we surface the active round
+    // and every later round the response carries — including not-yet-determined ones (a TBD-vs-TBD
+    // semi-final while the quarter-finals are live, say). [BRACKET_FINISHING_STAGES] is OR'd in so
+    // the third-place card still shows alongside the final once the final itself is the active round
+    // (it would otherwise be excluded by the `>= activeRound` ordinal check). Earlier rounds still
+    // drop out as each new round goes live, via [activeRound].
+    private fun noTeamMatches(result: TeamMatchesResult, activeRound: TournamentRound): List<SportsMatch> {
+        val all = result.previous + result.current + result.next
+        return if (activeRound.ordinal >= FULL_SCHEDULE_FROM_ROUND.ordinal) {
+            all.filter { it.stage.ordinal >= activeRound.ordinal || it.stage in BRACKET_FINISHING_STAGES }
+        } else {
+            val nextRound = result.nextRound(activeRound)
+            all.filter { match ->
+                match.stage == activeRound ||
+                    (match.stage == nextRound && !match.isFullyTbd())
+            }
         }
     }
 
@@ -209,6 +231,20 @@ class SportsWidgetMiddleware(
             ?: all.filter { it.matchStatus.isPast() }.maxByOrNull { it.stage.ordinal }?.stage
             ?: all.minByOrNull { it.date }?.stage
     }
+
+    // The round immediately after [activeRound] present in the response, or null if there is
+    // none. Used to surface the upcoming round's fixtures as its bracket fills in; whether any
+    // fixture is actually shown is decided by the caller's TBD filter.
+    private fun TeamMatchesResult.nextRound(activeRound: TournamentRound): TournamentRound? =
+        (previous + current + next).asSequence()
+            .map { it.stage }
+            .filter { it.ordinal > activeRound.ordinal }
+            .minByOrNull { it.ordinal }
+
+    // A match with neither side decided yet — both teams still come from undetermined earlier
+    // results. A fixture with one side known (the other a placeholder) is not fully TBD and is
+    // worth showing.
+    private fun SportsMatch.isFullyTbd(): Boolean = homeTeam == null && awayTeam == null
 
     // True when every followed team appears in the response with `eliminated = true`. If a
     // followed code isn't found in the response at all, we treat it as not-eliminated

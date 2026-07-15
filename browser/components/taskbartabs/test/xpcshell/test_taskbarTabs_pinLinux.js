@@ -17,14 +17,16 @@ XPCOMUtils.defineLazyServiceGetters(this, {
   imgTools: ["@mozilla.org/image/tools;1", Ci.imgITools],
 });
 
-const gRegistry = new TaskbarTabsRegistry();
-
-const patchedSpy = sinon.stub();
-gRegistry.on(TaskbarTabsRegistry.events.patched, patchedSpy);
+const gRegistry = createInMemoryRegistry();
 
 sinon.stub(ShellService, "writeShortcutIcon").resolves();
 sinon.stub(ShellService, "createLinuxDesktopEntry").resolves();
 sinon.stub(ShellService, "deleteLinuxDesktopEntry").resolves();
+sinon.stub(ShellService, "shellService").value({
+  getGlibPrgname() {
+    return "glib.mock.prgname";
+  },
+});
 
 sinon.stub(TaskbarTabsPin, "_getLocalization").returns({
   formatValue(msg) {
@@ -48,7 +50,7 @@ function checkCreateLinuxDesktopEntryCall(aTaskbarTab) {
   );
   Assert.equal(
     ShellService.createLinuxDesktopEntry.firstCall.args[0],
-    "org.mozilla.firefox.webapp-" + aTaskbarTab.id,
+    "glib.mock.prgname.webapp-" + aTaskbarTab.id,
     "Correct application ID was specified."
   );
   Assert.equal(
@@ -62,13 +64,6 @@ function checkCreateLinuxDesktopEntryCall(aTaskbarTab) {
     ),
     "Reasonable arguments were specified."
   );
-
-  Assert.equal(patchedSpy.callCount, 1, "A single patched event was emitted");
-  Assert.equal(
-    aTaskbarTab.shortcutRelativePath,
-    "org.mozilla.firefox.webapp-" + aTaskbarTab.id + ".desktop",
-    "Correct relative path is saved to the taskbar tab"
-  );
 }
 
 add_task(async function test_pinCreatesDesktopEntry() {
@@ -76,7 +71,12 @@ add_task(async function test_pinCreatesDesktopEntry() {
   const taskbarTab = createTaskbarTab(gRegistry, parsedURI, 0);
   sinon.resetHistory();
 
-  await TaskbarTabsPin.pinTaskbarTab(taskbarTab, gRegistry);
+  Assert.equal(
+    await TaskbarTabsPin.pinTaskbarTab(taskbarTab),
+    "glib.mock.prgname.webapp-" + taskbarTab.id + ".desktop",
+    "Expected shortcut path is returned"
+  );
+
   checkCreateLinuxDesktopEntryCall(taskbarTab);
   gRegistry.removeTaskbarTab(taskbarTab.id);
 });
@@ -91,7 +91,12 @@ add_task(async function test_pinUnusualName() {
   });
   sinon.resetHistory();
 
-  await TaskbarTabsPin.pinTaskbarTab(invalidTaskbarTab, gRegistry);
+  Assert.equal(
+    await TaskbarTabsPin.pinTaskbarTab(invalidTaskbarTab),
+    "glib.mock.prgname.webapp-" + invalidTaskbarTab.id + ".desktop",
+    "Expected shortcut path is returned"
+  );
+
   checkCreateLinuxDesktopEntryCall(invalidTaskbarTab);
   gRegistry.removeTaskbarTab(invalidTaskbarTab.id);
 });
@@ -104,7 +109,7 @@ add_task(async function test_unpin() {
   });
 
   sinon.resetHistory();
-  await TaskbarTabsPin.unpinTaskbarTab(tt, gRegistry);
+  await TaskbarTabsPin.unpinTaskbarTab(tt);
 
   Assert.equal(
     ShellService.deleteLinuxDesktopEntry.callCount,
@@ -116,10 +121,4 @@ add_task(async function test_unpin() {
     ["this.is.an.app.id"],
     "deleteLinuxDesktopEntry was called with the value in shortcutRelativePath without the extension"
   );
-  Assert.equal(
-    tt.shortcutRelativePath,
-    null,
-    "Shortcut relative path was removed from the taskbar tab"
-  );
-  Assert.equal(patchedSpy.callCount, 1, "A single patched event was emitted");
 });

@@ -4,7 +4,6 @@
 
 package mozilla.appservices.httpconfig
 
-import com.google.protobuf.ByteString
 import mozilla.appservices.viaduct.initBackend
 import mozilla.components.concept.fetch.Client
 import mozilla.components.concept.fetch.MutableHeaders
@@ -31,19 +30,13 @@ class UnsupportedRequestMethodError(method: String) :
  */
 @OptIn(ExperimentalAtomicApi::class)
 object RustHttpConfig {
-    // Used to only initialize the client once
-    // https://bugzilla.mozilla.org/show_bug.cgi?id=1989865.
-    private var backendInitialized = AtomicBoolean(false)
-
     /**
      * Set the HTTP client to be used by all Rust code.
      * the `Lazy`'s value is not read until the first request is made.
      */
     @Synchronized
     fun setClient(c: Lazy<Client>) {
-        if (backendInitialized.compareAndSet(false, true)) {
-            initBackend(FetchBackend(c))
-        }
+        initBackend(FetchBackend(c))
     }
 
     /** Allows connections to the hard-coded address the Android Emulator uses
@@ -54,45 +47,5 @@ object RustHttpConfig {
      */
     fun allowAndroidEmulatorLoopback() {
         rustAllowAndroidEmulatorLoopback()
-    }
-
-    internal fun convertRequest(request: MsgTypes.Request): Request {
-        val headers = MutableHeaders()
-        for (h in request.headersMap) {
-            headers.append(h.key, h.value)
-        }
-        return Request(
-            url = request.url,
-            method = convertMethod(request.method),
-            headers = headers,
-            connectTimeout = Pair(request.connectTimeoutSecs.toLong(), TimeUnit.SECONDS),
-            readTimeout = Pair(request.readTimeoutSecs.toLong(), TimeUnit.SECONDS),
-            body = if (request.hasBody()) {
-                Request.Body(request.body.newInput())
-            } else {
-                null
-            },
-            redirect = if (request.followRedirects) {
-                Request.Redirect.FOLLOW
-            } else {
-                Request.Redirect.MANUAL
-            },
-            cookiePolicy = Request.CookiePolicy.OMIT,
-            useCaches = request.useCaches,
-        )
-    }
-}
-
-internal fun convertMethod(m: MsgTypes.Request.Method): Request.Method {
-    return when (m) {
-        MsgTypes.Request.Method.GET -> Request.Method.GET
-        MsgTypes.Request.Method.POST -> Request.Method.POST
-        MsgTypes.Request.Method.HEAD -> Request.Method.HEAD
-        MsgTypes.Request.Method.OPTIONS -> Request.Method.OPTIONS
-        MsgTypes.Request.Method.DELETE -> Request.Method.DELETE
-        MsgTypes.Request.Method.PUT -> Request.Method.PUT
-        MsgTypes.Request.Method.TRACE -> Request.Method.TRACE
-        MsgTypes.Request.Method.CONNECT -> Request.Method.CONNECT
-        else -> throw UnsupportedRequestMethodError(m.toString())
     }
 }

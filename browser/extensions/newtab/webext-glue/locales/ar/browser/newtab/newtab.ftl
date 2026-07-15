@@ -31,6 +31,195 @@ newtab-card-dismiss-button =
     .title = ارفض
     .aria-label = ارفض
 
+## Strings for "Homepage" and "Firefox Home" sections of about:settings#home.
+## Homepage panel
+
+home-homepage-title =
+    .label = صفحة البداية
+home-homepage-new-windows =
+    .label = نوافذ جديدة
+home-homepage-new-tabs =
+    .label = الألسنة الجديدة
+# This option leads to the "Custom Homepage" subpage
+home-homepage-custom-homepage-button =
+    .label = اختر موقعًا محددًا
+
+## Custom URLs subpage
+
+# Subheader on the Custom Homepage subpage. Followed by a form to enter URLs and a list of URLs already saved, if any.
+home-custom-homepage-card-header =
+    .label = عنوان(عناوين) الموقع الإلكتروني
+home-custom-homepage-address =
+    .placeholder = أدخل العنوان
+home-custom-homepage-address-button =
+    .label = أضف عنوانًا
+# Shown when no custom websites/URLs to use as a homepage have been added yet
+home-custom-homepage-no-results =
+    .label = لم تُضاف أي مواقع إلكترونية حتى الآن.
+home-custom-homepage-delete-address-button =
+    .aria-label = احذف العنوان
+    .title = احذف العنوان
+# Further options to use when setting the home page. Two action buttons are placed in line with this prompt
+# to replace the current home page with a currently open page or bookmark.
+home-custom-homepage-replace-with-prompt =
+    .label = استبدل ب
+# Button that appears in-line after text "Replace with" (home-custom-homepage-replace-with-prompt)
+home-custom-homepage-current-pages-button =
+    .label = الصفحات المفتوحة حاليًا
+# Button that appears in-line after text "Replace with" (home-custom-homepage-replace-with-prompt)
+home-custom-homepage-bookmarks-button =
+    .label = العلامات…
+
+## Firefox Home content
+
+home-prefs-content-header =
+    .label = { -firefox-home-brand-name }
+home-prefs-search-header2 =
+    .label = ابحث
+home-prefs-stories-header2 =
+    .label = القصص
+    .description = محتوى استثنائي برعاية عائلة { -brand-product-name }
+# Lists is a widget on New Tab, similar to a to-do widget
+home-prefs-lists-header =
+    .label = قوائم
+# Timer is a widget on New Tab, similar to the Pomodoro timer.
+home-prefs-timer-header =
+    .label = المؤقت
+# Sports is a widget on New Tab showing sports scores and schedules.
+home-prefs-sports-widget-header =
+    .label = الرياضة
+# Clock is a widget on New Tab that displays time zones around the world.
+home-prefs-clocks-header =
+    .label = ساعة
+# Privacy is a widget on New Tab that shows tracking protection activity.
+home-prefs-privacy-header =
+    .label = الخصوصية
+home-prefs-mission-message2 =
+    .message = يدعم رعاتنا مهمتنا في بناء شبكة إنترنت أفضل.
+home-prefs-manage-topics-link2 =
+    .label = أدِر المواضيع
+home-prefs-choose-wallpaper-link2 =
+    .label = اختر خلفية
+home-prefs-firefox-logo-header =
+    .label = شعار { -brand-short-name }
+# Informational message bar that appears in the Firefox Home section when the options are disabled.
+# The user must select Firefox Home as their homepage for either new tabs or new windows to enable
+# the features in settings.
+home-prefs-firefox-home-disabled-notice =
+    .message = لاستخدام هذه الميزات، عيّن ألسنة جديدة أو نوافذ جديدة إلى { -firefox-home-brand-name }.
+# Variables:
+#   $num (number) - Number of rows displayed
+home-prefs-sections-rows-option-srd =
+    .label =
+        { $num ->
+            [zero] لا صفوف
+            [one] صف واحد
+            [two] صفان
+            [few] { $num } صفوف
+            [many] { $num } صفا
+           *[other] { $num } صف
+        }
+# Dropdown option shown when an extension replaces the contents of new windows or tabs.
+# Variables:
+#   $extension (string) - Name of the extension
+home-prefs-homepage-extension-option =
+    .label = الامتداد ({ $extension })
+home-restore-defaults-srd =
+    .label = استعد المبدئيات
+    .accesskey = س
+home-mode-choice-default-fx-srd =
+    .label = { -firefox-home-brand-name } (افتراضي)
+home-mode-choice-custom-srd =
+    .label = عناوين مخصصة…
+home-mode-choice-blank-srd =
+    .label = صفحة فارغة
+home-prefs-shortcuts-header-srd =
+    .label = الاختصارات
+home-prefs-shortcuts-select =
+    .aria-label = الاختصارات
+home-prefs-shortcuts-by-option-sponsored-srd =
+    .label = الاختصارات المموّلة
+home-prefs-recommended-by-option-sponsored-stories-srd =
+    .label = الأخبار الممولة
+home-prefs-highlights-option-visited-pages-srd =
+    .label = الصفحات المزارة
+home-prefs-highlights-options-bookmarks-srd =
+    .label = العلامات
+home-prefs-highlights-option-most-recent-download-srd =
+    .label = آخر ما نُزّل
+home-prefs-recent-activity-header-srd =
+    .label = أحدث الأنشطة
+home-prefs-recent-activity-select =
+    .aria-label = أحدث الأنشطة
+home-prefs-weather-header-srd =
+    .label = الطقس
+home-prefs-support-firefox-header-srd =
+    .label = ادعم { -brand-product-name }
+home-prefs-mission-message-learn-more-link-srd = اكتشف كيف
+
+## Strings for the Privacy widget
+
+# Context menu item linking to more information about the Privacy widget.
+newtab-privacy-menu-learn-more = اطّلع على المزيد
+
+## Privacy widget — informational messages
+##
+## Rotating "info" secondary messages. Each message has a body plus a matched
+## "-cta" button label sharing the same id stem (the CTA button isn't rendered
+## yet; the labels are authored so the pairing is ready).
+
+newtab-privacy-message-info-1-cta = اطّلع على الحمايات
+newtab-privacy-message-info-2 = يساعد حظر التتبع في منع الشركات من ملاحقتك عبر الإنترنت.
+newtab-privacy-message-info-2-cta = اطّلع على الحمايات
+newtab-privacy-message-info-3-cta = اطّلع على الحمايات
+newtab-privacy-message-info-4-cta = اطّلع على الحمايات
+newtab-privacy-message-info-5-cta = اطّلع على الحمايات
+newtab-privacy-message-info-6-cta = اطّلع على المزيد
+newtab-privacy-message-info-7-cta = اطّلع على الحمايات
+newtab-privacy-message-info-8 = إن التصفح باستخدام { -brand-short-name } يدعم مهمة { -vendor-short-name } في بناء شبكة وِب أفضل.
+newtab-privacy-message-info-8-cta = اطّلع على المزيد
+newtab-privacy-message-info-9 = اجعل { -brand-short-name } متصفحك المفضل للخصوصية المدمجة.
+newtab-privacy-message-info-9-cta = اجعله المبدئي
+newtab-privacy-message-info-10 = احفظ كلمات السر في { -brand-short-name } لاستخدام ولوجات قوية وفريدة في كل مكان.
+newtab-privacy-message-info-10-cta = انتقل إلى كلمات السر
+newtab-privacy-message-info-11 = اكتشف كيف يساعد { -brand-short-name } في الحفاظ على خصوصية تصفحك.
+newtab-privacy-message-info-11-cta = اطّلع على المزيد
+newtab-privacy-message-info-12-cta = اطّلع على الحمايات
+newtab-privacy-message-info-13-cta = اطّلع على الحمايات
+
+## Privacy widget — promotional messages
+##
+## Rotating "promo" secondary messages suggesting another Firefox feature. Each
+## has a body plus a matched "-cta" button label.
+
+newtab-privacy-message-promo-monitor-1-cta = اطّلع على المزيد
+newtab-privacy-message-promo-monitor-2-cta = اطّلع على المزيد
+newtab-privacy-message-promo-signin-1-cta = لِج
+newtab-privacy-message-promo-private-window-1-cta = افتح نافذة خاصة
+
+## Privacy widget — celebration messages
+##
+## Earned "celebration" moments (milestones, daily cap, streak, first
+## protection). Count-bearing ones interpolate { $count }.
+
+newtab-privacy-message-milestone-week-cta = اطّلع على الحمايات
+newtab-privacy-message-milestone-month-cta = اطّلع على الحمايات
+newtab-privacy-message-milestone-year-cta = اطّلع على الحمايات
+newtab-privacy-message-milestone-total-cta = اطّلع على الحمايات
+newtab-privacy-message-daily-cap-cta = اطّلع على الحمايات
+newtab-privacy-message-streak-cta = اطّلع على الحمايات
+newtab-privacy-message-first-protection-cta = اطّلع على الحمايات
+
+## Strings for the Stocks widget
+
+# Context menu item linking to more information about the Stocks widget.
+newtab-stocks-menu-learn-more = اطّلع على المزيد
+
+## Strings for the Picture of the Day widget
+
+# Context menu item linking to more information about the widget.
+newtab-picture-menu-learn-more = اطّلع على المزيد
+
 ## Search box component.
 
 # "Search" is a verb/action
@@ -151,6 +340,8 @@ newtab-menu-section-block = احجب
 # "Follow", "unfollow", and "following" are social media terms that refer to subscribing to or unsubscribing from a section of stories.
 # e.g. Following the travel section of stories.
 newtab-menu-section-unfollow-topic = ألغِ المتابعة
+# Context menu option to open a support page explaining the New Tab personalization features and privacy controls.
+newtab-menu-section-learn-more = اطّلع على المزيد
 # "Follow", "unfollow", and "following" are social media terms that refer to subscribing to or unsubscribing from a section of stories.
 # e.g. Following the travel section of stories.
 newtab-menu-section-unfollow = ألغِ متابعة الموضوع
@@ -353,6 +544,8 @@ newtab-recommended-stories-toggle =
     .label = القصص المُقترحة
 newtab-custom-stories-personalized-toggle =
     .label = القصص
+newtab-custom-stories-personalized-checkbox =
+    .label = قصص مخصّصة بناءً على نشاطك
 newtab-custom-stories-personalized-checkbox-label = قصص مخصّصة بناءً على نشاطك
 newtab-custom-pocket-sponsored = قصص مموّلة
 newtab-custom-pocket-show-recent-saves = أظهِر عمليات الحفظ الأخيرة
@@ -364,6 +557,8 @@ newtab-custom-widget-lists-toggle =
     .label = قوائم
 newtab-custom-widget-timer-toggle =
     .label = المؤقت
+newtab-custom-widget-privacy-toggle =
+    .label = الخصوصية
 newtab-widget-manage-widget-button =
     .label = أدر الويدجات
 # Tooltip for close button
@@ -670,8 +865,6 @@ newtab-widget-lists-button-add-item = أضف عنصر
 newtab-widget-lists-input-add-an-item2 =
     .placeholder = أضف عنصر
     .aria-label = أضف عنصر
-newtab-widget-lists-input-add-an-item =
-    .placeholder = أضف عنصر
 newtab-widget-lists-input-error = يُرجى إدخال نص لإضافة عنصر.
 newtab-widget-lists-input-menu-open-link = افتح الرابط
 newtab-widget-lists-input-menu-move-up = انقل لأعلى
@@ -696,11 +889,6 @@ newtab-widget-lists-name-placeholder-checklist2 =
 newtab-widget-lists-name-placeholder-new2 =
     .placeholder = قائمة جديدة
     .aria-label = حرّر اسم القائمة
-newtab-widget-lists-name-placeholder-checklist =
-    .placeholder = قائمة التحقق
-# The placeholder value of the name field for a newly created list
-newtab-widget-lists-name-placeholder-new =
-    .placeholder = قائمة جديدة
 newtab-widget-menu-hide = أخفِ الويدجت
 newtab-widget-menu-change-size = غيّر الحجم
 newtab-widget-size-small = صغير
@@ -737,6 +925,8 @@ newtab-widget-timer-reset =
 newtab-widget-timer-menu-notifications = عطّل الإشعارات
 newtab-widget-timer-menu-notifications-on = فعّل الإشعارات
 newtab-widget-timer-menu-learn-more = اطّلع على المزيد
+newtab-widget-timer-menu-button =
+    .aria-label = خيارات المؤقت
 # The title displays above a set of top news headlines.
 newtab-daily-briefing-card-title = أهم العناوين
 newtab-daily-briefing-card-menu-dismiss = أهمِل
@@ -812,6 +1002,7 @@ newtab-activation-window-message-values-focus-message = يتيح لك { -brand-p
 
 ## Strings for the Clock widget
 
+newtab-clock-widget-menu-learn-more = اطّلع على المزيد
 newtab-clock-widget-menu-edit = حرّر الساعات
 newtab-clock-widget-menu-switch-to-12h = بدّل إلى نظام الـ 12 ساعة
 newtab-clock-widget-menu-switch-to-24h = بدّل إلى نظام الـ 24 ساعة

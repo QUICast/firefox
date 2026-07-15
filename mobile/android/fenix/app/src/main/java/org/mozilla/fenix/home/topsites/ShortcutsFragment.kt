@@ -19,6 +19,7 @@ import org.mozilla.fenix.e2e.SystemInsetsPaddedFragment
 import org.mozilla.fenix.ext.requireComponents
 import org.mozilla.fenix.home.topsites.controller.DefaultTopSiteController
 import org.mozilla.fenix.home.topsites.controller.TopSiteController
+import org.mozilla.fenix.home.topsites.controller.TopSitesSource
 import org.mozilla.fenix.home.topsites.interactor.DefaultTopSiteInteractor
 import org.mozilla.fenix.home.topsites.interactor.TopSiteInteractor
 import org.mozilla.fenix.home.topsites.middleware.ShortcutsMiddleware
@@ -47,6 +48,7 @@ class ShortcutsFragment : Fragment(), SystemInsetsPaddedFragment {
                 ShortcutsMiddleware(
                     appStore = requireComponents.appStore,
                     topSitesUseCases = requireComponents.useCases.topSitesUseCase,
+                    merinoManifestProvider = requireComponents.core.merinoManifestProvider,
                     settings = requireComponents.settings,
                     scope = viewLifecycleOwner.lifecycleScope,
                 ),
@@ -60,15 +62,16 @@ class ShortcutsFragment : Fragment(), SystemInsetsPaddedFragment {
         controller = DefaultTopSiteController(
             activityRef = WeakReference(requireActivity()),
             store = requireComponents.core.store,
+            appStore = requireComponents.appStore,
             navControllerRef = WeakReference(findNavController()),
             settings = requireComponents.settings,
             addTabUseCase = requireComponents.useCases.tabsUseCases.addTab,
             selectTabUseCase = requireComponents.useCases.tabsUseCases.selectTab,
             fenixBrowserUseCases = requireComponents.useCases.fenixBrowserUseCases,
             topSitesUseCases = requireComponents.useCases.topSitesUseCase,
-            marsUseCases = requireComponents.useCases.marsUseCases,
             mozAdsUseCases = requireComponents.useCases.mozAdsUseCases,
             viewLifecycleScope = viewLifecycleOwner.lifecycleScope,
+            source = TopSitesSource.SHORTCUTS_LIBRARY,
         )
 
         interactor = DefaultTopSiteInteractor(

@@ -6,6 +6,8 @@
 
 #include "mozilla/Assertions.h"
 
+#include <stdint.h>
+
 namespace js {
 namespace jit {
 
@@ -450,6 +452,10 @@ inline int32_t ImmBranchMaxForwardOffset(OffsetSize bits) {
 
 inline int32_t ImmBranchMaxForwardOffset(ImmBranchRangeType type) {
   return ImmBranchMaxForwardOffset(ImmBranchRangeTypeToOffsetSize(type));
+}
+
+inline int32_t ImmBranchMinBackwardOffset(OffsetSize bits) {
+  return -(1 << (bits - 1));
 }
 
 }  // namespace jit

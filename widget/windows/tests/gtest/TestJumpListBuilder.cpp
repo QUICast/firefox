@@ -3,10 +3,10 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include <objectarray.h>
+#include <propkey.h>
+#include <propvarutil.h>
 #include <shobjidl.h>
 #include <windows.h>
-#include <propvarutil.h>
-#include <propkey.h>
 
 #ifdef __MINGW32__
 // MinGW-w64 headers are missing PropVariantToString.
@@ -14,17 +14,16 @@
 PSSTDAPI PropVariantToString(REFPROPVARIANT propvar, PWSTR psz, UINT cch);
 #endif
 
-#include "gtest/gtest.h"
+#include "JumpListBuilder.h"
 #include "gmock/gmock.h"
-
+#include "gtest/gtest.h"
+#include "mozilla/SpinEventLoopUntil.h"
 #include "mozilla/dom/BindingDeclarations.h"
 #include "mozilla/dom/Promise.h"
 #include "mozilla/dom/PromiseNativeHandler.h"
 #include "mozilla/dom/ScriptSettings.h"
 #include "mozilla/dom/ToJSValue.h"
 #include "mozilla/dom/WindowsJumpListShortcutDescriptionBinding.h"
-#include "mozilla/SpinEventLoopUntil.h"
-#include "JumpListBuilder.h"
 
 using namespace mozilla;
 using namespace testing;

@@ -433,6 +433,7 @@ enum class GridLineSide {
 
 struct nsGridContainerFrame::TrackSize {
   enum StateBits : uint16_t {
+    eNone = 0,
     eAutoMinSizing = 1 << 0,
     eMinContentMinSizing = 1 << 1,
     eMaxContentMinSizing = 1 << 2,
@@ -493,12 +494,10 @@ struct nsGridContainerFrame::TrackSize {
 
 MOZ_MAKE_ENUM_CLASS_BITWISE_OPERATORS(TrackSize::StateBits)
 
-static_assert(
-    std::is_trivially_copyable<nsGridContainerFrame::TrackSize>::value,
-    "Must be trivially copyable");
-static_assert(
-    std::is_trivially_destructible<nsGridContainerFrame::TrackSize>::value,
-    "Must be trivially destructible");
+static_assert(std::is_trivially_copyable_v<nsGridContainerFrame::TrackSize>,
+              "Must be trivially copyable");
+static_assert(std::is_trivially_destructible_v<nsGridContainerFrame::TrackSize>,
+              "Must be trivially destructible");
 
 TrackSize::StateBits nsGridContainerFrame::TrackSize::Initialize(
     nscoord aPercentageBasis, const StyleTrackSize& aSize) {
@@ -2542,7 +2541,7 @@ struct nsGridContainerFrame::Tracks {
   explicit Tracks(LogicalAxis aAxis)
       : mContentBoxSize(NS_UNCONSTRAINEDSIZE),
         mGridGap(NS_UNCONSTRAINEDSIZE),
-        mStateUnion(TrackSize::StateBits{0}),
+        mStateUnion(TrackSize::StateBits::eNone),
         mAxis(aAxis),
         mCanResolveLineRangeSize(false),
         mIsMasonry(false) {
@@ -4031,35 +4030,20 @@ static Subgrid* SubgridComputeMarginBorderPadding(
     return subgrid;
   }
 
-  bool scroller = false;
-  nsIFrame* outerFrame = nullptr;
   if (ScrollContainerFrame* scrollContainerFrame =
           aGridItem.mFrame->GetScrollTargetFrame()) {
-    scroller = true;
-    outerFrame = scrollContainerFrame;
-  }
-
-  if (outerFrame) {
     MOZ_ASSERT(sz.ComputedLogicalMargin(cbWM) == LogicalMargin(cbWM) &&
-                   sz.ComputedLogicalBorder(cbWM) == LogicalMargin(cbWM),
-               "A scrolled inner frame / button content frame "
-               "should not have any margin or border / padding!");
-
-    // Add the margin and border from the (outer) frame. Padding is factored-in
-    // for scrollers already (except for the scrollbar gutter), but not for
-    // button-content.
-    SizeComputationInput szOuterFrame(outerFrame, nullptr, cbWM,
+                   sz.ComputedLogicalBorderPadding(cbWM) == LogicalMargin(cbWM),
+               "A scrolled inner frame should not have any margin or border / "
+               "padding!");
+    // Add the margin and border from the scroller frame.
+    SizeComputationInput szOuterFrame(scrollContainerFrame, nullptr, cbWM,
                                       pmPercentageBasis);
-    subgrid->mMarginBorderPadding += szOuterFrame.ComputedLogicalMargin(cbWM) +
-                                     szOuterFrame.ComputedLogicalBorder(cbWM);
-    if (scroller) {
-      nsMargin ssz = static_cast<ScrollContainerFrame*>(outerFrame)
-                         ->IntrinsicScrollbarGutterSize();
-      subgrid->mMarginBorderPadding += LogicalMargin(cbWM, ssz);
-    } else {
-      subgrid->mMarginBorderPadding +=
-          szOuterFrame.ComputedLogicalPadding(cbWM);
-    }
+    subgrid->mMarginBorderPadding +=
+        szOuterFrame.ComputedLogicalMargin(cbWM) +
+        szOuterFrame.ComputedLogicalBorderPadding(cbWM) +
+        LogicalMargin(cbWM,
+                      scrollContainerFrame->IntrinsicScrollbarGutterSize());
   }
 
   if (nsFieldSetFrame* f = do_QueryFrame(aGridItem.mFrame)) {
@@ -6277,7 +6261,7 @@ void nsGridContainerFrame::Tracks::CalculateSizes(
 TrackSize::StateBits nsGridContainerFrame::Tracks::StateBitsForRange(
     const LineRange& aRange) const {
   MOZ_ASSERT(!aRange.IsAuto(), "must have a definite range");
-  TrackSize::StateBits state = TrackSize::StateBits{0};
+  TrackSize::StateBits state = TrackSize::StateBits::eNone;
   for (auto i : aRange.Range()) {
     state |= mSizes[i].mState;
   }
@@ -7263,7 +7247,7 @@ void nsGridContainerFrame::Tracks::ResolveIntrinsicSize(
     // one span size.
     for (; spanGroupStart != end; spanGroupStart = spanGroupEnd) {
       const uint32_t span = spanGroupStart->mSpan;
-      TrackSize::StateBits stateBitsForSpan{0};
+      TrackSize::StateBits stateBitsForSpan = TrackSize::StateBits::eNone;
       MOZ_ASSERT(spanGroupEnd == spanGroupStart);
       // Find the end of this group if items with the same span size.
       // Accumulate state bits for the items with this span size to avoid
@@ -7334,7 +7318,7 @@ void nsGridContainerFrame::Tracks::ResolveIntrinsicSize(
     }
 
     // Step 4
-    TrackSize::StateBits stateBitsForSpan{0};
+    TrackSize::StateBits stateBitsForSpan = TrackSize::StateBits::eNone;
     for (const SpanningItemData& spanningData : flexSpanningItems) {
       const TrackSize::StateBits bits =
           StateBitsForRange(spanningData.mLineRange);
@@ -8793,9 +8777,10 @@ nscoord nsGridContainerFrame::MasonryLayout(GridReflowInput& aGridRI,
       //  don't affect intrinsic sizing in any way)
       GridItemInfo* item = nullptr;
       auto* ph = static_cast<nsPlaceholderFrame*>(child);
-      if (ph->GetOutOfFlowFrame()->GetParent() == this) {
+      auto* oof = ph->GetOutOfFlowFrame();
+      if (oof && oof->GetParent() == this) {
         item = &aGridRI.mAbsPosItems[absposIndex++];
-        MOZ_RELEASE_ASSERT(item->mFrame == ph->GetOutOfFlowFrame());
+        MOZ_RELEASE_ASSERT(item->mFrame == oof);
         auto masonryStart = item->mArea.LineRangeForAxis(masonryAxis).mStart;
         // If the item was placed by the author at line 1 (masonryStart == 0)
         // then include it to be placed at the masonry-box start.  If it's
@@ -9340,8 +9325,13 @@ void nsGridContainerFrame::ReflowAbsoluteChildren(
   // with respect to the grid container's padding-box (CB).
   LogicalMargin pad(aGridRI.mReflowInput->ComputedLogicalPadding(wm));
   const LogicalPoint gridOrigin(wm, pad.IStart(wm), pad.BStart(wm));
+  const nscoord gridContentBSize =
+      (aGridRI.mInFragmentainer && !aGridRI.mRows.mSizes.IsEmpty())
+          ? aGridRI.mRows.GridLineEdge(aGridRI.mRows.mSizes.Length(),
+                                       GridLineSide::BeforeGridGap)
+          : aContentBSize;
   const LogicalRect gridCB(wm, 0, 0, aContentArea.ISize(wm) + pad.IStartEnd(wm),
-                           aContentBSize + pad.BStartEnd(wm));
+                           gridContentBSize + pad.BStartEnd(wm));
   const nsSize gridCBPhysicalSize = gridCB.Size(wm).GetPhysicalSize(wm);
   size_t i = 0;
   for (nsIFrame* child : absoluteContainer->GetChildList()) {
@@ -9426,6 +9416,8 @@ void nsGridContainerFrame::Reflow(nsPresContext* aPresContext,
                                   ReflowOutput& aDesiredSize,
                                   const ReflowInput& aReflowInput,
                                   nsReflowStatus& aStatus) {
+  NormalizeChildLists();
+
   if (IsHiddenByContentVisibilityOfInFlowParentForLayout()) {
     return;
   }
@@ -9439,8 +9431,6 @@ void nsGridContainerFrame::Reflow(nsPresContext* aPresContext,
   if (IsFrameTreeTooDeep(aReflowInput, aDesiredSize, aStatus)) {
     return;
   }
-
-  NormalizeChildLists();
 
 #ifdef DEBUG
   mDidPushItemsBitMayLie = false;
@@ -10061,7 +10051,7 @@ void nsGridContainerFrame::UpdateSubgridFrameState() {
 }
 
 nsFrameState nsGridContainerFrame::ComputeSelfSubgridMasonryBits() const {
-  nsFrameState bits = nsFrameState(0);
+  nsFrameState bits = NS_FRAME_STATE_NONE;
   const auto* pos = StylePosition();
 
   // We can only have masonry layout in one axis.
@@ -10144,7 +10134,7 @@ void nsGridContainerFrame::Init(nsIContent* aContent, nsContainerFrame* aParent,
     AddStateBits(NS_FRAME_FONT_INFLATION_FLOW_ROOT);
   }
 
-  nsFrameState bits = nsFrameState(0);
+  nsFrameState bits = NS_FRAME_STATE_NONE;
   if (MOZ_LIKELY(!aPrevInFlow)) {
     bits = ComputeSelfSubgridMasonryBits();
   } else {

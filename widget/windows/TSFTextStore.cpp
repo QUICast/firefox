@@ -4,6 +4,12 @@
 
 #include "TSFTextStore.h"
 
+#include <comutil.h>  // for _bstr_t
+#include <oleauto.h>  // for SysAllocString
+#include <olectl.h>
+
+#include <algorithm>
+
 #include "IMMHandler.h"
 #include "KeyboardLayout.h"
 #include "TSFStaticSink.h"
@@ -15,17 +21,12 @@
 #include "mozilla/AutoRestore.h"
 #include "mozilla/Logging.h"
 #include "mozilla/StaticPrefs_intl.h"
-#include "mozilla/glean/WidgetWindowsMetrics.h"
 #include "mozilla/TextEventDispatcher.h"
 #include "mozilla/TextEvents.h"
 #include "mozilla/ToString.h"
 #include "mozilla/WindowsVersion.h"
+#include "mozilla/glean/WidgetWindowsMetrics.h"
 #include "nsWindow.h"
-
-#include <algorithm>
-#include <comutil.h>  // for _bstr_t
-#include <oleauto.h>  // for SysAllocString
-#include <olectl.h>
 
 // For collecting other people's log, tell `MOZ_LOG=IMEHandler:4,sync`
 // rather than `MOZ_LOG=IMEHandler:5,sync` since using `5` may create too

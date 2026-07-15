@@ -18,6 +18,7 @@
 #include "mozilla/dom/StyleSheetList.h"
 #include "nsContentUtils.h"
 #include "nsFocusManager.h"
+#include "nsIContentInlines.h"
 #include "nsIFormControl.h"
 #include "nsLayoutUtils.h"
 #include "nsNameSpaceManager.h"
@@ -411,12 +412,11 @@ static void QueryNodesFromRect(DocumentOrShadowRoot& aRoot, const nsRect& aRect,
                                Multiple aMultiple, ViewportType aViewportType,
                                PerformRetargeting aPerformRetargeting,
                                nsTArray<RefPtr<NodeOrElement>>& aNodes) {
-  static_assert(std::is_same<nsINode, NodeOrElement>::value ||
-                    std::is_same<Element, NodeOrElement>::value,
+  static_assert(std::is_same_v<nsINode, NodeOrElement> ||
+                    std::is_same_v<Element, NodeOrElement>,
                 "Should returning nodes or elements");
 
-  constexpr bool returningElements =
-      std::is_same<Element, NodeOrElement>::value;
+  constexpr bool returningElements = std::is_same_v<Element, NodeOrElement>;
   const bool retargeting = aPerformRetargeting == PerformRetargeting::Yes;
 
   nsCOMPtr<Document> doc = aRoot.AsNode().OwnerDoc();
@@ -794,21 +794,17 @@ void DocumentOrShadowRoot::Unlink(DocumentOrShadowRoot* tmp) {
   tmp->mIdentifierMap.Clear();
 }
 
-void DocumentOrShadowRoot::SetCustomElementRegistry(
-    CustomElementRegistry& aRegistry) {
-  MOZ_ASSERT(StaticPrefs::dom_scoped_custom_element_registries_enabled());
-  MOZ_ASSERT(mKind == Kind::ShadowRoot,
-             "SetCustomElementRegistry should only be called on ShadowRoots");
-  ShadowRoot& root = static_cast<ShadowRoot&>(AsNode());
-  root.SetCustomElementRegistry(&aRegistry);
-}
-
 /* https://dom.spec.whatwg.org/#dom-documentorshadowroot-customelementregistry
  */
 CustomElementRegistry* DocumentOrShadowRoot::GetCustomElementRegistry() {
   // Step 1. If this is a document, then return this's custom element registry.
-  // TODO(2021247): Per document registries
   if (mKind == Kind::Document) {
+    if (StaticPrefs::dom_scoped_custom_element_registries_enabled()) {
+      if (RefPtr<CustomElementRegistry> registry =
+              CustomElementRegistry::GetScopedRegistry(AsNode())) {
+        return registry;
+      }
+    }
     Document* doc = AsNode().AsDocument();
     nsPIDOMWindowInner* window = doc->GetInnerWindow();
     if (!window) {

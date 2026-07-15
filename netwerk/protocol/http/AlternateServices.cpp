@@ -2,18 +2,18 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "HttpLog.h"
-
 #include "AlternateServices.h"
+
 #include <algorithm>
+
+#include "HttpLog.h"
 #include "mozilla/Atomics.h"
-#include "mozilla/glean/NetwerkProtocolHttpMetrics.h"
 #include "mozilla/StaticPrefs_network.h"
 #include "mozilla/SyncRunnable.h"
 #include "mozilla/dom/PContent.h"
+#include "mozilla/glean/NetwerkProtocolHttpMetrics.h"
 #include "mozilla/net/AltSvcTransactionChild.h"
 #include "mozilla/net/AltSvcTransactionParent.h"
-#include "mozilla/SyncRunnable.h"
 #include "nsEscape.h"
 #include "nsHttpConnectionInfo.h"
 #include "nsHttpHandler.h"

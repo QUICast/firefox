@@ -659,19 +659,6 @@ export const LoginHelper = {
   },
 
   /**
-   * Helper to avoid the property bags when calling
-   * Services.logins.searchLogins from JS.
-   *
-   * @deprecated Use Services.logins.searchLoginsAsync instead.
-   *
-   * @param {object} aSearchOptions - A regular JS object to copy to a property bag before searching
-   * @return {nsILoginInfo[]} - The result of calling searchLogins.
-   */
-  searchLoginsWithObject(aSearchOptions) {
-    return Services.logins.searchLogins(this.newPropertyBag(aSearchOptions));
-  },
-
-  /**
    * @param {string} aURL
    * @returns {string} which is the hostPort of aURL if supported by the scheme
    *                   otherwise, returns the original aURL.
@@ -1724,7 +1711,7 @@ export const LoginHelper = {
       };
     }
     // We'll attempt to re-auth via Primary Password, so log out.
-    token.logout();
+    await token.logout();
 
     // If a primary password prompt is already open, just exit early and return false.
     // The user can re-trigger it after responding to the already open dialog.
@@ -1738,7 +1725,7 @@ export const LoginHelper = {
 
     try {
       // Log in again, which prompts for the primary password.
-      token.login();
+      await token.login();
     } catch (e) {
       // An exception will be thrown if the user cancels the login prompt
       // dialog. The user will still be logged out of Software Security Device
@@ -1828,6 +1815,12 @@ export const LoginHelper = {
    *                    which could be in a different window.
    */
   getBrowserForPrompt(browser) {
+    // The browser may have been torn down (e.g. its tab was closed) while an
+    // async operation was in progress before we got here, in which case its
+    // browsingContext is null and there is no prompt target left.
+    if (!browser.browsingContext) {
+      return browser;
+    }
     let chromeWindow = browser.documentGlobal;
     let openerBrowsingContext = browser.browsingContext.opener;
     let openerBrowser = openerBrowsingContext

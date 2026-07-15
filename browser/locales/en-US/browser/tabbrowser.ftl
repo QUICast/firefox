@@ -175,8 +175,14 @@ tabbrowser-customizemode-tab-title = Customize { -brand-short-name }
 tabbrowser-context-mute-tab =
     .label = Mute Tab
     .accesskey = M
+tabbrowser-context-mute-tab2 =
+    .label = Mute
+    .accesskey = M
 tabbrowser-context-unmute-tab =
     .label = Unmute Tab
+    .accesskey = m
+tabbrowser-context-unmute-tab2 =
+    .label = Unmute
     .accesskey = m
 # The accesskey should match the accesskey for tabbrowser-context-mute-tab
 tabbrowser-context-mute-selected-tabs =
@@ -331,6 +337,8 @@ tab-context-move-split-view-to-group =
 
 tab-splitview-splitter =
     .aria-label = Resize split view tabs
+tab-devtools-splitter =
+    .aria-label = Resize Developer Tools panel
 
 tab-context-move-tab-to-group-saved-groups =
     .label = Closed Groups

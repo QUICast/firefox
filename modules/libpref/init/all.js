@@ -783,8 +783,8 @@ pref("dom.storage.snapshot_gradual_prefill", 4096);
 pref("dom.storage.snapshot_reusing", true);
 pref("dom.storage.client_validation", true);
 
-// Enable time picker UI. By default, disabled.
-pref("dom.forms.datetime.timepicker", false);
+// Enable time picker UI.
+pref("dom.forms.datetime.timepicker", true);
 
 // Enable search in <select> dropdowns (more than 40 options)
 pref("dom.forms.selectSearch", false);
@@ -859,6 +859,9 @@ pref("privacy.purge_trackers.max_purge_count", 100);
 // user interaction (even if they don't have user
 // interaction directly).
 pref("privacy.purge_trackers.consider_entity_list", false);
+
+// What custom schemes to treat as accessing digital wallets, comma separated.
+pref("privacy.wallet_schemes", "openid4vp,mdoc,mdoc-openid4vp,haip,eudi-wallet,eudi-openid4vp,openid-credential-offer");
 
 pref("dom.event.contextmenu.enabled",       true);
 
@@ -1734,7 +1737,7 @@ pref("font.blacklist.underline_offset", "FangSong,Gulim,GulimChe,MingLiU,MingLiU
 pref("security.dialog_enable_delay", 1000);
 pref("security.notification_enable_delay", 500);
 
-#ifdef EARLY_BETA_OR_EARLIER
+#ifdef NIGHTLY_BUILD
   // Disallow web documents loaded with the SystemPrincipal
   pref("security.disallow_non_local_systemprincipal_in_tests", false);
 #endif
@@ -3012,13 +3015,9 @@ pref("signon.firefoxRelay.terms_of_service_url", "https://www.mozilla.org/%LOCAL
 pref("signon.firefoxRelay.privacy_policy_url", "https://www.mozilla.org/%LOCALE%/privacy/subscription-services/");
 pref("signon.signupDetection.confidenceThreshold",     "0.75");
 
-#ifdef NIGHTLY_BUILD
-  pref("signon.rustMirror.enabled", true);
-  pref("signon.rustMirror.collectFailedOrigins", true);
-#else
-  pref("signon.rustMirror.enabled", false);
-  pref("signon.rustMirror.collectFailedOrigins", false);
-#endif
+pref("signon.storage.rust.enabled", false);
+pref("signon.storage.rust.active", false);
+pref("signon.storage.rust.migrationAttempts", 0);
 
 // Satchel (Form Manager) prefs
 pref("browser.formfill.debug",            false);
@@ -3840,6 +3839,10 @@ pref("services.common.log.logger.tokenserverclient", "Debug");
   // The URL of the Firefox Accounts auth server backend
   pref("identity.fxaccounts.auth.uri", "https://api.accounts.firefox.com/v1");
 
+  // Authenticate FxA token requests with the auth-server's typed Bearer scheme
+  // instead of Hawk. Kill-switch for the Hawk-to-Bearer migration.
+  pref("identity.fxaccounts.auth.useBearer", true);
+
   // Percentage chance we skip an extension storage sync (kinto life support).
   pref("services.sync.extension-storage.skipPercentageChance", 50);
 #endif // MOZ_SERVICES_SYNC
@@ -3946,8 +3949,7 @@ pref("devtools.debugger.force-local", true);
 // Possible values:
 // 0 => the response body has no limit
 // n => represents max number of bytes stored
-pref("devtools.netmonitor.responseBodyLimit", 1048576);
-pref("devtools.netmonitor.requestBodyLimit", 1048576);
+pref("devtools.netmonitor.bodyLimit", 1048576);
 
 // Limit for WebSocket/EventSource messages (100 KB).
 pref("devtools.netmonitor.msg.messageDataLimit", 100000);
@@ -3978,6 +3980,13 @@ pref("dom.postMessage.sharedArrayBuffer.bypassCOOP_COEP.insecure.enabled", false
 pref("dom.postMessage.sharedArrayBuffer.bypassCOOP_COEP.insecure.enabled", false, locked);
 #endif
 
+// Locked so end users cannot toggle SQLite encryption from about:config or
+// user.js. Enterprise policies (Preferences allowlist) and our keystore
+// auto-recovery use the unlock/setDefault/relock dance to override.
+// Defined in StaticPrefList.yaml; locked here because the YAML has no
+// "locked" attribute.
+pref("security.storage.encryption.sqlite.enabled", false, locked);
+
 // Preferences for the form autofill toolkit component.
 // The truthy values of "extensions.formautofill.addresses.available"
 // is "on" and "detect",
@@ -3987,7 +3996,7 @@ pref("dom.postMessage.sharedArrayBuffer.bypassCOOP_COEP.insecure.enabled", false
 // is not being used in form autofill, but need to exist for migration purposes.
 pref("extensions.formautofill.available", "detect");
 
-#if defined(NIGHTLY_BUILD) && !defined(ANDROID)
+#if !defined(ANDROID)
 pref("extensions.formautofill.addresses.supported", "on");
 // Use ML for address form field detection.
 pref("extensions.formautofill.useml", true);

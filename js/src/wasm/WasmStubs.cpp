@@ -2865,6 +2865,13 @@ bool wasm::GenerateContBaseFrameStub(jit::MacroAssembler& masm,
 
   int32_t offsetFromFPToStack = -ContStack::offsetOfBaseFrameFP();
 
+  // Store initial callee's InstanceReg into calleeInstance_ before clearing
+  // initialResumeTarget_.
+  masm.storePtr(InstanceReg,
+                Address(FramePointer,
+                        static_cast<int32_t>(
+                            wasm::FrameWithInstances::calleeInstanceOffset())));
+
   // Clear the 'resumeTarget' in our frame.
   masm.computeEffectiveAddress(
       Address(FramePointer,
@@ -3044,6 +3051,9 @@ static bool GenerateDebugStub(MacroAssembler& masm, Label* throwLabel,
   if (ShadowStackSpace) {
     masm.addToStackPtr(Imm32(ShadowStackSpace));
   }
+
+  MOZ_ASSERT(NonVolatileRegs.has(InstanceReg));
+  masm.loadWasmPinnedRegsFromInstance(mozilla::Nothing());
 
   masm.setFramePushed(framePushed);
 
@@ -3372,7 +3382,7 @@ bool wasm::GenerateEntryStubs(const CodeMetadata& codeMeta,
       continue;
     }
     if (!GenerateEntryStubs(masm, i, fe, funcType, noAbsolute,
-                            codeMeta.isAsmJS(), &code->codeRanges)) {
+                            &code->codeRanges)) {
       return false;
     }
   }
@@ -3387,10 +3397,9 @@ bool wasm::GenerateEntryStubs(const CodeMetadata& codeMeta,
 
 bool wasm::GenerateEntryStubs(MacroAssembler& masm, size_t funcExportIndex,
                               const FuncExport& fe, const FuncType& funcType,
-                              const Maybe<ImmPtr>& callee, bool isAsmJS,
+                              const Maybe<ImmPtr>& callee,
                               CodeRangeVector* codeRanges) {
   MOZ_ASSERT(!callee == fe.hasEagerStubs());
-  MOZ_ASSERT_IF(isAsmJS, fe.hasEagerStubs());
 
   Offsets offsets;
   if (!GenerateInterpEntry(masm, fe, funcType, callee, &offsets)) {
@@ -3401,7 +3410,7 @@ bool wasm::GenerateEntryStubs(MacroAssembler& masm, size_t funcExportIndex,
     return false;
   }
 
-  if (isAsmJS || !funcType.canHaveJitEntry()) {
+  if (!funcType.canHaveJitEntry()) {
     return true;
   }
 
@@ -3526,7 +3535,7 @@ bool wasm::GenerateStubs(const CodeMetadata& codeMeta,
       continue;
     }
     if (!GenerateEntryStubs(masm, i, fe, funcType, noAbsolute,
-                            codeMeta.isAsmJS(), &code->codeRanges)) {
+                            &code->codeRanges)) {
       return false;
     }
   }

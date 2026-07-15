@@ -3,8 +3,9 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "NullHttpChannel.h"
-#include "nsContentUtils.h"
+
 #include "nsContentSecurityManager.h"
+#include "nsContentUtils.h"
 #include "nsIScriptSecurityManager.h"
 #include "nsIStreamListener.h"
 
@@ -21,7 +22,9 @@ NullHttpChannel::NullHttpChannel() {
 }
 
 NullHttpChannel::NullHttpChannel(nsIHttpChannel* chan)
-    : mAllRedirectsSameOrigin(false), mAllRedirectsPassTimingAllowCheck(false) {
+    : mAllRedirectsSameOrigin(false),
+      mAllRedirectsSameOriginIgnoringInternal(false),
+      mAllRedirectsPassTimingAllowCheck(false) {
   nsIScriptSecurityManager* ssm = nsContentUtils::GetSecurityManager();
   ssm->GetChannelURIPrincipal(chan, getter_AddRefs(mResourcePrincipal));
 
@@ -420,6 +423,18 @@ NullHttpChannel::SetLoadInfo(nsILoadInfo* aLoadInfo) {
   return NS_ERROR_NOT_IMPLEMENTED;
 }
 
+NS_IMETHODIMP
+NullHttpChannel::GetParentProcessChannelHandle(
+    mozilla::dom::ParentProcessChannelHandle** aValue) {
+  return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+NS_IMETHODIMP
+NullHttpChannel::SetParentProcessChannelHandle(
+    mozilla::dom::ParentProcessChannelHandle* aValue) {
+  return NS_ERROR_NOT_IMPLEMENTED;
+}
+
 //-----------------------------------------------------------------------------
 // NullHttpChannel::nsIRequest
 //-----------------------------------------------------------------------------
@@ -732,6 +747,20 @@ NullHttpChannel::GetAllRedirectsSameOrigin(bool* aAllRedirectsSameOrigin) {
 
 NS_IMETHODIMP
 NullHttpChannel::SetAllRedirectsSameOrigin(bool aAllRedirectsSameOrigin) {
+  return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+NS_IMETHODIMP
+NullHttpChannel::GetAllRedirectsSameOriginIgnoringInternal(
+    bool* aAllRedirectsSameOriginIgnoringInternal) {
+  *aAllRedirectsSameOriginIgnoringInternal =
+      mAllRedirectsSameOriginIgnoringInternal;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+NullHttpChannel::SetAllRedirectsSameOriginIgnoringInternal(
+    bool aAllRedirectsSameOriginIgnoringInternal) {
   return NS_ERROR_NOT_IMPLEMENTED;
 }
 

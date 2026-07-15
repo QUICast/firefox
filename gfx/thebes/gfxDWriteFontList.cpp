@@ -2,37 +2,36 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "mozilla/FontPropertyTypes.h"
-#include "mozilla/MemoryReporting.h"
-#include "mozilla/intl/OSPreferences.h"
-
 #include "gfxDWriteFontList.h"
-#include "gfxDWriteFonts.h"
+
+#include "../2d/AutoHelpersWin.h"
+#include "SharedFontList-impl.h"
 #include "gfxDWriteCommon.h"
-#include "nsUnicharUtils.h"
-#include "nsPresContext.h"
-#include "nsServiceManagerUtils.h"
-#include "nsCharSeparatedTokenizer.h"
-#include "mozilla/dom/Document.h"
-#include "mozilla/gfx/Logging.h"
+#include "gfxDWriteFonts.h"
+#include "gfxRect.h"
+#include "harfbuzz/hb.h"
 #include "mozilla/EndianUtils.h"
+#include "mozilla/FontPropertyTypes.h"
 #include "mozilla/LookAndFeel.h"
+#include "mozilla/MemoryReporting.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/ProfilerLabels.h"
 #include "mozilla/Sprintf.h"
 #include "mozilla/StaticPrefs_gfx.h"
-#include "mozilla/glean/GfxMetrics.h"
+#include "mozilla/Utf16.h"
 #include "mozilla/WindowsProcessMitigations.h"
-#include "nsDirectoryServiceUtils.h"
-#include "nsDirectoryServiceDefs.h"
+#include "mozilla/dom/Document.h"
+#include "mozilla/gfx/Logging.h"
+#include "mozilla/glean/GfxMetrics.h"
+#include "mozilla/intl/OSPreferences.h"
 #include "nsAppDirectoryServiceDefs.h"
+#include "nsCharSeparatedTokenizer.h"
+#include "nsDirectoryServiceDefs.h"
+#include "nsDirectoryServiceUtils.h"
+#include "nsPresContext.h"
+#include "nsServiceManagerUtils.h"
+#include "nsUnicharUtils.h"
 #include "nsWindowsHelpers.h"
-
-#include "../2d/AutoHelpersWin.h"
-#include "gfxRect.h"
-#include "SharedFontList-impl.h"
-
-#include "harfbuzz/hb.h"
 
 #define StandardFonts
 #include "StandardFonts-win10.inc"
@@ -968,7 +967,7 @@ FontFamily gfxDWriteFontList::GetDefaultFontForPlatform(
   return ff;
 }
 
-gfxFontEntry* gfxDWriteFontList::LookupLocalFont(
+already_AddRefed<gfxFontEntry> gfxDWriteFontList::LookupLocalFont(
     FontVisibilityProvider* aFontVisibilityProvider,
     const nsACString& aFontName, WeightRange aWeightForEntry,
     StretchRange aStretchForEntry, SlantStyleRange aStyleForEntry) {
@@ -988,14 +987,14 @@ gfxFontEntry* gfxDWriteFontList::LookupLocalFont(
   }
 
   gfxDWriteFontEntry* dwriteLookup = static_cast<gfxDWriteFontEntry*>(lookup);
-  gfxDWriteFontEntry* fe =
-      new gfxDWriteFontEntry(lookup->Name(), dwriteLookup->mFont,
-                             aWeightForEntry, aStretchForEntry, aStyleForEntry);
+  RefPtr fe = MakeRefPtr<gfxDWriteFontEntry>(
+      lookup->Name(), dwriteLookup->mFont, aWeightForEntry, aStretchForEntry,
+      aStyleForEntry);
   fe->SetForceGDIClassic(dwriteLookup->GetForceGDIClassic());
-  return fe;
+  return fe.forget();
 }
 
-gfxFontEntry* gfxDWriteFontList::MakePlatformFont(
+already_AddRefed<gfxFontEntry> gfxDWriteFontList::MakePlatformFont(
     const nsACString& aFontName, WeightRange aWeightForEntry,
     StretchRange aStretchForEntry, SlantStyleRange aStyleForEntry,
     const uint8_t* aFontData, uint32_t aLength) {
@@ -1021,7 +1020,7 @@ gfxFontEntry* gfxDWriteFontList::MakePlatformFont(
   DWRITE_FONT_FILE_TYPE fileType;
   UINT32 numFaces;
 
-  auto entry = MakeUnique<gfxDWriteFontEntry>(
+  RefPtr entry = MakeRefPtr<gfxDWriteFontEntry>(
       NS_ConvertUTF16toUTF8(uniqueName), fontFile, fontFileStream,
       aWeightForEntry, aStretchForEntry, aStyleForEntry);
 
@@ -1040,7 +1039,7 @@ gfxFontEntry* gfxDWriteFontList::MakePlatformFont(
     return nullptr;
   }
 
-  return entry.release();
+  return entry.forget();
 }
 
 bool gfxDWriteFontList::UseGDIFontTableAccess() const {
@@ -1068,7 +1067,7 @@ static void GetPostScriptNameFromNameTable(IDWriteFontFace* aFace,
   }
 }
 
-gfxFontEntry* gfxDWriteFontList::CreateFontEntry(
+already_AddRefed<gfxFontEntry> gfxDWriteFontList::CreateFontEntry(
     fontlist::Face* aFace, const fontlist::Family* aFamily) {
   IDWriteFontCollection* collection =
 #ifdef MOZ_BUNDLED_FONTS
@@ -1161,11 +1160,12 @@ gfxFontEntry* gfxDWriteFontList::CreateFontEntry(
       return nullptr;
     }
 
-    auto fe = new gfxDWriteFontEntry(faceName, font, !aFamily->IsBundled());
+    RefPtr fe =
+        MakeRefPtr<gfxDWriteFontEntry>(faceName, font, !aFamily->IsBundled());
     fe->InitializeFrom(aFace, aFamily);
     fe->mForceGDIClassic = aFamily->IsForceClassic();
     fe->mMayUseGDIAccess = aFamily->IsSimple();
-    return fe;
+    return fe.forget();
   }
   MOZ_SEH_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
     gfxCriticalNote << "Exception occurred while creating font entry for "
@@ -1792,7 +1792,7 @@ nsresult gfxDWriteFontList::InitFontListForPlatform() {
       // add faces to Gill Sans MT
       for (const auto& face : faces) {
         // change the entry's family name to match its adoptive family
-        face->mFamilyName = gillSansMTFamily->Name();
+        face->SetFamilyName(gillSansMTFamily->Name());
         gillSansMTFamily->AddFontEntry(face);
 
         if (LOG_FONTLIST_ENABLED()) {
@@ -2304,13 +2304,13 @@ gfxFontEntry* gfxDWriteFontList::PlatformGlobalFontFallback(
   wchar_t str[16];
   uint32_t strLen;
 
-  if (IS_IN_BMP(aCh)) {
+  if (mozilla::IsInBMP(aCh)) {
     str[0] = static_cast<wchar_t>(aCh);
     str[1] = 0;
     strLen = 1;
   } else {
-    str[0] = static_cast<wchar_t>(H_SURROGATE(aCh));
-    str[1] = static_cast<wchar_t>(L_SURROGATE(aCh));
+    str[0] = static_cast<wchar_t>(mozilla::HighSurrogate(aCh));
+    str[1] = static_cast<wchar_t>(mozilla::LowSurrogate(aCh));
     str[2] = 0;
     strLen = 2;
   }
@@ -2576,9 +2576,9 @@ already_AddRefed<FontInfoData> gfxDWriteFontList::CreateFontInfoData() {
   return fi.forget();
 }
 
-gfxFontFamily* gfxDWriteFontList::CreateFontFamily(
+already_AddRefed<gfxFontFamily> gfxDWriteFontList::CreateFontFamily(
     const nsACString& aName, FontVisibility aVisibility) const {
-  return new gfxDWriteFontFamily(aName, aVisibility, nullptr);
+  return MakeAndAddRef<gfxDWriteFontFamily>(aName, aVisibility, nullptr);
 }
 
 #ifdef MOZ_BUNDLED_FONTS

@@ -1,12 +1,11 @@
-#include "gtest/gtest.h"
-
-#include "nsCOMPtr.h"
-#include "nsISocketTransport.h"
-#include "nsString.h"
-#include "nsComponentManagerUtils.h"
 #include "../../base/nsSocketTransport2.h"
 #include "../../base/nsSocketTransportService2.h"
+#include "gtest/gtest.h"
+#include "nsCOMPtr.h"
+#include "nsComponentManagerUtils.h"
+#include "nsISocketTransport.h"
 #include "nsServiceManagerUtils.h"
+#include "nsString.h"
 #include "nsThreadUtils.h"
 
 namespace mozilla {

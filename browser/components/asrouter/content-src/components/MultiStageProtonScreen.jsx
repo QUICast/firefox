@@ -191,6 +191,10 @@ export const MultiStageProtonScreen = props => {
       setActiveSingleSelectSelection={props.setActiveSingleSelectSelection}
       textInputs={props.textInputs}
       setTextInput={props.setTextInput}
+      pinnedSites={props.pinnedSites}
+      setPinnedSite={props.setPinnedSite}
+      contentToggleChecked={props.contentToggleChecked}
+      setContentToggleChecked={props.setContentToggleChecked}
       totalNumberOfScreens={props.totalNumberOfScreens}
       handleAction={props.handleAction}
       isFirstScreen={props.isFirstScreen}
@@ -231,6 +235,7 @@ export const ProtonScreenActionButtons = props => {
     activeMultiSelect,
     activeSingleSelectSelections,
     textInputs,
+    pinnedSites,
     installedAddons,
   } = props;
   const defaultValue = content.checkbox?.defaultValue;
@@ -295,6 +300,10 @@ export const ProtonScreenActionButtons = props => {
       return Object.values(textInputs).every(
         input => !input.isValid || input.value.trim().length === 0
       );
+    }
+    // Disables the primary button until the user has pinned at least one site.
+    if (disabledValue === "hasPinnedSite") {
+      return !pinnedSites;
     }
     return disabledValue;
   };
@@ -396,7 +405,13 @@ export class ProtonScreen extends React.PureComponent {
     }
   }
 
-  getScreenClassName(includeNoodles, isVideoOnboarding, isAddonsPicker) {
+  getScreenClassName(
+    includeNoodles,
+    hasZapBorder,
+    hasZapShadow,
+    isVideoOnboarding,
+    isAddonsPicker
+  ) {
     if (isVideoOnboarding) {
       return "with-video";
     }
@@ -411,8 +426,10 @@ export class ProtonScreen extends React.PureComponent {
         ? `dialog-initial`
         : ``;
     const dialogLast = this.props.isLastScreen ? `dialog-last` : ``;
+    const zapBorder = hasZapBorder ? `zap-border` : ``;
+    const zapShadow = hasZapShadow ? `zap-shadow` : ``;
 
-    return `${screenClass} ${dialogInitial} ${dialogLast} ${includeNoodles ? `with-noodles` : ``}`;
+    return `${screenClass} ${dialogInitial} ${dialogLast} ${zapBorder} ${zapShadow} ${includeNoodles ? `with-noodles` : ``}`;
   }
 
   renderTitle({ title, title_logo }) {
@@ -656,6 +673,13 @@ export class ProtonScreen extends React.PureComponent {
   renderSecondarySection(content) {
     const background = this.getEffectiveBackground(content);
     const heroImageUrl = this.getEffectiveHeroImageUrl(content);
+    // pinnable_sites exposes its background through a custom property so the
+    // stylesheet can swap the wide-layout image for a narrow gradient without
+    // overriding an inline `background` shorthand.
+    const tiles = Array.isArray(content.tiles)
+      ? content.tiles
+      : [content.tiles];
+    const isPinnableSites = tiles.some(tile => tile?.type === "pinnable_sites");
     return (
       <div
         className={`section-secondary ${
@@ -664,7 +688,8 @@ export class ProtonScreen extends React.PureComponent {
         style={
           background
             ? {
-                background,
+                [isPinnableSites ? "--pinnable-sites-bkg" : "background"]:
+                  background,
                 "--mr-secondary-background-position-y":
                   content.split_narrow_bkg_position,
               }
@@ -840,6 +865,7 @@ export class ProtonScreen extends React.PureComponent {
         activeMultiSelect={this.props.activeMultiSelect}
         activeSingleSelectSelections={this.props.activeSingleSelectSelections}
         textInputs={this.props.textInputs}
+        pinnedSites={this.props.pinnedSites}
       />
     ) : null;
   }
@@ -858,6 +884,8 @@ export class ProtonScreen extends React.PureComponent {
       isWideScreen,
     } = this.props;
     const includeNoodles = content.has_noodles;
+    const hasZapBorder = content.zap_border;
+    const hasZapShadow = content.zap_shadow;
     // The default screen position is "center"
     const isCenterPosition = content.position === "center" || !content.position;
     const hideStepsIndicator =
@@ -873,10 +901,12 @@ export class ProtonScreen extends React.PureComponent {
     const screenClassName = isCenterPosition
       ? this.getScreenClassName(
           includeNoodles,
+          hasZapBorder,
+          hasZapShadow,
           content?.video_container,
           content.tiles?.type === "addons-picker"
         )
-      : "";
+      : `${hasZapBorder ? "zap-border" : ""} ${hasZapShadow ? " zap-shadow" : ""}`;
     const isEmbeddedMigration = content.tiles?.type === "migration-wizard";
     const isSystemPromptStyleSpotlight =
       content.isSystemPromptStyleSpotlight === true;

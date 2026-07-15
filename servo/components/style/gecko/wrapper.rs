@@ -19,10 +19,7 @@ use crate::bloom::each_relevant_element_hash;
 use crate::context::{QuirksMode, SharedStyleContext, UpdateAnimationsTasks};
 use crate::data::{ElementDataMut, ElementDataRef, ElementDataWrapper};
 use crate::device::Device;
-use crate::dom::{
-    AttributeProvider, LayoutIterator, NodeInfo, OpaqueNode, TDocument, TElement, TNode,
-    TShadowRoot,
-};
+use crate::dom::{LayoutIterator, NodeInfo, OpaqueNode, TDocument, TElement, TNode, TShadowRoot};
 use crate::gecko::selector_parser::{NonTSPseudoClass, PseudoElement, SelectorImpl};
 use crate::gecko::snapshot_helpers;
 use crate::gecko_bindings::bindings;
@@ -971,6 +968,9 @@ fn selector_flags_to_node_flags(flags: ElementSelectorFlags) -> u32 {
     if flags.contains(ElementSelectorFlags::RELATIVE_SELECTOR_SEARCH_DIRECTION_SIBLING) {
         gecko_flags |= NodeSelectorFlags::RelativeSelectorSearchDirectionSibling.0;
     }
+    if flags.contains(ElementSelectorFlags::MAY_HAVE_TREE_COUNTING_FUNCTION) {
+        gecko_flags |= NodeSelectorFlags::MayHaveTreeCountingFunction.0;
+    }
 
     gecko_flags
 }
@@ -1805,9 +1805,7 @@ impl<'le> TElement for GeckoElement<'le> {
             ElementSelectorFlags::empty()
         }
     }
-}
 
-impl<'le> AttributeProvider for GeckoElement<'le> {
     fn get_attr(&self, attr: &LocalName, namespace: &Namespace) -> Option<String> {
         //TODO(bug 2003334): Avoid unnecessary string copies/conversions here.
         let mut result = nsString::new();

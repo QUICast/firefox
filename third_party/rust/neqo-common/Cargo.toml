@@ -13,7 +13,7 @@
 edition = "2024"
 rust-version = "1.90.0"
 name = "neqo-common"
-version = "0.28.1"
+version = "0.29.0"
 authors = ["The Neqo Authors <necko@mozilla.com>"]
 build = "build.rs"
 autolib = false
@@ -110,7 +110,7 @@ default-features = false
 package = "codspeed-criterion-compat"
 
 [dev-dependencies.test-fixture]
-path = "../test-fixture"
+path = "../neqo-test-fixture"
 
 [target."cfg(windows)".dependencies.windows]
 version = ">=0.60,<0.63"

@@ -234,6 +234,47 @@ add_task(async function test_manifestIcon_differentOrigin() {
   });
 });
 
+add_task(async function test_manifestIcon_unwantedPurposesDisqualifies() {
+  // We _don't_ want to pick the one from the manifest in this case, since we
+  // want 'purpose: "any"' only.
+  await checkManifestIcon(gBadFaviconImg, gBadFaviconImg, {
+    icons: [
+      {
+        src: kGoodFaviconHttpUri.spec,
+        purpose: "monochrome maskable",
+      },
+    ],
+  });
+});
+
+add_task(async function test_manifestIcon_unwantedPurposesFallback() {
+  // Even though the 256x256 is enticing, we want to go with the 1x1 since its
+  // purpose matches.
+  await checkManifestIcon(gGoodFaviconImg, gGoodFaviconImg, {
+    icons: [
+      {
+        src: kBadFaviconHttpUri.spec,
+        purpose: "monochrome maskable",
+      },
+      {
+        src: kGoodFaviconHttpUri.spec,
+        purpose: "any any any",
+      },
+    ],
+  });
+});
+
+add_task(async function test_manifestIcon_extraPurposes() {
+  await checkManifestIcon(gGoodFaviconImg, gGoodFaviconImg, {
+    icons: [
+      {
+        src: kGoodFaviconHttpUri.spec,
+        purpose: "any maskable",
+      },
+    ],
+  });
+});
+
 add_task(async function test_findOrCreateTaskbarTab_noIcon() {
   let sandbox = sinon.createSandbox();
   let fakeImg = {};
@@ -243,7 +284,7 @@ add_task(async function test_findOrCreateTaskbarTab_noIcon() {
 
   let result = await TaskbarTabs.findOrCreateTaskbarTab(kBaseUri, 0);
   Assert.equal(
-    pinStub.firstCall?.args[2],
+    pinStub.firstCall?.args[1],
     fakeImg,
     "The default icon was selected when no favicon was available"
   );
@@ -307,7 +348,7 @@ async function checkManifestIcon(aImageWithTab, aImageWithoutTab, aManifest) {
   await TaskbarTabs.removeTaskbarTab(taskbarTab.id);
   Assert.equal(pinStub.callCount, 1, "The taskbar tab was pinned once");
   assertBytesEqual(
-    encodeImagePNG(pinStub.firstCall?.args[2]),
+    encodeImagePNG(pinStub.firstCall?.args[1]),
     aImageWithoutTab
   );
 
@@ -358,10 +399,10 @@ async function checkTaskbarTabIcon(
 
   Assert.equal(pinStub.callCount, 1, "Tried to pin taskbar tab");
   if (aImage) {
-    assertBytesEqual(encodeImagePNG(pinStub.firstCall.args[2]), aImage);
+    assertBytesEqual(encodeImagePNG(pinStub.firstCall.args[1]), aImage);
   } else {
     assertBytesEqual(
-      encodeImagePNG(pinStub.firstCall.args[2]),
+      encodeImagePNG(pinStub.firstCall.args[1]),
       encodeImagePNG(await TaskbarTabsUtils.getDefaultIcon())
     );
   }

@@ -456,7 +456,6 @@ add_task(async function test_fetch_weather_with_geolocation() {
         locationName: undefined,
         ...expected,
         timeoutMs: 7000,
-        endpointUrl: undefined,
       });
     } else {
       sinon.assert.notCalled(stub);
@@ -927,6 +926,9 @@ add_task(async function test_shim_fetchWeatherReport_sends_accept_language() {
   MerinoTestUtils.server.reset();
 
   const client = new TemporaryMerinoClientShim("ACCEPT_LANGUAGE_REPORT");
+  // fetchWeatherReport() arms a long-lived Merino session timer. Cancel it so
+  // it doesn't outlive the test and leave a pending timer racing with shutdown.
+  registerCleanupFunction(() => client.resetSession());
   await client.fetchWeatherReport({
     source: "newtab",
     city: "Yokohama",

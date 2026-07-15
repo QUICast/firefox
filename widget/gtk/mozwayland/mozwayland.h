@@ -9,9 +9,10 @@
 #ifndef MozWayland_h_
 #define MozWayland_h_
 
-#include "mozilla/Types.h"
-#include <gtk/gtk.h>
 #include <gdk/gdkwayland.h>
+#include <gtk/gtk.h>
+
+#include "mozilla/Types.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -77,6 +78,15 @@ static inline void wl_data_offer_set_actions(
 }
 #else
 typedef struct wl_data_offer_listener moz_wl_data_offer_listener;
+#endif
+
+#ifndef WL_DATA_OFFER_FINISH
+#  define WL_DATA_OFFER_FINISH 3
+static inline void wl_data_offer_finish(struct wl_data_offer* wl_data_offer) {
+  wl_proxy_marshal_flags(
+      (struct wl_proxy*)wl_data_offer, WL_DATA_OFFER_FINISH, NULL,
+      wl_proxy_get_version((struct wl_proxy*)wl_data_offer), 0);
+}
 #endif
 
 #ifndef WL_SUBCOMPOSITOR_GET_SUBSURFACE

@@ -19,6 +19,16 @@ appmenuitem-banner-update-unsupported =
 appmenuitem-banner-update-restart =
     .label = Update available — restart now
 
+appmenu-nova-update-title = Restart to update { -brand-short-name }
+appmenu-nova-update-description = Your tabs will reopen.
+
+appmenu-nova-fxa-sign-in = Sign in
+
+appmenu-nova-switch-device-promo =
+    .message = Getting a new device soon? Take { -brand-short-name } with you!
+
+appmenu-nova-switch-device-link = How to migrate your data
+
 appmenuitem-new-tab =
     .label = New Tab
 appmenuitem-new-window =
@@ -74,7 +84,7 @@ appmenuitem-zoom-enlarge =
 appmenuitem-zoom-reduce =
   .label = Zoom Out
 appmenuitem-fullscreen =
-  .label = Full Screen
+  .label = Full screen
 
 ## Firefox Account toolbar button and Sync panel in App menu.
 
@@ -226,6 +236,10 @@ profiler-popup-presets-networking-description = Preset for investigating network
 profiler-popup-presets-networking-label =
   .label = Networking
 
+profiler-popup-presets-networking-with-logs-description = Preset for investigating networking bugs in { -brand-shorter-name }, including networking logs. These logs may contain sensitive information such as the URLs you visit.
+profiler-popup-presets-networking-with-logs-label =
+  .label = Networking with Logs
+
 profiler-popup-presets-power-description = Preset for investigating power use bugs in { -brand-shorter-name }, with low overhead.
 # "Power" is used in the sense of energy (electricity used by the computer).
 profiler-popup-presets-power-label =
@@ -304,6 +318,8 @@ appmenu-customizetoolbar =
     .label = Customize toolbar…
 appmenu-abouttranslations =
     .label = Translate…
+appmenu-edit-pdf =
+    .label = Edit PDF…
 
 appmenu-developer-tools-subheader = Browser tools
 appmenu-developer-tools-extensions =
@@ -315,19 +331,20 @@ appmenuitem-report-broken-site =
 
 appmenuitem-sign-in-account = Sign in to your account
 
-appmenuitem-monitor-title = { -monitor-brand-short-name }
-appmenuitem-monitor-description = Get data breach alerts
+appmenuitem-monitor-title2 = Stay Ahead of Identity Theft
+appmenuitem-monitor-description2 = Get alerts about data breaches
 appmenuitem-relay-title = { -relay-brand-short-name }
-appmenuitem-relay-description = Mask your real email and phone
+appmenuitem-relay-title2 = Keep Your Email Private
+appmenuitem-relay-description2 = Helps prevent spam in your inbox
 appmenuitem-services-relay-description = Launch email masks dashboard
-appmenuitem-vpn-title = { -mozilla-vpn-brand-name }
-appmenuitem-vpn-description-2 = Get whole-device protection
+appmenuitem-vpn-title2 = Hide Your Location with { -mozilla-vpn-brand-name }
+appmenuitem-vpn-description3 = Make your browsing harder to trace
 
 appmenu-services-header = My services
 # "Mozilla" is intentionally hardcoded to prevent forks from replacing it
 # with their own vendor name, since these tools are created and maintained by
 # Mozilla.
-appmenu-other-protection-header2 = Try other protection tools from Mozilla:
+appmenu-other-protection-header3 = Privacy tools
 
 ## Profiles panel
 
