@@ -19,23 +19,24 @@ From the Firefox checkout:
 
 ## Run Firefox
 
-The generic transport pref is the only MCQUIC switch:
+The QUICast build enables the generic MCQUIC transport pref by default. Run it
+with a normal or temporary profile; no profile customization is required:
 
 ```bash
 MOZ_LOG="timestamp,nsHttp:5,WebTransport:5" \
 MOZ_LOG_FILE="$HOME/Desktop/firefox-mcquic.log" \
 ./mach run \
   --temp-profile \
-  --setpref=network.http.http3.mcquic.enabled=true \
   -- \
   --no-remote \
   'https://live.quicast.de/clock/'
 ```
 
-Use a normal profile by adding this to its `user.js`:
+For troubleshooting, MCQUIC can be disabled in `about:config` or by adding this
+to the profile's `user.js`:
 
 ```js
-user_pref("network.http.http3.mcquic.enabled", true);
+user_pref("network.http.http3.mcquic.enabled", false);
 ```
 
 No query parameter, localStorage switch, iframe activation, native GET
