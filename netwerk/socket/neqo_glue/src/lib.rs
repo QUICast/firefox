@@ -1357,7 +1357,7 @@ pub extern "C" fn neqo_mcquic_mcrx_receiver_add_ssm_subscription(
     source: &nsACString,
     group: &nsACString,
     dst_port: u16,
-    interface: &nsACString,
+    interface_addr: &nsACString,
     has_interface_index: bool,
     interface_index: u32,
     subscription_id: &mut u64,
@@ -1372,7 +1372,7 @@ pub extern "C" fn neqo_mcquic_mcrx_receiver_add_ssm_subscription(
         Ok(group) => group,
         Err(result) => return result,
     };
-    let interface = match parse_optional_mcquic_mcrx_ip(interface) {
+    let interface = match parse_optional_mcquic_mcrx_ip(interface_addr) {
         Ok(interface) => interface,
         Err(result) => return result,
     };
