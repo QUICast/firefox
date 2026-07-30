@@ -15,7 +15,7 @@ use std::ops::Range;
 
 use neqo_common::{Datagram, Decoder, Role, hex_with_len, qtrace};
 use nss::{
-    RecordProtection as Aead,
+    Mode, RecordProtection as Aead,
     constants::{TLS_AES_128_GCM_SHA256, TLS_VERSION_1_3},
     hkdf, hp,
 };
@@ -50,7 +50,8 @@ pub fn decode_initial_header(dgram: &Datagram, role: Role) -> Option<(&[u8], &[u
     let src_cid = dec.decode_vec(1).unwrap();
     dec.skip_vvec(); // Ignore any the token.
 
-    // Need to read of the length separately so that we can find the packet number.
+    // Need to read of the length separately so that we can find the packet
+    // number.
     let payload_len = usize::try_from(dec.decode_varint().unwrap()).unwrap();
     let pn_offset = dgram.len() - dec.remaining();
     Some((
@@ -64,7 +65,7 @@ pub fn decode_initial_header(dgram: &Datagram, role: Role) -> Option<(&[u8], &[u
 /// Generate an AEAD and header protection object for a client Initial.
 /// Note that this works for QUIC version 1 only.
 #[must_use]
-pub fn initial_aead_and_hp(dcid: &[u8], role: Role) -> (Aead, hp::Key) {
+pub fn initial_aead_and_hp(dcid: &[u8], role: Role) -> (Aead, Aead, hp::Key) {
     const INITIAL_SALT: &[u8] = &[
         0x38, 0x76, 0x2c, 0xf7, 0xf5, 0x59, 0x34, 0xb3, 0x4d, 0x17, 0x9a, 0xe6, 0xa4, 0xc8, 0x0c,
         0xad, 0xcc, 0xbb, 0x7f, 0x0a,
@@ -92,13 +93,25 @@ pub fn initial_aead_and_hp(dcid: &[u8], role: Role) -> (Aead, hp::Key) {
         },
     )
     .unwrap();
+    let make = |mode| {
+        Aead::new(
+            TLS_VERSION_1_3,
+            TLS_AES_128_GCM_SHA256,
+            &secret,
+            "quic ",
+            mode,
+        )
+        .unwrap()
+    };
     (
-        Aead::new(TLS_VERSION_1_3, TLS_AES_128_GCM_SHA256, &secret, "quic ").unwrap(),
+        make(Mode::Encrypt),
+        make(Mode::Decrypt),
         hp::Key::extract(TLS_VERSION_1_3, TLS_AES_128_GCM_SHA256, &secret, "quic hp").unwrap(),
     )
 }
 
-// Remove header protection, returning the unmasked header and the packet number.
+// Remove header protection, returning the unmasked header and the packet
+// number.
 #[must_use]
 pub fn remove(hp: &hp::Key, header: &[u8], payload: &[u8]) -> (Vec<u8>, u64) {
     // Make a copy of the header that can be modified.
@@ -118,7 +131,8 @@ pub fn remove(hp: &hp::Key, header: &[u8], payload: &[u8]) -> (Vec<u8>, u64) {
     // Trim down to size.
     fixed_header.truncate(pn_offset + pn_len);
     // The packet number should be 1.
-    // This doesn't use a `Decoder` because the public API can't handle a three byte packet number.
+    // This doesn't use a `Decoder` because the public API can't handle a three
+    // byte packet number.
     let mut pn = [0; 8];
     pn[8 - pn_len..].copy_from_slice(&fixed_header[pn_offset..pn_offset + pn_len]);
     (fixed_header, u64::from_be_bytes(pn))

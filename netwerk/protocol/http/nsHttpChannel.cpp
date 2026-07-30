@@ -3508,8 +3508,12 @@ nsresult nsHttpChannel::ContinueProcessResponse3(nsresult rv) {
         }
         mAuthProvider->ClearProxyIdent();
       }
-      if (!LoadAuthRedirectedChannel() &&
-          MOZ_UNLIKELY(LoadCustomAuthHeader()) && httpStatus == 401) {
+      if (httpStatus == 401 && mWebTransportSessionEventListener) {
+        // WebTransport uses credentials mode "omit". Never consult cached
+        // origin credentials or prompt in response to a challenge.
+        rv = NS_ERROR_NOT_AVAILABLE;
+      } else if (!LoadAuthRedirectedChannel() &&
+                 MOZ_UNLIKELY(LoadCustomAuthHeader()) && httpStatus == 401) {
         // When a custom auth header fails, we don't want to try
         // any cached credentials, nor we want to ask the user.
         // It's up to the consumer to re-try w/o setting a custom
@@ -6808,6 +6812,13 @@ nsresult nsHttpChannel::AsyncProcessRedirection(uint32_t redirectType) {
   LOG(("nsHttpChannel::AsyncProcessRedirection [this=%p type=%u]\n", this,
        redirectType));
 
+  if (mWebTransportSessionEventListener &&
+      WebTransportOperationMustRejectRedirectStatus(redirectType)) {
+    LOG(("Rejecting redirect for WebTransport operation [this=%p status=%u]",
+         this, redirectType));
+    return NS_ERROR_CORRUPTED_CONTENT;
+  }
+
   nsresult rv = ProcessCrossOriginSecurityHeaders();
   if (NS_FAILED(rv)) {
     mStatus = rv;
@@ -8085,9 +8096,48 @@ nsresult nsHttpChannel::BeginConnect() {
                                      originAttributes, isHttps, true, true);
       }
       wtconSettings->GetDedicated(&dedicated);
+      WebTransportOperationPolicy operationPolicy =
+          wtconSettings->GetOperationPolicy();
+      nsIPrincipal* operationPrincipal = mLoadInfo->GetLoadingPrincipal();
+      nsAutoCString initiatingOrigin;
+      nsAutoCString targetOrigin;
+      Maybe<nsID> clientContextId;
+      Maybe<dom::ClientInfo> clientInfo = mLoadInfo->GetClientInfo();
+      if (clientInfo.isSome()) {
+        clientContextId = Some(clientInfo.ref().Id());
+      }
+      Maybe<uint64_t> browsingContextId;
+      const uint64_t loadBrowsingContextId = mLoadInfo->GetBrowsingContextID();
+      if (loadBrowsingContextId != 0) {
+        browsingContextId = Some(loadBrowsingContextId);
+      }
+      if (!operationPrincipal ||
+          NS_FAILED(GetWebTransportInitiatingOrigin(operationPrincipal,
+                                                    initiatingOrigin)) ||
+          NS_FAILED(nsContentUtils::GetWebExposedOriginSerialization(
+              mURI, targetOrigin)) ||
+          !operationPolicy.MatchesContext(
+              initiatingOrigin, targetOrigin,
+              operationPrincipal->OriginAttributesRef(), clientContextId,
+              browsingContextId)) {
+        operationPolicy.ProhibitMulticast();
+      }
+      dedicated = dedicated || operationPolicy.IsMulticastEligible();
       if (dedicated) {
-        connInfo->SetWebTransportId(
-            nsHttpConnectionInfo::GenerateNewWebTransportId());
+        const uint64_t webTransportId =
+            nsHttpConnectionInfo::GenerateNewWebTransportId();
+        connInfo->SetWebTransportId(webTransportId);
+        if (operationPolicy.IsMulticastEligible()) {
+          operationPolicy.mWebTransportId = webTransportId;
+        }
+      }
+      connInfo->SetWebTransportOperationPolicy(operationPolicy);
+      nsHttpAtom multicastHeader = nsHttp::ResolveAtom("WT-Multicast"_ns);
+      if (connInfo->IsWebTransportMulticastEligible()) {
+        rv = mRequestHead.SetHeader(multicastHeader, "?1"_ns, false);
+        NS_ENSURE_SUCCESS(rv, rv);
+      } else {
+        (void)mRequestHead.ClearHeader(multicastHeader);
       }
     } else {
       connInfo = new nsHttpConnectionInfo(host, port, ""_ns, mUsername,
@@ -8207,6 +8257,13 @@ nsresult nsHttpChannel::BeginConnect() {
     }
 
     if (mProxyInfo) {
+      return false;
+    }
+
+    if (mConnectionInfo->IsWebTransportMulticastEligible()) {
+      // The current Happy Eyeballs API races H3 against H1/H2 as one unit.
+      // V2 authorization is H3-only, so keep this operation on its dedicated
+      // H3 route until the API can express a QUIC-only race.
       return false;
     }
 
@@ -12728,6 +12785,15 @@ NS_IMETHODIMP nsHttpChannel::SetResponseStatus(uint32_t aStatus,
 NS_IMETHODIMP nsHttpChannel::SetWebTransportSessionEventListener(
     WebTransportSessionEventListener* aListener) {
   mWebTransportSessionEventListener = aListener;
+  if (aListener) {
+    static_assert(!WebTransportOperationAllowsCredentials());
+    mLoadFlags |= LOAD_ANONYMOUS;
+    mLoadFlags &= ~(LOAD_ANONYMOUS_ALLOW_CLIENT_CERT |
+                    nsIChannel::LOAD_EXPLICIT_CREDENTIALS);
+    mRedirectMode = nsIHttpChannelInternal::REDIRECT_MODE_ERROR;
+    (void)mRequestHead.ClearHeader(nsHttp::Authorization);
+    (void)mRequestHead.ClearHeader(nsHttp::Cookie);
+  }
   return NS_OK;
 }
 

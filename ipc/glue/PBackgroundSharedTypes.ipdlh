@@ -10,6 +10,8 @@ using nsIContentSecurityPolicy::RequireTrustedTypesForDirectiveState from "nsICo
 using mozilla::dom::IntegrityPolicy::Sources from "mozilla/dom/IntegrityPolicy.h";
 using mozilla::dom::IntegrityPolicy::Destinations from "mozilla/dom/IntegrityPolicy.h";
 using nsILoadInfo::IPAddressSpace from "nsILoadInfo.h";
+using mozilla::net::WebTransportMulticastPolicy from "mozilla/net/WebTransportOperationPolicy.h";
+using struct nsID from "nsID.h";
 
 namespace mozilla {
 namespace ipc {
@@ -99,6 +101,19 @@ namespace ipc {
 [Comparable] struct WebTransportHash {
   nsCString algorithm;
   uint8_t[] value;
+};
+
+struct WebTransportOperationPolicyArgs {
+  WebTransportMulticastPolicy multicast;
+  nsID operationId;
+  nsCString initiatingOrigin;
+  nsCString targetOrigin;
+  OriginAttributes originAttributes;
+  bool clientContextBound;
+  nsID clientContextId;
+  bool browsingContextBound;
+  uint64_t browsingContextId;
+  uint64_t webTransportId;
 };
 
 } // namespace ipc

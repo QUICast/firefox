@@ -6,6 +6,15 @@
 
 use neqo_common::{Encoder, event::Provider as _, header::HeadersExt as _};
 use neqo_transport::StreamType;
+#[cfg(feature = "mcquic")]
+use neqo_transport::{
+    ConnectionParameters, StreamId,
+    mcquic::{
+        Announce, ChannelFrame, ChannelSendState, ClientLimits, ClientTransportParams,
+        Frame as McquicFrame, Key,
+    },
+    server::ConnectionRef,
+};
 use test_fixture::now;
 
 use crate::{
@@ -20,10 +29,163 @@ use crate::{
     frames::WebTransportFrame,
 };
 
+#[cfg(feature = "mcquic")]
+fn mcquic_client_params() -> ClientTransportParams {
+    ClientTransportParams {
+        limits: ClientLimits {
+            ipv4_channels_allowed: true,
+            ipv6_channels_allowed: false,
+            max_aggregate_rate_kibps: 1_000,
+            max_channel_ids: 1,
+        },
+        hash_algorithms: vec![1],
+        encryption_algorithms: vec![0x1301],
+    }
+}
+
+#[cfg(feature = "mcquic")]
+fn mcquic_announce() -> Announce {
+    Announce {
+        channel_id: b"wrong-owner".to_vec(),
+        source: "192.0.2.1".parse().expect("IPv4 source"),
+        group: "233.252.0.1".parse().expect("IPv4 SSM group"),
+        udp_port: 4433,
+        header_protection_algorithm: 0x1301,
+        header_secret: vec![0x11; 32].into(),
+        aead_algorithm: 0x1301,
+        integrity_hash_algorithm: 1,
+        max_rate_kibps: 1_000,
+        max_ack_delay_ms: 25,
+    }
+}
+
+#[cfg(feature = "mcquic")]
+fn mcquic_key() -> Key {
+    Key {
+        channel_id: b"wrong-owner".to_vec(),
+        key_sequence: 1,
+        from_packet_number: 0,
+        secret: vec![0x22; 32].into(),
+    }
+}
+
 #[test]
 fn wt_session() {
     let mut wt = WtTest::new();
     drop(wt.create_wt_session());
+}
+
+#[test]
+fn wt_session_accept_with_headers() {
+    let mut wt = WtTest::new();
+    let accept = SessionAcceptAction::AcceptWithHeaders(vec![Header::new("wt-multicast", "?1")]);
+    let (wt_session_id, _wt_session) = wt.negotiate_wt_session(&accept);
+
+    assert!(wt.client.events().any(|event| {
+        matches !(event,
+              Http3ClientEvent::WebTransport(WebTransportEvent::NewSession{
+                stream_id,
+                status : 200,
+                headers,
+              }) if stream_id == wt_session_id &&
+                  headers.contains_header("wt-multicast", "?1"))
+    }));
+}
+
+#[cfg(feature = "mcquic")]
+#[test]
+fn mcquic_wrong_owner_revokes_without_stranding_unicast_handler() {
+    let client_params = wt_default_parameters().connection_parameters(
+        ConnectionParameters::default()
+            .datagram_size(1200)
+            .mcquic_operation_policy(neqo_transport::mcquic::OperationPolicy::Allow)
+            .mcquic_client_params(Some(mcquic_client_params())),
+    );
+    let server_params = wt_default_parameters().mcquic_server_support(true);
+    let mut wt = WtTest::new_with_params(client_params, server_params);
+
+    let server_conn: ConnectionRef = wt
+        .server
+        .events()
+        .find_map(|event| match event {
+            Http3ServerEvent::StateChange {
+                conn,
+                state: Http3State::Connected,
+            } => Some(conn),
+            _ => None,
+        })
+        .expect("server connection");
+
+    let accept_multicast =
+        SessionAcceptAction::AcceptWithHeaders(vec![Header::new("wt-multicast", "?1")]);
+    let (permitted_session_id, _) = wt.negotiate_wt_session(&accept_multicast);
+    wt.client
+        .mcquic_accept_operation(permitted_session_id, now())
+        .expect("accept isolated MCQUIC operation");
+
+    let (_, other_session) = wt.negotiate_wt_session(&SessionAcceptAction::Accept);
+    let other_session = other_session.expect("second WebTransport Session");
+
+    let announce = mcquic_announce();
+    let key = mcquic_key();
+    for frame in [
+        McquicFrame::Announce(announce.clone()),
+        McquicFrame::Key(key.clone()),
+    ] {
+        wt.server
+            .mcquic_send(&server_conn, frame)
+            .expect("send MCQUIC channel control");
+    }
+    wt.exchange_packets();
+
+    // Creating the stream queues its ten-byte WebTransport prefix on unicast,
+    // but no packet is exchanged yet. Authenticated body bytes therefore reach
+    // ownership validation first.
+    let stream = WtTest::create_wt_stream_server(&other_session, StreamType::UniDi);
+    let stream_id = stream.stream_id();
+    let mut sender = ChannelSendState::new(announce, key).expect("channel sender");
+    let mut protected = vec![0; 1200];
+    let output = sender
+        .write_packet(
+            &[ChannelFrame::Stream {
+                stream_id: stream_id.as_u64(),
+                offset: 10,
+                fin: false,
+                data: b"unauthorized-multicast".to_vec(),
+            }],
+            &mut protected,
+        )
+        .expect("protect multicast STREAM frame");
+    protected.truncate(output.packet_len);
+
+    wt.server
+        .mcquic_send(&server_conn, McquicFrame::Integrity(output.integrity))
+        .expect("send packet integrity");
+    wt.exchange_packets();
+    wt.client
+        .mcquic_process_channel_packet(b"wrong-owner", &protected, now())
+        .expect("authenticate multicast packet");
+    assert!(!wt.client.mcquic_take_ownership_violation());
+
+    assert_eq!(
+        stream.send_data(b"working-unicast", now()).unwrap(),
+        b"working-unicast".len()
+    );
+    stream.stream_close_send(now()).unwrap();
+    wt.exchange_packets();
+
+    assert!(
+        wt.client.mcquic_take_ownership_violation(),
+        "the other Session must not inherit MCQUIC permission"
+    );
+    wt.client.mcquic_revoke_operation();
+    wt.receive_data_client(stream_id, true, b"working-unicast", true);
+
+    // The allowed operation remains bound to its original Session ID.
+    assert_ne!(
+        permitted_session_id,
+        StreamId::from(other_session.stream_id())
+    );
 }
 
 #[test]
@@ -142,18 +304,12 @@ fn wt_session_response_with_1xx() {
     wt.exchange_packets();
 
     let wt_session_negotiated_event = |e| {
-        matches!(
-            e,
-            Http3ClientEvent::WebTransport(WebTransportEvent::NewSession{
-                stream_id,
-                status,
-                headers,
-            }) if (
-                stream_id == wt_session_id &&
-                status == 200 &&
-                headers.contains_header(":status", "200")
-            )
-        )
+        matches !(e, Http3ClientEvent::WebTransport(WebTransportEvent::NewSession{
+                     stream_id,
+                     status,
+                     headers,
+                 }) if (stream_id == wt_session_id && status == 200 &&
+                        headers.contains_header(":status", "200")))
     };
     assert!(wt.client.events().any(wt_session_negotiated_event));
 
@@ -202,19 +358,13 @@ fn wt_session_respone_200_with_fin() {
     wt.exchange_packets();
 
     let wt_session_close_event = |e| {
-        matches!(
-            e,
-            Http3ClientEvent::WebTransport(WebTransportEvent::SessionClosed{
-                stream_id,
-                reason,
-                headers,
-                ..
-            }) if (
-                stream_id == wt_session_id &&
-                reason == CloseReason::Clean{ error: 0, message: String::new()} &&
-                headers.is_none()
-            )
-        )
+        matches !(e,
+              Http3ClientEvent::WebTransport(WebTransportEvent::SessionClosed{
+                  stream_id, reason, headers,
+                  ..}) if (stream_id == wt_session_id &&
+                           reason == CloseReason::
+                               Clean{error : 0, message : String::new ()} &&
+                           headers.is_none()))
     };
     assert!(wt.client.events().any(wt_session_close_event));
 
@@ -402,7 +552,8 @@ fn wt_close_session_cannot_be_sent_at_once() {
     let out = wt.server.process_output(now());
     let out = wt.client.process(out.dgram(), now());
 
-    // Client has not received the full CloseSession frame and it can create more streams.
+    // Client has not received the full CloseSession frame and it can create more
+    // streams.
     let unidi_client = wt.create_wt_stream_client(wt_session.stream_id(), StreamType::UniDi);
 
     let out = wt.server.process(out.dgram(), now());

@@ -140,6 +140,16 @@ pub enum CongestionControlImplementation {
     SearchCubic(ClassicCongestionController<Search, Cubic>),
 }
 
+#[derive(Debug, Clone)]
+pub enum OutputCheckpoint {
+    ClassicNewReno(classic_cc::OutputCheckpoint<ClassicSlowStart>),
+    HyStartNewReno(classic_cc::OutputCheckpoint<HyStart>),
+    SearchNewReno(classic_cc::OutputCheckpoint<Search>),
+    ClassicCubic(classic_cc::OutputCheckpoint<ClassicSlowStart>),
+    HyStartCubic(classic_cc::OutputCheckpoint<HyStart>),
+    SearchCubic(classic_cc::OutputCheckpoint<Search>),
+}
+
 macro_rules! dispatch {
     ($self:ident . $method:ident $args:tt) => {
         neqo_common::dispatch!(
@@ -147,6 +157,43 @@ macro_rules! dispatch {
             $self . $method $args
         )
     };
+}
+
+impl CongestionControlImplementation {
+    pub(crate) fn output_checkpoint(&self) -> OutputCheckpoint {
+        match self {
+            Self::ClassicNewReno(cc) => OutputCheckpoint::ClassicNewReno(cc.output_checkpoint()),
+            Self::HyStartNewReno(cc) => OutputCheckpoint::HyStartNewReno(cc.output_checkpoint()),
+            Self::SearchNewReno(cc) => OutputCheckpoint::SearchNewReno(cc.output_checkpoint()),
+            Self::ClassicCubic(cc) => OutputCheckpoint::ClassicCubic(cc.output_checkpoint()),
+            Self::HyStartCubic(cc) => OutputCheckpoint::HyStartCubic(cc.output_checkpoint()),
+            Self::SearchCubic(cc) => OutputCheckpoint::SearchCubic(cc.output_checkpoint()),
+        }
+    }
+
+    pub(crate) fn restore_output(&mut self, checkpoint: OutputCheckpoint) {
+        match (self, checkpoint) {
+            (Self::ClassicNewReno(cc), OutputCheckpoint::ClassicNewReno(checkpoint)) => {
+                cc.restore_output(checkpoint);
+            }
+            (Self::HyStartNewReno(cc), OutputCheckpoint::HyStartNewReno(checkpoint)) => {
+                cc.restore_output(checkpoint);
+            }
+            (Self::SearchNewReno(cc), OutputCheckpoint::SearchNewReno(checkpoint)) => {
+                cc.restore_output(checkpoint);
+            }
+            (Self::ClassicCubic(cc), OutputCheckpoint::ClassicCubic(checkpoint)) => {
+                cc.restore_output(checkpoint);
+            }
+            (Self::HyStartCubic(cc), OutputCheckpoint::HyStartCubic(checkpoint)) => {
+                cc.restore_output(checkpoint);
+            }
+            (Self::SearchCubic(cc), OutputCheckpoint::SearchCubic(checkpoint)) => {
+                cc.restore_output(checkpoint);
+            }
+            _ => unreachable!("congestion controller cannot change during output"),
+        }
+    }
 }
 
 impl CongestionController for CongestionControlImplementation {

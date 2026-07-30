@@ -208,6 +208,17 @@ ClientSourceParent* ClientManagerService::FindExistingSource(
   return source;
 }
 
+bool ClientManagerService::HasMatchingSource(
+    ThreadsafeContentParentHandle* aContentParentHandle,
+    const ClientInfo& aClientInfo) const {
+  AssertIsOnBackgroundThread();
+
+  ClientSourceParent* source =
+      FindExistingSource(aClientInfo.Id(), aClientInfo.PrincipalInfo());
+  return source && !source->IsFrozen() &&
+         source->IsOwnedByProcess(aContentParentHandle);
+}
+
 // static
 already_AddRefed<ClientManagerService>
 ClientManagerService::GetOrCreateInstance() {

@@ -43,7 +43,6 @@ pub enum WebTransportEvent {
         datagram: Bytes,
     },
 }
-
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum ConnectUdpEvent {
     Negotiated(
@@ -124,6 +123,8 @@ pub enum Http3ClientEvent {
     ZeroRttRejected,
     /// Client has received a GOAWAY frame
     GoawayReceived,
+    /// The underlying QUIC connection selected a new path.
+    PathMigrated,
     /// Connection state change.
     StateChange(Http3State),
     /// `WebTransport` events
@@ -330,6 +331,10 @@ impl Http3ClientEvents {
         }
     }
 
+    pub(crate) fn path_migrated(&self) {
+        self.insert(Http3ClientEvent::PathMigrated);
+    }
+
     /// Add a new `AuthenticationNeeded` event
     pub(crate) fn authentication_needed(&self) {
         self.insert(Http3ClientEvent::AuthenticationNeeded);
@@ -385,25 +390,41 @@ impl Http3ClientEvents {
     /// Remove all events for a stream
     fn remove_recv_stream_events(&self, stream_id: StreamId) {
         self.remove(|evt| {
-            matches!(evt,
-                Http3ClientEvent::HeaderReady { stream_id: x, .. }
-                | Http3ClientEvent::DataReadable { stream_id: x }
-                | Http3ClientEvent::PushPromise { request_stream_id: x, .. }
-                | Http3ClientEvent::Reset { stream_id: x, .. } if *x == stream_id)
+            matches !(
+        evt, Http3ClientEvent::HeaderReady{stream_id : x, ..} |
+                 Http3ClientEvent::DataReadable{stream_id : x} |
+                 Http3ClientEvent::PushPromise{request_stream_id : x, ..} |
+                 Http3ClientEvent::Reset {
+                   stream_id:
+                     x, ..
+                 } if * x ==
+                     stream_id)
         });
     }
 
     fn remove_send_stream_events(&self, stream_id: StreamId) {
         self.remove(|evt| {
-            matches!(evt,
-                Http3ClientEvent::DataWritable { stream_id: x }
-                | Http3ClientEvent::StopSending { stream_id: x, .. } if *x == stream_id)
+            matches !(
+        evt, Http3ClientEvent::DataWritable{stream_id : x} |
+                 Http3ClientEvent::StopSending {
+                   stream_id:
+                     x, ..
+                 } if * x ==
+                     stream_id)
         });
     }
 
     pub fn has_push(&self, push_id: PushId) -> bool {
         for iter in &*self.events.borrow() {
-            if matches!(iter, Http3ClientEvent::PushPromise{push_id:x, ..} if *x == push_id) {
+            if matches
+              !(
+                  iter,
+                  Http3ClientEvent::PushPromise {
+                    push_id:
+                      x, ..
+                  } if * x ==
+                      push_id)
+            {
                 return true;
             }
         }
@@ -412,11 +433,15 @@ impl Http3ClientEvents {
 
     pub fn remove_events_for_push_id(&self, push_id: PushId) {
         self.remove(|evt| {
-            matches!(evt,
-                Http3ClientEvent::PushPromise{ push_id: x, .. }
-                | Http3ClientEvent::PushHeaderReady{ push_id: x, .. }
-                | Http3ClientEvent::PushDataReadable{ push_id: x, .. }
-                | Http3ClientEvent::PushCanceled{ push_id: x, .. } if *x == push_id)
+            matches !(
+        evt, Http3ClientEvent::PushPromise{push_id : x, ..} |
+                 Http3ClientEvent::PushHeaderReady{push_id : x, ..} |
+                 Http3ClientEvent::PushDataReadable{push_id : x, ..} |
+                 Http3ClientEvent::PushCanceled {
+                   push_id:
+                     x, ..
+                 } if * x ==
+                     push_id)
         });
     }
 

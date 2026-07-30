@@ -62,7 +62,25 @@ pub struct Pmtud {
     qlog: Qlog,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct OutputCheckpoint {
+    probe_count: usize,
+    probe_state: Probe,
+}
+
 impl Pmtud {
+    pub(crate) const fn output_checkpoint(&self) -> OutputCheckpoint {
+        OutputCheckpoint {
+            probe_count: self.probe_count,
+            probe_state: self.probe_state,
+        }
+    }
+
+    pub(crate) const fn restore_output(&mut self, checkpoint: OutputCheckpoint) {
+        self.probe_count = checkpoint.probe_count;
+        self.probe_state = checkpoint.probe_state;
+    }
+
     /// Returns the MTU search table for the given remote IP address family.
     const fn search_table(remote_ip: IpAddr) -> &'static [usize] {
         match remote_ip {

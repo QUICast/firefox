@@ -131,6 +131,11 @@ impl Packet {
         self.tokens.as_ref()
     }
 
+    /// Consume this packet and return its recovery tokens.
+    pub(crate) fn into_tokens(self) -> recovery::Tokens {
+        Rc::try_unwrap(self.tokens).unwrap_or_else(|tokens| (*tokens).clone())
+    }
+
     /// Clears the flag that had this packet on the primary path.
     /// Used when migrating to clear out state.
     pub const fn clear_primary_path(&mut self) {
@@ -230,6 +235,10 @@ impl Packets {
 
     pub fn track(&mut self, packet: Packet) {
         self.packets.insert(packet.pn, packet);
+    }
+
+    pub(crate) fn remove(&mut self, pn: packet::Number) -> Option<Packet> {
+        self.packets.remove(&pn)
     }
 
     pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut Packet> {

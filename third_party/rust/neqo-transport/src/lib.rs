@@ -64,7 +64,7 @@ pub use self::{
         EmptyConnectionIdGenerator, RandomConnectionIdGenerator,
     },
     connection::{
-        Connection, Output, OutputBatch, State, ZeroRttState,
+        Connection, Output, OutputBatch, OutputToken, State, TrackedOutputBatch, ZeroRttState,
         params::{
             ConnectionParameters, INITIAL_LOCAL_MAX_DATA, INITIAL_LOCAL_MAX_STREAM_DATA,
             MAX_LOCAL_MAX_STREAM_DATA,
@@ -146,6 +146,10 @@ pub enum Error {
     InvalidInput,
     #[error("invalid migration")]
     InvalidMigration,
+    #[error("MCQUIC local resource limit exceeded")]
+    McquicResourceLimit,
+    #[error("MCQUIC stream does not belong to the permitted operation")]
+    McquicOwnershipViolation,
     #[error("an invalid packet was dropped (internal use only)")]
     InvalidPacket,
     #[error("invalid resumption token")]
@@ -175,8 +179,12 @@ pub enum Error {
     NotAvailable,
     #[error("not connected")]
     NotConnected,
+    #[error("an output transaction is unresolved")]
+    OutputPending,
     #[error("packet number overlap")]
     PacketNumberOverlap,
+    #[error("invalid output transaction token")]
+    InvalidOutputToken,
     #[error("peer application error: 0x{0:x}")]
     PeerApplication(AppError),
     #[error("peer error: {0}")]
@@ -218,8 +226,8 @@ impl Error {
             Self::NoAvailablePath => 16,
             Self::CryptoBufferExceeded => ERROR_CRYPTO_BUFFER_EXCEEDED,
             Self::CryptoAlert(a) => 0x100 + u64::from(*a),
-            // As we have a special error code for ECH fallbacks, we lose the alert.
-            // Send the server "ech_required" directly.
+            // As we have a special error code for ECH fallbacks, we lose the
+            // alert. Send the server "ech_required" directly.
             Self::EchRetry(_) => 0x100 + 121,
             Self::VersionNegotiation => 0x53f8,
             // All the rest are internal errors.

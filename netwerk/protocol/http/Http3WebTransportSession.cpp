@@ -334,6 +334,21 @@ uint64_t Http3WebTransportSession::GetStreamId() const {
   return Http3StreamBase::StreamId();
 }
 
+void Http3WebTransportSession::OnExtendedConnectResponse(
+    bool aMulticastAccepted) {
+  if (mSession) {
+    static_cast<Http3Session*>(mSession.get())
+        ->OnWebTransportMulticastResponse(GetStreamId(), aMulticastAccepted);
+  }
+}
+
+void Http3WebTransportSession::RevokeMulticast() {
+  if (mSession) {
+    static_cast<Http3Session*>(mSession.get())
+        ->RevokeWebTransportMulticast(GetStreamId());
+  }
+}
+
 void Http3WebTransportSession::Close(nsresult aResult) {
   LOG(("Http3WebTransportSession::Close %p", this));
   if (RefPtr<WebTransportSessionEventListener> listener = TakeListener()) {
@@ -353,7 +368,9 @@ void Http3WebTransportSession::Close(nsresult aResult) {
 }
 
 void Http3WebTransportSession::OnClosePending() {
-  mSession->CloseWebTransport(mStreamId, mStatus, mReason);
+  if (mSession) {
+    mSession->CloseWebTransport(mStreamId, mStatus, mReason);
+  }
 }
 
 void Http3WebTransportSession::OnSessionClosed(bool aCleanly, uint32_t aStatus,
@@ -368,7 +385,10 @@ void Http3WebTransportSession::OnSessionClosed(bool aCleanly, uint32_t aStatus,
   mRecvState = RECV_DONE;
   mSendState = SEND_DONE;
 
-  mSession->CloseWebTransportConn();
+  if (mSession) {
+    mSession->CloseWebTransportConn();
+    mSession = nullptr;
+  }
 }
 
 void Http3WebTransportSession::CloseSession(uint32_t aStatus,
@@ -376,7 +396,9 @@ void Http3WebTransportSession::CloseSession(uint32_t aStatus,
   if ((mRecvState != CLOSE_PENDING) && (mRecvState != RECV_DONE)) {
     mStatus = aStatus;
     mReason = aReason;
-    mSession->ConnectSlowConsumer(this);
+    if (mSession) {
+      mSession->ConnectSlowConsumer(this);
+    }
     mRecvState = CLOSE_PENDING;
     mSendState = SEND_DONE;
   }

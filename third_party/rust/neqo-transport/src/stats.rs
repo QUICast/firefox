@@ -125,6 +125,8 @@ impl FrameStats {
 /// Datagram stats
 #[derive(Default, Clone, PartialEq, Eq)]
 pub struct DatagramStats {
+    /// The number of datagrams abandoned before reaching the UDP socket.
+    pub abandoned: usize,
     /// The number of datagrams declared lost.
     pub lost: usize,
     /// The number of datagrams dropped due to being too large.
@@ -416,8 +418,35 @@ pub struct Stats {
     pub dscp_rx: DscpCount,
 }
 
+#[derive(Clone)]
+pub struct OutputStatsCheckpoint {
+    packets_tx: usize,
+    pmtud_tx: usize,
+    frame_tx: FrameStats,
+    ecn_path_validation: ecn::ValidationCount,
+    ecn_tx: EcnCount,
+}
+
 impl Stats {
     pub const MAX_PTO_COUNTS: usize = 16;
+
+    pub(crate) fn output_checkpoint(&self) -> OutputStatsCheckpoint {
+        OutputStatsCheckpoint {
+            packets_tx: self.packets_tx,
+            pmtud_tx: self.pmtud_tx,
+            frame_tx: self.frame_tx.clone(),
+            ecn_path_validation: self.ecn_path_validation,
+            ecn_tx: self.ecn_tx.clone(),
+        }
+    }
+
+    pub(crate) fn restore_output(&mut self, checkpoint: &OutputStatsCheckpoint) {
+        self.packets_tx = checkpoint.packets_tx;
+        self.pmtud_tx = checkpoint.pmtud_tx;
+        self.frame_tx = checkpoint.frame_tx.clone();
+        self.ecn_path_validation = checkpoint.ecn_path_validation;
+        self.ecn_tx.clone_from(&checkpoint.ecn_tx);
+    }
 
     pub fn init(&mut self, info: String) {
         self.info = info;

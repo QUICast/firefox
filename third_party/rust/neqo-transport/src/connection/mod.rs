@@ -6,7 +6,7 @@
 // The class implementing a QUIC connection.
 
 #[cfg(feature = "mcquic")]
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::{
     cell::RefCell,
     cmp::{max, min},
@@ -16,6 +16,7 @@ use std::{
     num::NonZeroUsize,
     ops::RangeInclusive,
     rc::{Rc, Weak},
+    sync::atomic::{AtomicU64, Ordering as AtomicOrdering},
     time::{Duration, Instant},
 };
 
@@ -31,6 +32,8 @@ use nss::{
 use smallvec::SmallVec;
 use strum::IntoEnumIterator as _;
 
+#[cfg(feature = "mcquic")]
+use crate::tparams::TransportParameterId::InitialMaxData;
 use crate::{
     AppError, CloseReason, Error, Res, StreamId,
     addr_valid::{AddressValidation, NewTokenState},
@@ -46,16 +49,19 @@ use crate::{
     packet::{self},
     path::{Path, PathRef, Paths},
     qlog,
-    quic_datagrams::{DATAGRAM_FRAME_TYPE_VARINT_LEN, DatagramTracking, QuicDatagrams},
+    quic_datagrams::{
+        DATAGRAM_FRAME_TYPE_VARINT_LEN, DatagramTracking,
+        OutputJournal as QuicDatagramOutputJournal, QuicDatagrams,
+    },
     recovery::{self, SendProfile, sent},
     recv_stream,
     rtt::{GRANULARITY, RttEstimate},
     saved::SavedDatagrams,
     send_stream::{self, SendStream},
     stateless_reset::Token as Srt,
-    stats::{Stats, StatsCell},
+    stats::{OutputStatsCheckpoint, Stats, StatsCell},
     stream_id::StreamType,
-    streams::{SendOrder, Streams},
+    streams::{SendOrder, StreamOutputJournal, Streams},
     tparams::{
         self,
         TransportParameterId::{
@@ -66,7 +72,9 @@ use crate::{
         },
         TransportParameters, TransportParametersHandler,
     },
-    tracking::{AckTracker, PacketNumberSpace, RecvdPackets},
+    tracking::{
+        AckOutputCheckpoint, AckTracker, PacketNumberSpace, PacketNumberSpaceSet, RecvdPackets,
+    },
     version::{self, Version},
 };
 
@@ -85,6 +93,199 @@ pub use state::{ClosingFrame, State};
 
 pub use crate::send_stream::{RetransmissionPriority, TransmissionPriority};
 
+static NEXT_OUTPUT_CONNECTION_ID: AtomicU64 = AtomicU64::new(1);
+
+#[cfg(feature = "mcquic")]
+const MAX_PENDING_MCQUIC_STREAM_FRAMES: usize = 64 * 1024;
+#[cfg(feature = "mcquic")]
+const MAX_PENDING_MCQUIC_STREAM_FRAMES_PER_OWNER: usize = 256;
+#[cfg(feature = "mcquic")]
+const MAX_PENDING_MCQUIC_STREAM_BYTES: usize = 16 * 1024 * 1024;
+#[cfg(feature = "mcquic")]
+const MAX_PENDING_MCQUIC_STREAM_OWNERS: usize = 1024;
+#[cfg(feature = "mcquic")]
+const MAX_AUTHORIZED_MCQUIC_STREAMS: usize = 4096;
+#[cfg(feature = "mcquic")]
+const MAX_MCQUIC_CHANNELS: usize = 32;
+#[cfg(feature = "mcquic")]
+const MAX_MCQUIC_OWNER_EXPIRIES_PER_TURN: usize = 64;
+#[cfg(feature = "mcquic")]
+const MAX_PENDING_MCQUIC_OWNER_EXPIRIES: usize = MAX_PENDING_MCQUIC_STREAM_OWNERS;
+#[cfg(feature = "mcquic")]
+const MAX_AUTHORIZED_MCQUIC_OWNER_EXPIRIES: usize = MAX_AUTHORIZED_MCQUIC_STREAMS;
+#[cfg(feature = "mcquic")]
+const MAX_MCQUIC_PENDING_CHANNEL_OWNER_LINKS: usize =
+    MAX_PENDING_MCQUIC_STREAM_OWNERS * MAX_MCQUIC_CHANNELS;
+#[cfg(feature = "mcquic")]
+const MAX_MCQUIC_SEND_FRAMES: usize = 256;
+#[cfg(feature = "mcquic")]
+const MAX_MCQUIC_SEND_BYTES: usize = 1024 * 1024;
+#[cfg(feature = "mcquic")]
+const MAX_PENDING_MCQUIC_OPERATION_CONTROL_FRAMES: usize = 256;
+#[cfg(feature = "mcquic")]
+const MAX_PENDING_MCQUIC_OPERATION_CONTROL_BYTES: usize = 64 * 1024;
+#[cfg(feature = "mcquic")]
+const MAX_MCQUIC_RETIRED_CHANNELS: usize = 256;
+#[cfg(feature = "mcquic")]
+const MAX_MCQUIC_RETIRED_CHANNEL_BYTES: usize = 64 * 1024;
+#[cfg(feature = "mcquic")]
+const MAX_MCQUIC_RETIRED_CHANNEL_AGE: Duration = Duration::from_secs(5 * 60);
+#[cfg(feature = "mcquic")]
+const MAX_MCQUIC_RESOURCE_LIMIT_NOTICES: usize = 32;
+#[cfg(feature = "mcquic")]
+const MAX_MCQUIC_UNKNOWN_CONTROLS_PER_CHANNEL: usize = 32;
+#[cfg(feature = "mcquic")]
+const MAX_MCQUIC_UNKNOWN_CONTROL_FRAMES: usize = 256;
+#[cfg(feature = "mcquic")]
+const MAX_MCQUIC_UNKNOWN_CONTROL_BYTES: usize = 1024 * 1024;
+#[cfg(feature = "mcquic")]
+const MAX_MCQUIC_CONNECTION_KEYS: usize = 64;
+#[cfg(feature = "mcquic")]
+const MAX_MCQUIC_CONNECTION_KEY_BYTES: usize = 4 * 1024;
+#[cfg(feature = "mcquic")]
+const MAX_MCQUIC_CONNECTION_INTEGRITY_HASHES: usize = 32 * 1024;
+#[cfg(feature = "mcquic")]
+const MAX_MCQUIC_CONNECTION_INTEGRITY_BYTES: usize = 2 * 1024 * 1024;
+#[cfg(feature = "mcquic")]
+const MAX_MCQUIC_CONNECTION_PENDING_PACKETS: usize = 4096;
+#[cfg(feature = "mcquic")]
+const MAX_MCQUIC_CONNECTION_PENDING_PACKET_BYTES: usize = 16 * 1024 * 1024;
+#[cfg(feature = "mcquic")]
+const MAX_MCQUIC_CONNECTION_DATAGRAMS: usize = 256;
+#[cfg(feature = "mcquic")]
+const MAX_MCQUIC_CONNECTION_DATAGRAM_BYTES: usize = 1024 * 1024;
+#[cfg(feature = "mcquic")]
+const MAX_MCQUIC_PENDING_CONTROL_AGE: Duration = Duration::from_secs(5);
+#[cfg(feature = "mcquic")]
+const MAX_MCQUIC_PENDING_OWNER_AGE: Duration = Duration::from_secs(5);
+#[cfg(feature = "mcquic")]
+const MAX_MCQUIC_AUTHORIZED_OWNER_AGE: Duration = Duration::from_secs(5 * 60);
+#[cfg(feature = "mcquic")]
+const MCQUIC_AUTHORIZED_OWNER_REFRESH: Duration = Duration::from_secs(150);
+#[cfg(feature = "mcquic")]
+const MAX_MCQUIC_ACTIVE_CONTROL_FRAMES: usize = 256;
+#[cfg(feature = "mcquic")]
+const MAX_MCQUIC_ACTIVE_CONTROL_BYTES: usize = 1024 * 1024;
+#[cfg(feature = "mcquic")]
+const MAX_MCQUIC_ACTIVE_CONTROL_AGE: Duration = Duration::from_secs(5);
+
+#[cfg(feature = "mcquic")]
+#[derive(Debug)]
+struct PendingMcquicStreamFrame {
+    channel_id: Option<Vec<u8>>,
+    frame: crate::mcquic::ChannelFrame,
+    inserted_at: Instant,
+}
+#[cfg(feature = "mcquic")]
+#[derive(Debug)]
+struct PendingMcquicControl {
+    frame: crate::mcquic::Frame,
+    encoded_len: usize,
+    inserted_at: Instant,
+}
+
+#[cfg(feature = "mcquic")]
+struct QueuedMcquicFrame {
+    frame: crate::mcquic::Frame,
+    encoded_len: usize,
+}
+
+#[cfg(feature = "mcquic")]
+#[derive(Default)]
+struct McquicSendQueue {
+    frames: VecDeque<QueuedMcquicFrame>,
+    encoded_bytes: usize,
+}
+
+#[cfg(feature = "mcquic")]
+impl McquicSendQueue {
+    fn push_back(&mut self, frame: crate::mcquic::Frame) -> Res<()> {
+        self.push(frame, false)
+    }
+
+    fn push_front(&mut self, frame: crate::mcquic::Frame) -> Res<()> {
+        self.push(frame, true)
+    }
+
+    fn push(&mut self, frame: crate::mcquic::Frame, front: bool) -> Res<()> {
+        let encoded_len = frame.encoded_len_erasing()?;
+        if let crate::mcquic::Frame::Ack(new_ack) = &frame
+            && let Some(index) = self.frames.iter().position(|queued| {
+                matches!(&queued.frame,
+                    crate::mcquic::Frame::Ack(ack) if ack.channel_id == new_ack.channel_id)
+            })
+        {
+            let old_len = self.frames[index].encoded_len;
+            let encoded_bytes = self
+                .encoded_bytes
+                .checked_sub(old_len)
+                .and_then(|bytes| bytes.checked_add(encoded_len))
+                .ok_or(Error::McquicResourceLimit)?;
+            if encoded_bytes > MAX_MCQUIC_SEND_BYTES {
+                return Err(Error::McquicResourceLimit);
+            }
+            self.frames[index] = QueuedMcquicFrame { frame, encoded_len };
+            self.encoded_bytes = encoded_bytes;
+            return Ok(());
+        }
+
+        let encoded_bytes = self
+            .encoded_bytes
+            .checked_add(encoded_len)
+            .ok_or(Error::McquicResourceLimit)?;
+        if self.frames.len() >= MAX_MCQUIC_SEND_FRAMES || encoded_bytes > MAX_MCQUIC_SEND_BYTES {
+            return Err(Error::McquicResourceLimit);
+        }
+        let queued = QueuedMcquicFrame { frame, encoded_len };
+        if front {
+            self.frames.push_front(queued);
+        } else {
+            self.frames.push_back(queued);
+        }
+        self.encoded_bytes = encoded_bytes;
+        Ok(())
+    }
+
+    fn pop_front(&mut self) -> Option<QueuedMcquicFrame> {
+        let queued = self.frames.pop_front()?;
+        let Some(encoded_bytes) = self.encoded_bytes.checked_sub(queued.encoded_len) else {
+            panic!("MCQUIC send byte accounting");
+        };
+        self.encoded_bytes = encoded_bytes;
+        Some(queued)
+    }
+
+    fn restore_front(&mut self, queued: QueuedMcquicFrame) {
+        self.encoded_bytes = self
+            .encoded_bytes
+            .checked_add(queued.encoded_len)
+            .expect("MCQUIC send byte accounting");
+        debug_assert!(self.frames.len() < MAX_MCQUIC_SEND_FRAMES);
+        debug_assert!(self.encoded_bytes <= MAX_MCQUIC_SEND_BYTES);
+        self.frames.push_front(queued);
+    }
+
+    fn clear(&mut self) {
+        self.frames.clear();
+        self.encoded_bytes = 0;
+    }
+
+    #[cfg(test)]
+    fn retain(&mut self, mut keep: impl FnMut(&crate::mcquic::Frame) -> bool) {
+        self.frames.retain(|queued| keep(&queued.frame));
+        self.encoded_bytes = self.frames.iter().map(|queued| queued.encoded_len).sum();
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.frames.len()
+    }
+
+    #[cfg(test)]
+    fn iter(&self) -> impl Iterator<Item = &crate::mcquic::Frame> {
+        self.frames.iter().map(|queued| &queued.frame)
+    }
+}
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum ZeroRttState {
     Init,
@@ -110,7 +311,7 @@ pub enum Output {
 impl TryFrom<OutputBatch> for Output {
     type Error = ();
 
-    fn try_from(value: OutputBatch) -> Result<Self, Self::Error> {
+    fn try_from(value: OutputBatch) -> Result<Self, <Self as TryFrom<OutputBatch>>::Error> {
         match value {
             OutputBatch::None => Ok(Self::None),
             OutputBatch::DatagramBatch(dg) => Ok(Self::Datagram(dg.try_into()?)),
@@ -141,6 +342,10 @@ impl From<Output> for OutputBatch {
 }
 
 impl OutputBatch {
+    fn error(error: Error) -> Self {
+        std::panic::panic_any(error)
+    }
+
     /// Convert into an [`Option<datagram::Batch>`].
     #[must_use]
     pub fn dgram(self) -> Option<datagram::Batch> {
@@ -186,6 +391,78 @@ impl From<Option<Datagram>> for Output {
     }
 }
 
+pub struct OutputToken {
+    connection_id: u64,
+    generation: u64,
+    resolved: bool,
+}
+
+impl Debug for OutputToken {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str("OutputToken(..)")
+    }
+}
+
+pub struct TrackedOutputBatch {
+    output: OutputBatch,
+    token: Option<OutputToken>,
+    segment_count: usize,
+}
+
+impl TrackedOutputBatch {
+    #[must_use]
+    pub const fn output(&self) -> &OutputBatch {
+        &self.output
+    }
+
+    #[must_use]
+    pub const fn segment_count(&self) -> usize {
+        self.segment_count
+    }
+
+    #[must_use]
+    pub fn into_parts(self) -> (OutputBatch, Option<OutputToken>) {
+        (self.output, self.token)
+    }
+}
+
+#[derive(Clone)]
+struct SegmentFixedCheckpoint {
+    path: PathRef,
+    path_state: crate::path::OutputCheckpoint,
+    loss: recovery::OutputCheckpoint,
+    acks: AckOutputCheckpoint,
+    idle_timeout: IdleTimeout,
+    state_signaling: StateSignaling,
+    stats: OutputStatsCheckpoint,
+    received_untracked: bool,
+    qlog_events: usize,
+}
+
+struct OutputSegment {
+    fixed: SegmentFixedCheckpoint,
+    streams: StreamOutputJournal,
+    quic_datagrams: QuicDatagramOutputJournal,
+    packets: Vec<recovery::SentPacketId>,
+    /// Tokens selected for a packet that could not be registered in recovery.
+    untracked_tokens: Vec<recovery::Tokens>,
+    /// Packet-number spaces discarded only after this segment is accepted.
+    discard_spaces: Vec<PacketNumberSpace>,
+}
+
+struct BuildingOutput {
+    state_signaling: StateSignaling,
+    segments: Vec<OutputSegment>,
+    current: Option<OutputSegment>,
+    discard_spaces: PacketNumberSpaceSet,
+}
+
+struct PendingOutput {
+    generation: u64,
+    state_signaling: StateSignaling,
+    segments: Vec<OutputSegment>,
+}
+
 /// Used by inner functions like `Connection::output`.
 enum SendOptionBatch {
     /// Yes, please send this datagram.
@@ -211,6 +488,10 @@ enum SendOption {
     ),
 }
 
+struct OutputGenerationError {
+    path: Option<PathRef>,
+    error: Error,
+}
 /// Used by `Connection::preprocess` to determine what to do
 /// with an packet before attempting to remove protection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -289,42 +570,100 @@ pub struct Connection {
     cids: ConnectionIdStore<Srt>,
 
     /// The source connection ID that this endpoint uses for the handshake.
-    /// Since we need to communicate this to our peer in tparams, setting this
-    /// value is part of constructing the struct.
+    /// Since we need to communicate this to our peer in tparams, setting
+    /// this value is part of constructing the struct.
     local_initial_source_cid: ConnectionId,
     /// The source connection ID from the first packet from the other end.
     /// This is checked against the peer's transport parameters.
     remote_initial_source_cid: Option<ConnectionId>,
     /// The destination connection ID from the first packet from the client.
-    /// This is checked by the client against the server's transport parameters.
+    /// This is checked by the client against the server's transport
+    /// parameters.
     original_destination_cid: Option<ConnectionId>,
 
-    /// We sometimes save a datagram against the possibility that keys will later
-    /// become available.  This avoids reporting packets as dropped during the handshake
-    /// when they are either just reordered or we haven't been able to install keys yet.
-    /// In particular, this occurs when asynchronous certificate validation happens.
+    /// We sometimes save a datagram against the possibility that keys will
+    /// later become available.  This avoids reporting packets as dropped
+    /// during the handshake when they are either just reordered or we
+    /// haven't been able to install keys yet. In particular, this occurs
+    /// when asynchronous certificate validation happens.
     saved_datagrams: SavedDatagrams,
     /// Some packets were received, but not tracked.
     received_untracked: bool,
 
-    /// This is responsible for the `QuicDatagrams`' handling:
+    /// This is responsible for the `QuicDatagrams`'handling:
     /// <https://datatracker.ietf.org/doc/html/draft-ietf-quic-datagram>
     quic_datagrams: QuicDatagrams,
     /// Experimental MCQUIC control frames received from the peer.
     #[cfg(feature = "mcquic")]
-    mcquic_recv: VecDeque<crate::mcquic::Frame>,
+    mcquic_recv: VecDeque<PendingMcquicControl>,
+    #[cfg(feature = "mcquic")]
+    mcquic_recv_bytes: usize,
+    /// Application authorization state for this connection's MCQUIC operation.
+    #[cfg(feature = "mcquic")]
+    mcquic_operation_state: crate::mcquic::OperationState,
+    /// Bounded controls received after the request but before CONNECT accepts
+    /// this operation. These are not applied to channel state until acceptance.
+    #[cfg(feature = "mcquic")]
+    mcquic_pending_operation_controls: VecDeque<crate::mcquic::Frame>,
+    #[cfg(feature = "mcquic")]
+    mcquic_pending_operation_control_bytes: usize,
+    #[cfg(feature = "mcquic")]
+    mcquic_pending_operation_control_started_at: Option<Instant>,
     /// Experimental MCQUIC control frames queued for unicast delivery.
     #[cfg(feature = "mcquic")]
-    mcquic_send: VecDeque<crate::mcquic::Frame>,
+    mcquic_send: McquicSendQueue,
     /// Integrity hash lengths learned from peer `MC_ANNOUNCE` frames.
     #[cfg(feature = "mcquic")]
     mcquic_integrity_hash_lens: BTreeMap<Vec<u8>, usize>,
     /// Authenticated receive state for each announced multicast channel.
     #[cfg(feature = "mcquic")]
     mcquic_channels: BTreeMap<Vec<u8>, crate::mcquic::ChannelReceiveState>,
+    /// Channel IDs retired until the bounded operation is revoked.
+    #[cfg(feature = "mcquic")]
+    mcquic_retired_channels: BTreeMap<Vec<u8>, Instant>,
+    /// Channels locally declined after bounded receiver state was exhausted.
+    #[cfg(feature = "mcquic")]
+    mcquic_resource_limited_channels: VecDeque<Vec<u8>>,
+    /// An authenticated frame targeted a stream outside the permitted
+    /// operation. HTTP/3 consumes this signal and revokes the optimization.
+    #[cfg(feature = "mcquic")]
+    mcquic_ownership_violation: bool,
     /// Channel controls that arrived before their matching `MC_ANNOUNCE`.
     #[cfg(feature = "mcquic")]
     mcquic_pending_channel_controls: BTreeMap<Vec<u8>, VecDeque<crate::mcquic::Frame>>,
+    #[cfg(feature = "mcquic")]
+    mcquic_pending_channel_control_bytes: usize,
+    #[cfg(feature = "mcquic")]
+    mcquic_pending_channel_control_count: usize,
+    #[cfg(feature = "mcquic")]
+    mcquic_pending_channel_control_started_at: BTreeMap<Vec<u8>, Instant>,
+    /// Authenticated stream frames waiting for HTTP/3 to bind their stream to
+    /// the permitted operation.
+    #[cfg(feature = "mcquic")]
+    mcquic_pending_stream_frames: BTreeMap<StreamId, VecDeque<PendingMcquicStreamFrame>>,
+    /// Newly pending streams awaiting one incremental HTTP/3 owner check.
+    #[cfg(feature = "mcquic")]
+    mcquic_pending_owner_checks: BTreeSet<StreamId>,
+    /// One live deadline for each pending owner binding.
+    #[cfg(feature = "mcquic")]
+    mcquic_pending_owner_expiries: BTreeSet<(Instant, StreamId)>,
+    /// Reverse index used to retire one channel without scanning every owner.
+    #[cfg(feature = "mcquic")]
+    mcquic_pending_channel_streams: BTreeMap<Vec<u8>, BTreeSet<StreamId>>,
+    #[cfg(feature = "mcquic")]
+    mcquic_pending_channel_owner_links: usize,
+    /// Streams whose ordinary prefix has been bound to the permitted operation.
+    #[cfg(feature = "mcquic")]
+    mcquic_authorized_streams: BTreeMap<StreamId, Instant>,
+    /// One live deadline for each authorized owner binding.
+    #[cfg(feature = "mcquic")]
+    mcquic_authorized_stream_expiries: BTreeSet<(Instant, StreamId)>,
+    /// Total payload bytes retained in `mcquic_pending_stream_frames`.
+    #[cfg(feature = "mcquic")]
+    mcquic_pending_stream_bytes: usize,
+    /// Total frame count retained in `mcquic_pending_stream_frames`.
+    #[cfg(feature = "mcquic")]
+    mcquic_pending_stream_frame_count: usize,
 
     crypto: Crypto,
     acks: AckTracker,
@@ -336,15 +675,22 @@ pub struct Connection {
     new_token: NewTokenState,
     stats: StatsCell,
     qlog: Qlog,
+    /// Identity and generation for connection-bound tracked output tokens.
+    output_connection_id: u64,
+    output_generation: u64,
+    /// Output currently being assembled or awaiting socket disposition.
+    output_building: Option<BuildingOutput>,
+    output_pending: Option<PendingOutput>,
     /// A session ticket was received without `NEW_TOKEN`,
     /// this is when that turns into an event without `NEW_TOKEN`.
     release_resumption_token_timer: Option<Instant>,
     conn_params: ConnectionParameters,
     hrtime: hrtime::Handle,
 
-    /// For testing purposes it is sometimes necessary to inject frames that wouldn't
-    /// otherwise be sent, just to see how a connection handles them.  Inserting them
-    /// into packets proper mean that the frames follow the entire processing path.
+    /// For testing purposes it is sometimes necessary to inject frames that
+    /// wouldn't otherwise be sent, just to see how a connection handles them.
+    /// Inserting them into packets proper mean that the frames follow the entire
+    /// processing path.
     #[cfg(any(test, feature = "build-fuzzing-corpus"))]
     test_frame_writer: Option<Box<dyn test_internal::FrameWriter>>,
 }
@@ -425,6 +771,10 @@ impl Connection {
         )
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "connection construction initializes protocol state in one auditable place"
+    )]
     fn new<P: AsRef<str>>(
         role: Role,
         agent: Agent,
@@ -461,6 +811,17 @@ impl Connection {
             events.clone(),
         );
 
+        #[cfg(feature = "mcquic")]
+        let mcquic_operation_state = match role {
+            Role::Client => match conn_params.get_mcquic_operation_policy() {
+                crate::mcquic::OperationPolicy::Prohibit => {
+                    crate::mcquic::OperationState::Prohibited
+                }
+                crate::mcquic::OperationPolicy::Allow => crate::mcquic::OperationState::Pending,
+            },
+            Role::Server => crate::mcquic::OperationState::Active,
+        };
+
         let c = Self {
             role,
             version: conn_params.get_versions().initial(),
@@ -486,6 +847,10 @@ impl Connection {
             new_token: NewTokenState::new(role),
             stats,
             qlog: Qlog::disabled(),
+            output_connection_id: NEXT_OUTPUT_CONNECTION_ID.fetch_add(1, AtomicOrdering::Relaxed),
+            output_generation: 0,
+            output_building: None,
+            output_pending: None,
             release_resumption_token_timer: None,
             conn_params,
             hrtime: hrtime::Time::get(Self::LOOSE_TIMER_RESOLUTION),
@@ -493,18 +858,303 @@ impl Connection {
             #[cfg(feature = "mcquic")]
             mcquic_recv: VecDeque::new(),
             #[cfg(feature = "mcquic")]
-            mcquic_send: VecDeque::new(),
+            mcquic_recv_bytes: 0,
+            #[cfg(feature = "mcquic")]
+            mcquic_operation_state,
+            #[cfg(feature = "mcquic")]
+            mcquic_pending_operation_controls: VecDeque::new(),
+            #[cfg(feature = "mcquic")]
+            mcquic_pending_operation_control_bytes: 0,
+            #[cfg(feature = "mcquic")]
+            mcquic_pending_operation_control_started_at: None,
+            #[cfg(feature = "mcquic")]
+            mcquic_send: McquicSendQueue::default(),
             #[cfg(feature = "mcquic")]
             mcquic_integrity_hash_lens: BTreeMap::new(),
             #[cfg(feature = "mcquic")]
             mcquic_channels: BTreeMap::new(),
             #[cfg(feature = "mcquic")]
+            mcquic_retired_channels: BTreeMap::new(),
+            #[cfg(feature = "mcquic")]
+            mcquic_resource_limited_channels: VecDeque::new(),
+            #[cfg(feature = "mcquic")]
+            mcquic_ownership_violation: false,
+            #[cfg(feature = "mcquic")]
             mcquic_pending_channel_controls: BTreeMap::new(),
+            #[cfg(feature = "mcquic")]
+            mcquic_pending_channel_control_bytes: 0,
+            #[cfg(feature = "mcquic")]
+            mcquic_pending_channel_control_count: 0,
+            #[cfg(feature = "mcquic")]
+            mcquic_pending_channel_control_started_at: BTreeMap::new(),
+            #[cfg(feature = "mcquic")]
+            mcquic_pending_stream_frames: BTreeMap::new(),
+            #[cfg(feature = "mcquic")]
+            mcquic_pending_owner_checks: BTreeSet::new(),
+            #[cfg(feature = "mcquic")]
+            mcquic_pending_owner_expiries: BTreeSet::new(),
+            #[cfg(feature = "mcquic")]
+            mcquic_pending_channel_streams: BTreeMap::new(),
+            #[cfg(feature = "mcquic")]
+            mcquic_pending_channel_owner_links: 0,
+            #[cfg(feature = "mcquic")]
+            mcquic_authorized_streams: BTreeMap::new(),
+            #[cfg(feature = "mcquic")]
+            mcquic_authorized_stream_expiries: BTreeSet::new(),
+            #[cfg(feature = "mcquic")]
+            mcquic_pending_stream_bytes: 0,
+            #[cfg(feature = "mcquic")]
+            mcquic_pending_stream_frame_count: 0,
             #[cfg(any(test, feature = "build-fuzzing-corpus"))]
             test_frame_writer: None,
         };
         c.stats.borrow_mut().init(format!("{c}"));
         Ok(c)
+    }
+
+    const fn ensure_output_resolved(&self) -> Res<()> {
+        if self.output_pending.is_some() || self.output_building.is_some() {
+            Err(Error::OutputPending)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn assert_output_resolved(&self) {
+        if let Err(error) = self.ensure_output_resolved() {
+            std::panic::panic_any(error);
+        }
+    }
+
+    /// Whether tracked output is waiting for a socket acceptance decision.
+    #[must_use]
+    pub const fn output_pending(&self) -> bool {
+        self.output_pending.is_some() || self.output_building.is_some()
+    }
+
+    fn begin_output_transaction(&mut self) -> Res<()> {
+        self.ensure_output_resolved()?;
+        self.qlog
+            .begin_output_transaction()
+            .map_err(|_| Error::Internal)?;
+        self.output_building = Some(BuildingOutput {
+            state_signaling: self.state_signaling.clone(),
+            segments: Vec::new(),
+            current: None,
+            discard_spaces: PacketNumberSpaceSet::new(),
+        });
+        Ok(())
+    }
+
+    fn begin_output_segment(&mut self, path: &PathRef) -> Res<()> {
+        let qlog_events = self
+            .qlog
+            .output_transaction_checkpoint()
+            .map_err(|_| Error::Internal)?;
+        let segment = OutputSegment {
+            fixed: SegmentFixedCheckpoint {
+                path: Rc::clone(path),
+                path_state: path.borrow().output_checkpoint(),
+                loss: self.loss_recovery.output_checkpoint(),
+                acks: self.acks.output_checkpoint(),
+                idle_timeout: self.idle_timeout.clone(),
+                state_signaling: self.state_signaling.clone(),
+                stats: self.stats.borrow().output_checkpoint(),
+                received_untracked: self.received_untracked,
+                qlog_events,
+            },
+            streams: StreamOutputJournal::default(),
+            quic_datagrams: QuicDatagramOutputJournal::default(),
+            packets: Vec::new(),
+            untracked_tokens: Vec::new(),
+            discard_spaces: Vec::new(),
+        };
+        let building = self.output_building.as_mut().ok_or(Error::Internal)?;
+        if building.current.replace(segment).is_some() {
+            return Err(Error::Internal);
+        }
+        Ok(())
+    }
+
+    fn finish_output_segment(&mut self) -> Res<()> {
+        let building = self.output_building.as_mut().ok_or(Error::Internal)?;
+        let segment = building.current.take().ok_or(Error::Internal)?;
+        building.segments.push(segment);
+        Ok(())
+    }
+
+    fn defer_discard_keys(&mut self, space: PacketNumberSpace) -> Res<()> {
+        let building = self.output_building.as_mut().ok_or(Error::Internal)?;
+        if building.discard_spaces.insert(space) {
+            building
+                .current
+                .as_mut()
+                .ok_or(Error::Internal)?
+                .discard_spaces
+                .push(space);
+        }
+        Ok(())
+    }
+
+    fn track_output_packet(
+        &mut self,
+        packet: sent::Packet,
+        path: &PathRef,
+        now: Instant,
+    ) -> Res<()> {
+        let space = PacketNumberSpace::from(packet.packet_type());
+        if self
+            .output_building
+            .as_ref()
+            .is_some_and(|building| building.discard_spaces.contains(space))
+        {
+            // The legacy output path discarded this recovery space before
+            // registering the packet. Keep the packet out of recovery and
+            // pacing while retaining its tokens until socket disposition.
+            return self.track_unregistered_output_tokens(packet.into_tokens());
+        }
+        let segment = self
+            .output_building
+            .as_mut()
+            .and_then(|building| building.current.as_mut())
+            .ok_or(Error::Internal)?;
+        match self.loss_recovery.on_packet_sent_tracked(path, packet, now) {
+            Ok(packet_id) => segment.packets.push(packet_id),
+            Err(packet) => segment.untracked_tokens.push(packet.into_tokens()),
+        }
+        Ok(())
+    }
+
+    fn track_unregistered_output_tokens(&mut self, tokens: recovery::Tokens) -> Res<()> {
+        self.output_building
+            .as_mut()
+            .and_then(|building| building.current.as_mut())
+            .ok_or(Error::Internal)?
+            .untracked_tokens
+            .push(tokens);
+        Ok(())
+    }
+
+    fn restore_abandoned_output_tokens(
+        &mut self,
+        tokens: recovery::Tokens,
+        abandoned_datagrams: &mut Vec<DatagramTracking>,
+    ) {
+        for token in tokens.into_iter().rev() {
+            match token {
+                recovery::Token::Ack(_)
+                | recovery::Token::HandshakeDone
+                | recovery::Token::KeepAlive
+                | recovery::Token::Stream(_)
+                | recovery::Token::EcnEct0
+                | recovery::Token::PmtudProbe => (),
+                recovery::Token::Crypto(token) => self.crypto.lost(&token),
+                recovery::Token::NewToken(seqno) => self.new_token.lost(seqno),
+                recovery::Token::NewConnectionId(entry) => self.cid_manager.lost(&entry),
+                recovery::Token::RetireConnectionId(seqno) => {
+                    self.paths.lost_retire_cid(seqno);
+                }
+                recovery::Token::AckFrequency(rate) => self.paths.lost_ack_frequency(&rate),
+                recovery::Token::Datagram(tracker) => abandoned_datagrams.push(tracker),
+                #[cfg(feature = "mcquic")]
+                recovery::Token::Mcquic(frame) => self
+                    .mcquic_send
+                    .push_front(frame)
+                    .expect("abandoned output restores its previously queued MCQUIC frame"),
+            }
+        }
+    }
+
+    fn rollback_output_segments(
+        &mut self,
+        segments: Vec<OutputSegment>,
+        state_signaling: Option<StateSignaling>,
+    ) -> Res<()> {
+        let Some(qlog_events) = segments.first().map(|segment| segment.fixed.qlog_events) else {
+            if let Some(state_signaling) = state_signaling {
+                self.state_signaling = state_signaling;
+            }
+            return Ok(());
+        };
+        let mut abandoned_datagrams = Vec::new();
+
+        for segment in segments.into_iter().rev() {
+            self.quic_datagrams.restore_output(segment.quic_datagrams);
+            for packet_id in segment.packets.into_iter().rev() {
+                if let Some(packet) = self.loss_recovery.remove_output_packet(packet_id) {
+                    self.restore_abandoned_output_tokens(
+                        packet.into_tokens(),
+                        &mut abandoned_datagrams,
+                    );
+                }
+            }
+            for tokens in segment.untracked_tokens.into_iter().rev() {
+                self.restore_abandoned_output_tokens(tokens, &mut abandoned_datagrams);
+            }
+
+            self.streams.undo_output(segment.streams);
+            segment
+                .fixed
+                .path
+                .borrow_mut()
+                .restore_output(segment.fixed.path_state);
+            self.loss_recovery.restore_output(&segment.fixed.loss);
+            self.acks.restore_output(&segment.fixed.acks);
+            self.idle_timeout = segment.fixed.idle_timeout;
+            self.state_signaling = segment.fixed.state_signaling;
+            self.stats.borrow_mut().restore_output(&segment.fixed.stats);
+            self.received_untracked = segment.fixed.received_untracked;
+        }
+
+        if let Some(state_signaling) = state_signaling {
+            self.state_signaling = state_signaling;
+        }
+        self.qlog
+            .truncate_output_transaction(qlog_events)
+            .map_err(|_| Error::Internal)?;
+
+        for tracker in abandoned_datagrams.into_iter().rev() {
+            self.events
+                .datagram_outcome(&tracker, OutgoingDatagramOutcome::Abandoned);
+            self.stats.borrow_mut().datagram_tx.abandoned += 1;
+        }
+        Ok(())
+    }
+
+    fn rollback_current_output_segment(&mut self) -> Res<()> {
+        let building = self.output_building.as_mut().ok_or(Error::Internal)?;
+        let segment = building.current.take().ok_or(Error::Internal)?;
+        for space in &segment.discard_spaces {
+            building.discard_spaces.remove(*space);
+        }
+        self.rollback_output_segments(vec![segment], None)
+    }
+
+    fn take_current_quic_datagram_output(&mut self) -> Res<QuicDatagramOutputJournal> {
+        Ok(mem::take(
+            &mut self
+                .output_building
+                .as_mut()
+                .and_then(|building| building.current.as_mut())
+                .ok_or(Error::Internal)?
+                .quic_datagrams,
+        ))
+    }
+
+    fn commit_quic_datagram_output(&self, journal: QuicDatagramOutputJournal) {
+        self.quic_datagrams
+            .commit_output(journal, &mut self.stats.borrow_mut());
+    }
+
+    fn abandon_building_output(&mut self) -> Res<()> {
+        let mut building = self.output_building.take().ok_or(Error::Internal)?;
+        if let Some(current) = building.current.take() {
+            building.segments.push(current);
+        }
+        self.rollback_output_segments(building.segments, Some(building.state_signaling))?;
+        self.qlog
+            .finish_output_transaction(false)
+            .map_err(|_| Error::Internal)
     }
 
     /// # Errors
@@ -514,6 +1164,7 @@ impl Connection {
         anti_replay: &AntiReplay,
         zero_rtt_checker: Z,
     ) -> Res<()> {
+        self.ensure_output_resolved()?;
         self.crypto
             .server_enable_0rtt(Rc::clone(&self.tps), anti_replay, zero_rtt_checker)
     }
@@ -521,6 +1172,7 @@ impl Connection {
     /// # Errors
     /// When the operation fails.
     pub fn set_certificate_compression<T: CertificateCompressor>(&mut self) -> Res<()> {
+        self.ensure_output_resolved()?;
         self.crypto.tls_mut().set_certificate_compression::<T>()?;
         Ok(())
     }
@@ -534,9 +1186,9 @@ impl Connection {
         sk: &PrivateKey,
         pk: &PublicKey,
     ) -> Res<()> {
+        self.ensure_output_resolved()?;
         self.crypto.server_enable_ech(config, public_name, sk, pk)
     }
-
     /// Get the active ECH configuration, which is empty if ECH is disabled.
     #[must_use]
     pub fn ech_config(&self) -> &[u8] {
@@ -546,21 +1198,23 @@ impl Connection {
     /// # Errors
     /// When the operation fails.
     pub fn client_enable_ech<A: AsRef<[u8]>>(&mut self, ech_config_list: A) -> Res<()> {
+        self.ensure_output_resolved()?;
         self.crypto.client_enable_ech(ech_config_list)
     }
 
     /// Set or clear the qlog for this connection.
     pub fn set_qlog(&mut self, qlog: Qlog) {
+        self.assert_output_resolved();
         self.loss_recovery.set_qlog(qlog.clone());
         self.paths.set_qlog(qlog.clone());
         self.qlog = qlog;
     }
 
     /// Get the qlog (if any) for this connection.
-    pub const fn qlog_mut(&mut self) -> &mut Qlog {
+    pub fn qlog_mut(&mut self) -> &mut Qlog {
+        self.assert_output_resolved();
         &mut self.qlog
     }
-
     /// Get the original destination connection id for this connection. This
     /// will always be present for `Role::Client` but not if `Role::Server` is in
     /// `State::Init`.
@@ -583,6 +1237,7 @@ impl Connection {
         tp: TransportParameterId,
         value: tparams::TransportParameter,
     ) -> Res<()> {
+        self.ensure_output_resolved()?;
         if *self.state() == State::Init {
             self.tps.borrow_mut().local_mut().set(tp, value);
             Ok(())
@@ -593,16 +1248,17 @@ impl Connection {
         }
     }
 
-    /// `odcid` is their original choice for our CID, which we get from the Retry token.
-    /// `remote_cid` is the value from the Source Connection ID field of an incoming packet: what
-    /// the peer wants us to use now. `retry_cid` is what we asked them to use when we sent the
-    /// Retry.
+    /// `odcid` is their original choice for our CID, which we get from the Retry
+    /// token. `remote_cid` is the value from the Source Connection ID field of an
+    /// incoming packet: what the peer wants us to use now. `retry_cid` is what we
+    /// asked them to use when we sent the Retry.
     pub(crate) fn set_retry_cids(
         &mut self,
         odcid: &ConnectionId,
         remote_cid: ConnectionId,
         retry_cid: &ConnectionId,
     ) {
+        self.assert_output_resolved();
         debug_assert_eq!(self.role, Role::Server);
         qtrace!("[{self}] Retry CIDs: odcid={odcid} remote={remote_cid} retry={retry_cid}");
         // We advertise "our" choices in transport parameters.
@@ -630,16 +1286,20 @@ impl Connection {
     /// Set ALPN preferences. Strings that appear earlier in the list are given
     /// higher preference.
     /// # Errors
-    /// When the operation fails, which is usually due to bad inputs or bad connection state.
+    /// When the operation fails, which is usually due to bad inputs or bad
+    /// connection state.
     pub fn set_alpn<A: AsRef<[u8]>>(&mut self, protocols: &[A]) -> Res<()> {
+        self.ensure_output_resolved()?;
         self.crypto.tls_mut().set_alpn(protocols)?;
         Ok(())
     }
 
     /// Enable a set of ciphers.
     /// # Errors
-    /// When the operation fails, which is usually due to bad inputs or bad connection state.
+    /// When the operation fails, which is usually due to
+    /// bad inputs or bad connection state.
     pub fn set_ciphers(&mut self, ciphers: &[Cipher]) -> Res<()> {
+        self.ensure_output_resolved()?;
         if self.state != State::Init {
             qerror!("[{self}] Cannot enable ciphers in state {:?}", self.state);
             return Err(Error::ConnectionState);
@@ -650,8 +1310,10 @@ impl Connection {
 
     /// Enable a set of key exchange groups.
     /// # Errors
-    /// When the operation fails, which is usually due to bad inputs or bad connection state.
+    /// When the operation fails, which is usually due to bad inputs or bad
+    /// connection state.
     pub fn set_groups(&mut self, groups: &[Group]) -> Res<()> {
+        self.ensure_output_resolved()?;
         if self.state != State::Init {
             qerror!("[{self}] Cannot enable groups in state {:?}", self.state);
             return Err(Error::ConnectionState);
@@ -662,8 +1324,10 @@ impl Connection {
 
     /// Set the number of additional key shares to send in the client hello.
     /// # Errors
-    /// When the operation fails, which is usually due to bad inputs or bad connection state.
+    /// When the operation fails, which is usually due to bad inputs or bad
+    /// connection state.
     pub fn send_additional_key_shares(&mut self, count: usize) -> Res<()> {
+        self.ensure_output_resolved()?;
         if self.state != State::Init {
             qerror!("[{self}] Cannot enable groups in state {:?}", self.state);
             return Err(Error::ConnectionState);
@@ -675,16 +1339,17 @@ impl Connection {
     fn make_resumption_token(&mut self) -> ResumptionToken {
         debug_assert_eq!(self.role, Role::Client);
         debug_assert!(self.crypto.has_resumption_token());
-        // Values less than GRANULARITY are ignored when using the token, so use 0 where needed.
+        // Values less than GRANULARITY are ignored when using the token, so use 0
+        // where needed.
         let rtt = self.paths.primary().map_or_else(
             // If we don't have a path, we don't have an RTT.
             || Duration::from_millis(0),
             |p| {
                 let rtt = p.borrow().rtt().estimate();
                 if p.borrow().rtt().is_guesstimate() {
-                    // When we have no actual RTT sample, do not encode a guestimated RTT larger
-                    // than the default initial RTT. (The guess can be very large under lossy
-                    // conditions.)
+                    // When we have no actual RTT sample, do not encode a
+                    // guestimated RTT larger than the default initial RTT. (The
+                    // guess can be very large under lossy conditions.)
                     if rtt < self.conn_params.get_initial_rtt() {
                         rtt
                     } else {
@@ -765,17 +1430,19 @@ impl Connection {
     }
 
     /// The correct way to obtain a resumption token is to wait for the
-    /// `ConnectionEvent::ResumptionToken` event. To emit the event we are waiting for a
-    /// resumption token and a `NEW_TOKEN` frame to arrive. Some servers don't send `NEW_TOKEN`
-    /// frames and in this case, we wait for 3xPTO before emitting an event. This is especially a
-    /// problem for short-lived connections, where the connection is closed before any events are
-    /// released. This function retrieves the token, without waiting for a `NEW_TOKEN` frame to
-    /// arrive.
+    /// `ConnectionEvent::ResumptionToken` event. To emit the event we are waiting
+    /// for a resumption token and a `NEW_TOKEN` frame to arrive. Some servers
+    /// don't send `NEW_TOKEN` frames and in this case, we wait for 3xPTO before
+    /// emitting an event. This is especially a problem for short-lived
+    /// connections, where the connection is closed before any events are
+    /// released. This function retrieves the token, without waiting for a
+    /// `NEW_TOKEN` frame to arrive.
     ///
     /// # Panics
     ///
     /// If this is called on a server.
     pub fn take_resumption_token(&mut self, now: Instant) -> Option<ResumptionToken> {
+        self.assert_output_resolved();
         assert_eq!(self.role, Role::Client);
 
         self.crypto.has_resumption_token().then(|| {
@@ -792,12 +1459,14 @@ impl Connection {
     /// After calling the function, it should be possible to attempt 0-RTT
     /// if the token supports that.
     ///
-    /// This function starts the TLS stack, which means that any configuration change
-    /// to that stack needs to occur prior to calling this.
+    /// This function starts the TLS stack, which means that any configuration
+    /// change to that stack needs to occur prior to calling this.
     ///
     /// # Errors
-    /// When the operation fails, which is usually due to bad inputs or bad connection state.
+    /// When the operation fails, which is usually due to bad inputs or bad
+    /// connection state.
     pub fn enable_resumption<A: AsRef<[u8]>>(&mut self, now: Instant, token: A) -> Res<()> {
+        self.ensure_output_resolved()?;
         if self.state != State::Init {
             qerror!("[{self}] set token in state {:?}", self.state);
             return Err(Error::ConnectionState);
@@ -869,6 +1538,7 @@ impl Connection {
     }
 
     pub(crate) fn set_validation(&mut self, validation: &Rc<RefCell<AddressValidation>>) {
+        self.assert_output_resolved();
         qtrace!("[{self}] Enabling NEW_TOKEN");
         assert_eq!(self.role, Role::Server);
         self.address_validation = AddressValidationInfo::Server(Rc::downgrade(validation));
@@ -876,8 +1546,10 @@ impl Connection {
 
     /// Send a TLS session ticket AND a `NEW_TOKEN` frame (if possible).
     /// # Errors
-    /// When the operation fails, which is usually due to bad inputs or bad connection state.
+    /// When the operation fails, which is usually due to bad inputs or bad
+    /// connection state.
     pub fn send_ticket(&mut self, now: Instant, extra: &[u8]) -> Res<()> {
+        self.ensure_output_resolved()?;
         if self.role == Role::Client {
             return Err(Error::WrongRole);
         }
@@ -923,7 +1595,6 @@ impl Connection {
     pub fn tls_preinfo(&self) -> Res<SecretAgentPreInfo> {
         Ok(self.crypto.tls().preinfo()?)
     }
-
     /// Get the peer's certificate chain and other info.
     #[must_use]
     pub fn peer_certificate(&self) -> Option<CertificateInfo> {
@@ -937,6 +1608,7 @@ impl Connection {
     /// the connection to fail.  However, if no packets have been
     /// exchanged, it's not OK.
     pub fn authenticated(&mut self, status: AuthenticationStatus, now: Instant) {
+        self.assert_output_resolved();
         qdebug!("[{self}] Authenticated {status:?}");
         self.crypto.tls_mut().authenticated(status);
         let res = self.handshake(now, self.version, PacketNumberSpace::Handshake, None);
@@ -949,7 +1621,6 @@ impl Connection {
     pub const fn role(&self) -> Role {
         self.role
     }
-
     /// Get the state of the connection.
     #[must_use]
     pub const fn state(&self) -> &State {
@@ -971,7 +1642,25 @@ impl Connection {
     /// Get a snapshot of collected statistics.
     #[must_use]
     pub fn stats(&self) -> Stats {
+        self.stats_with_output_checkpoint(None)
+    }
+
+    /// Get a snapshot that excludes output awaiting socket acceptance.
+    #[must_use]
+    pub fn committed_stats(&self) -> Stats {
+        let checkpoint = self
+            .output_pending
+            .as_ref()
+            .and_then(|pending| pending.segments.first())
+            .map(|segment| &segment.fixed.stats);
+        self.stats_with_output_checkpoint(checkpoint)
+    }
+
+    fn stats_with_output_checkpoint(&self, checkpoint: Option<&OutputStatsCheckpoint>) -> Stats {
         let mut v = self.stats.borrow().clone();
+        if let Some(checkpoint) = checkpoint {
+            v.restore_output(checkpoint);
+        }
         v.version = self.version;
         if let Some(p) = self.paths.primary() {
             let p = p.borrow();
@@ -982,8 +1671,8 @@ impl Connection {
         v
     }
 
-    // This function wraps a call to another function and sets the connection state
-    // properly if that call fails.
+    // This function wraps a call to another function and sets the connection
+    // state properly if that call fails.
     fn capture_error<T>(
         &mut self,
         path: Option<PathRef>,
@@ -1004,8 +1693,9 @@ impl Connection {
                     qwarn!("[{self}] Closing again after error {err:?}");
                 }
                 State::Init => {
-                    // We have not even sent anything just close the connection without sending any
-                    // error. This may happen when client_start fails.
+                    // We have not even sent anything just close the connection
+                    // without sending any error. This may happen when client_start
+                    // fails.
                     self.set_state(State::Closed(error), now);
                 }
                 State::WaitInitial | State::WaitVersion => {
@@ -1085,6 +1775,9 @@ impl Connection {
 
         self.streams.cleanup_closed_streams();
 
+        #[cfg(feature = "mcquic")]
+        self.expire_mcquic_resources(now);
+
         let res = self.crypto.states_mut().check_key_update(now);
         self.absorb_error(now, res);
 
@@ -1129,6 +1822,7 @@ impl Connection {
         dgrams: I,
         now: Instant,
     ) {
+        self.assert_output_resolved();
         let mut dgrams = dgrams.into_iter().peekable();
         if dgrams.peek().is_none() {
             return;
@@ -1198,6 +1892,11 @@ impl Connection {
             delays.push(key_update_time);
         }
 
+        #[cfg(feature = "mcquic")]
+        if let Some(mcquic_expiry) = self.next_mcquic_resource_expiry() {
+            delays.push(mcquic_expiry);
+        }
+
         // `release_resumption_token_timer` is not considered here, because
         // it is not important enough to force the application to set a
         // timeout for it  It is expected that other activities will
@@ -1222,7 +1921,6 @@ impl Connection {
             .try_into()
             .expect("max_datagrams is 1")
     }
-
     /// Get output packets, as a result of receiving packets, or actions taken
     /// by the application.
     /// Returns datagrams to send, and how long to wait before calling again
@@ -1233,6 +1931,34 @@ impl Connection {
         now: Instant,
         max_datagrams: NonZeroUsize,
     ) -> OutputBatch {
+        let tracked = match self.process_multiple_output_tracked(now, max_datagrams) {
+            Ok(tracked) => tracked,
+            Err(error) => return OutputBatch::error(error),
+        };
+        let segment_count = tracked.segment_count();
+        let (output, token) = tracked.into_parts();
+        if let Some(mut token) = token
+            && let Err(error) = self.resolve_output(&mut token, segment_count, now)
+        {
+            return OutputBatch::error(error);
+        }
+        output
+    }
+
+    /// Generate output whose send-side effects remain tentative until
+    /// [`Self::resolve_output`] records how many UDP/GSO segments were accepted
+    /// by the socket.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::OutputPending`] while an earlier tracked batch remains
+    /// unresolved.
+    pub fn process_multiple_output_tracked(
+        &mut self,
+        now: Instant,
+        max_datagrams: NonZeroUsize,
+    ) -> Res<TrackedOutputBatch> {
+        self.ensure_output_resolved()?;
         qtrace!("[{self}] process_output {:?} {now:?}", self.state);
 
         match (&self.state, self.role) {
@@ -1241,23 +1967,206 @@ impl Connection {
                 self.absorb_error(now, res);
             }
             (State::Init | State::WaitInitial, Role::Server) => {
-                return OutputBatch::None;
+                return Ok(TrackedOutputBatch {
+                    output: OutputBatch::None,
+                    token: None,
+                    segment_count: 0,
+                });
             }
             _ => {
                 self.process_timer(now);
             }
         }
 
-        match self.output(now, max_datagrams) {
-            SendOptionBatch::Yes(dgram) => OutputBatch::DatagramBatch(dgram),
-            SendOptionBatch::No(paced) => match self.state {
-                State::Init | State::Closed(_) => OutputBatch::None,
-                State::Closing { timeout, .. } | State::Draining { timeout, .. } => {
-                    OutputBatch::Callback(timeout.duration_since(now))
+        self.begin_output_transaction()?;
+        let generated = match self.output(now, max_datagrams) {
+            Ok(generated) => generated,
+            Err(OutputGenerationError { path, error }) => {
+                self.abandon_building_output()?;
+                let _: Option<()> = self
+                    .capture_error::<()>(path, now, FrameType::Padding, Err(error))
+                    .ok();
+                let output = match self.state {
+                    State::Init | State::Closed(_) => OutputBatch::None,
+                    State::Closing { timeout, .. } | State::Draining { timeout, .. } => {
+                        OutputBatch::Callback(timeout.duration_since(now))
+                    }
+                    _ => OutputBatch::Callback(self.next_delay(now, false)),
+                };
+                return Ok(TrackedOutputBatch {
+                    output,
+                    token: None,
+                    segment_count: 0,
+                });
+            }
+        };
+        match generated {
+            SendOptionBatch::Yes(dgram) => {
+                let valid = self.output_building.as_ref().is_some_and(|building| {
+                    building.current.is_none() && building.segments.len() == dgram.num_datagrams()
+                });
+                if !valid {
+                    self.abandon_building_output()?;
+                    return Err(Error::Internal);
                 }
-                _ => OutputBatch::Callback(self.next_delay(now, paced)),
-            },
+                let Some(generation) = self.output_generation.checked_add(1) else {
+                    self.abandon_building_output()?;
+                    return Err(Error::Internal);
+                };
+                let building = self.output_building.take().ok_or(Error::Internal)?;
+                self.output_generation = generation;
+                let segment_count = building.segments.len();
+                self.output_pending = Some(PendingOutput {
+                    generation,
+                    state_signaling: building.state_signaling,
+                    segments: building.segments,
+                });
+                Ok(TrackedOutputBatch {
+                    output: OutputBatch::DatagramBatch(dgram),
+                    token: Some(OutputToken {
+                        connection_id: self.output_connection_id,
+                        generation,
+                        resolved: false,
+                    }),
+                    segment_count,
+                })
+            }
+            SendOptionBatch::No(paced) => {
+                self.abandon_building_output()?;
+                let output = match self.state {
+                    State::Init | State::Closed(_) => OutputBatch::None,
+                    State::Closing { timeout, .. } | State::Draining { timeout, .. } => {
+                        OutputBatch::Callback(timeout.duration_since(now))
+                    }
+                    _ => OutputBatch::Callback(self.next_delay(now, paced)),
+                };
+                Ok(TrackedOutputBatch {
+                    output,
+                    token: None,
+                    segment_count: 0,
+                })
+            }
         }
+    }
+
+    /// Resolve a tracked output batch at UDP/GSO segment granularity.
+    ///
+    /// `accepted_gso_segments` accepts a prefix. Every packet in the remaining
+    /// suffix is removed from recovery and its unsent obligations are restored
+    /// without declaring network loss.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidOutputToken`] for a foreign, stale, duplicate,
+    /// or otherwise invalid token, and [`Error::InvalidInput`] for a prefix
+    /// longer than the tracked batch.
+    ///
+    /// # Panics
+    ///
+    /// Panics only if the validated transaction's private rollback journal is
+    /// internally inconsistent.
+    #[expect(
+        clippy::unwrap_in_result,
+        reason = "post-validation transaction invariants must fail closed rather than leave partial state"
+    )]
+    pub fn resolve_output(
+        &mut self,
+        token: &mut OutputToken,
+        accepted_gso_segments: usize,
+        now: Instant,
+    ) -> Res<()> {
+        if token.resolved {
+            return Err(Error::InvalidOutputToken);
+        }
+        let Some(pending) = self.output_pending.as_ref() else {
+            return Err(Error::InvalidOutputToken);
+        };
+        let token_matches_connection = token.connection_id == self.output_connection_id;
+        if !token_matches_connection || token.generation != pending.generation {
+            return Err(Error::InvalidOutputToken);
+        }
+        if accepted_gso_segments > pending.segments.len() {
+            return Err(Error::InvalidInput);
+        }
+        token.resolved = true;
+
+        let qlog_events = self
+            .qlog
+            .output_transaction_checkpoint()
+            .expect("tracked output owns the active qlog transaction");
+        assert!(
+            pending
+                .segments
+                .iter()
+                .all(|segment| segment.fixed.qlog_events <= qlog_events),
+            "tracked output qlog checkpoints remain valid until resolution"
+        );
+
+        let pending = self
+            .output_pending
+            .take()
+            .expect("validated tracked output remains pending");
+        if accepted_gso_segments == pending.segments.len() {
+            let discard_spaces = pending
+                .segments
+                .iter()
+                .flat_map(|segment| segment.discard_spaces.iter().copied())
+                .collect::<Vec<_>>();
+            let datagram_outputs = pending
+                .segments
+                .into_iter()
+                .map(|segment| segment.quic_datagrams)
+                .collect::<Vec<_>>();
+            self.qlog
+                .finish_output_transaction(true)
+                .expect("validated tracked output owns the qlog transaction");
+            for datagram_output in datagram_outputs {
+                self.commit_quic_datagram_output(datagram_output);
+            }
+            for space in discard_spaces {
+                self.discard_keys(space, now);
+            }
+            return Ok(());
+        }
+
+        let mut segments = pending.segments;
+        let discard_spaces = segments[..accepted_gso_segments]
+            .iter()
+            .flat_map(|segment| segment.discard_spaces.iter().copied())
+            .collect::<Vec<_>>();
+        let abandoned = segments.split_off(accepted_gso_segments);
+        let accepted_path = segments
+            .last()
+            .map(|segment| Rc::clone(&segment.fixed.path));
+        self.rollback_output_segments(
+            abandoned,
+            (accepted_gso_segments == 0).then_some(pending.state_signaling),
+        )
+        .expect("validated tracked output can be rolled back");
+
+        if let Some(path) = accepted_path {
+            path.borrow_mut()
+                .on_datagrams_sent(accepted_gso_segments, &mut self.stats.borrow_mut());
+        }
+        let datagram_outputs = segments
+            .into_iter()
+            .map(|segment| segment.quic_datagrams)
+            .collect::<Vec<_>>();
+        self.qlog
+            .finish_output_transaction(true)
+            .expect("validated tracked output owns the qlog transaction");
+        for datagram_output in datagram_outputs {
+            self.commit_quic_datagram_output(datagram_output);
+        }
+        for space in discard_spaces {
+            self.discard_keys(space, now);
+        }
+        let generation = token.generation;
+        qdebug!(
+            "[{self}] resolved tracked output generation {generation} with \
+             {accepted_gso_segments} accepted segments at {now:?}"
+        );
+        Ok(())
     }
 
     /// A test-only output function that uses the provided writer to
@@ -1267,6 +2176,7 @@ impl Connection {
     where
         W: test_internal::FrameWriter + 'static,
     {
+        self.assert_output_resolved();
         self.test_frame_writer = Some(Box::new(writer));
         let res = self.process_output(now);
         self.test_frame_writer = None;
@@ -1286,7 +2196,6 @@ impl Connection {
             .try_into()
             .expect("max_datagrams is 1")
     }
-
     /// Process input and generate output.
     #[must_use = "OutputBatch of the process_multiple function must be handled"]
     pub fn process_multiple<A: AsRef<[u8]> + AsMut<[u8]>>(
@@ -1295,6 +2204,9 @@ impl Connection {
         now: Instant,
         max_datagrams: NonZeroUsize,
     ) -> OutputBatch {
+        if let Err(error) = self.ensure_output_resolved() {
+            return OutputBatch::error(error);
+        }
         if let Some(d) = dgram {
             // Snapshot timer type before ACKs can alter loss state.
             if let Some(path) = self.paths.primary() {
@@ -1528,97 +2440,97 @@ impl Connection {
             && self.role == Role::Client
             && !path.borrow().is_primary()
         {
-            // If we have received a packet from a different address than we have sent to
-            // we should ignore the packet. In such a case a path will be a newly created
-            // temporary path, not the primary path.
+            // If we have received a packet from a different address than we
+            // have sent to we should ignore the packet. In such a case a path
+            // will be a newly created temporary path, not the primary path.
             return Ok(PreprocessResult::Next);
         }
 
-        match (packet.packet_type(), &self.state, &self.role) {
+        match(packet.packet_type(), &self.state, &self.role) {
             (packet::Type::Initial, State::Init, Role::Server) => {
-                let version = packet.version().ok_or(Error::ProtocolViolation)?;
-                if !packet.is_valid_initial()
-                    || !self.conn_params.get_versions().all().contains(&version)
-                {
-                    self.stats.borrow_mut().pkt_dropped("Invalid Initial");
-                    return Ok(PreprocessResult::Next);
+              let version = packet.version().ok_or(Error::ProtocolViolation) ? ;
+              if !packet
+                .is_valid_initial() ||
+                    !self.conn_params.get_versions().all().contains(&version) {
+                  self.stats.borrow_mut().pkt_dropped("Invalid Initial");
+                  return Ok(PreprocessResult::Next);
                 }
-                qinfo!(
-                    "[{self}] Received valid Initial packet with scid {:?} dcid {:?}",
-                    packet.scid(),
-                    packet.dcid()
-                );
-                // Record the client's selected CID so that it can be accepted until
-                // the client starts using a real connection ID.
-                let dcid = ConnectionId::from(packet.dcid());
-                self.crypto.states_mut().init_server(
-                    version,
-                    &dcid,
-                    self.conn_params.randomize_first_pn_enabled(),
-                )?;
-                self.original_destination_cid = Some(dcid);
-                self.set_state(State::WaitInitial, now);
+              qinfo !(
+                  "[{self}] Received valid Initial packet with scid {:?} dcid {:?}",
+                  packet.scid(), packet.dcid());
+              // Record the client's selected CID so that it can be accepted
+              // until the client starts using a real connection ID.
+              let dcid = ConnectionId::from(packet.dcid());
+              self.crypto.states_mut().init_server(
+                  version, &dcid,
+                  self.conn_params.randomize_first_pn_enabled(), )
+                  ? ;
+              self.original_destination_cid = Some(dcid);
+              self.set_state(State::WaitInitial, now);
 
-                // We need to make sure that we set this transport parameter.
-                // This has to happen prior to processing the packet so that
-                // the TLS handshake has all it needs.
-                if !self.retry_sent() {
-                    self.tps
-                        .borrow_mut()
-                        .local_mut()
-                        .set_bytes(OriginalDestinationConnectionId, packet.dcid().to_vec());
+              // We need to make sure that we set this transport parameter.
+              // This has to happen prior to processing the packet so that
+              // the TLS handshake has all it needs.
+              if !self
+                .retry_sent() {
+                  self.tps.borrow_mut().local_mut().set_bytes(
+                      OriginalDestinationConnectionId, packet.dcid().to_vec());
                 }
             }
-            (packet::Type::VersionNegotiation, State::WaitInitial, Role::Client) => {
-                if let Ok(versions) = packet.supported_versions() {
-                    if versions.is_empty()
-                        || versions.contains(&self.version().wire_version())
-                        || versions.contains(&0)
-                        || &packet.scid() != self.odcid().ok_or(Error::Internal)?
-                        || matches!(self.address_validation, AddressValidationInfo::Retry { .. })
-                    {
-                        // Ignore VersionNegotiation packets that contain the current version.
-                        // Or don't have the right connection ID.
-                        // Or are received after a Retry.
-                        self.stats.borrow_mut().pkt_dropped("Invalid VN");
-                    } else {
-                        self.version_negotiation(&versions, now)?;
+            (packet::Type::VersionNegotiation, State::WaitInitial,
+             Role::Client) => {
+              if let
+                Ok(versions) = packet.supported_versions() {
+                  if versions
+                    .is_empty() ||
+                        versions.contains(&self.version().wire_version()) ||
+                        versions.contains(&0) ||
+                        &packet.scid() != self.odcid().ok_or(Error::Internal)
+                        ? || matches !(self.address_validation,
+                                       AddressValidationInfo::Retry{..}) {
+                      // Ignore VersionNegotiation packets that contain the
+                      // current version. Or don't have the right connection ID.
+                      // Or are received after a Retry.
+                      self.stats.borrow_mut().pkt_dropped("Invalid VN");
                     }
-                } else {
-                    self.stats.borrow_mut().pkt_dropped("VN with no versions");
+                  else {
+                    self.version_negotiation(&versions, now) ? ;
+                  }
                 }
-                return Ok(PreprocessResult::End);
+              else {
+                self.stats.borrow_mut().pkt_dropped("VN with no versions");
+              }
+              return Ok(PreprocessResult::End);
             }
             (packet::Type::Retry, State::WaitInitial, Role::Client) => {
-                self.handle_retry(packet, now)?;
-                return Ok(PreprocessResult::Next);
+              self.handle_retry(packet, now) ? ;
+              return Ok(PreprocessResult::Next);
             }
-            (packet::Type::Handshake | packet::Type::Short, State::WaitInitial, Role::Client)
+            (packet::Type::Handshake | packet::Type::Short, State::WaitInitial,
+             Role::Client)
                 // This packet can't be processed now, but it could be a sign
                 // that Initial packets were lost.
                 // Resend Initial CRYPTO frames immediately a few times just
                 // in case.  As we don't have an RTT estimate yet, this helps
                 // when there is a short RTT and losses. Also mark all 0-RTT
                 // data as lost.
-                if dcid.is_none()
-                    && self.cid_manager.is_valid(packet.dcid())
-                    && !self.saved_datagrams.is_either_full()
-                => {
-                    qtrace!("Resending Initial in response to an undecryptable packet");
-                    self.crypto.resend_unacked(PacketNumberSpace::Initial);
-                    self.resend_0rtt(now);
-                }
-            (
-                packet::Type::VersionNegotiation | packet::Type::Retry | packet::Type::OtherVersion,
-                ..,
-            ) => {
-                self.stats
-                    .borrow_mut()
-                    .pkt_dropped(format!("{:?}", packet.packet_type()));
-                return Ok(PreprocessResult::Next);
+                if dcid.is_none() &&
+                self.cid_manager.is_valid(packet.dcid()) &&
+                !self.saved_datagrams.is_either_full() => {
+              qtrace !(
+                  "Resending Initial in response to an undecryptable packet");
+              self.crypto.resend_unacked(PacketNumberSpace::Initial);
+              self.resend_0rtt(now);
+            }
+            (packet::Type::VersionNegotiation | packet::Type::Retry |
+                 packet::Type::OtherVersion,
+             .., ) => {
+              self.stats.borrow_mut().pkt_dropped(
+                  format !("{:?}", packet.packet_type()));
+              return Ok(PreprocessResult::Next);
             }
             _ => {}
-        }
+          }
 
         let res = match self.state {
             State::Init => {
@@ -1632,7 +2544,8 @@ impl Connection {
                 if self.cid_manager.is_valid(packet.dcid()) {
                     if self.role == Role::Server && packet.packet_type() == packet::Type::Handshake
                     {
-                        // Server has received a Handshake packet -> discard Initial keys and states
+                        // Server has received a Handshake packet -> discard Initial
+                        // keys and states
                         self.discard_keys(PacketNumberSpace::Initial, now);
                     }
                     PreprocessResult::Continue
@@ -1669,7 +2582,8 @@ impl Connection {
         Ok(res)
     }
 
-    /// After a Initial, Handshake, `ZeroRtt`, or Short packet is successfully processed.
+    /// After a Initial, Handshake, `ZeroRtt`, or Short packet is
+    /// successfully processed.
     #[expect(clippy::too_many_arguments, reason = "Yes, but they're needed.")]
     fn postprocess_packet(
         &mut self,
@@ -1740,8 +2654,9 @@ impl Connection {
         }
     }
 
-    /// Take a datagram as input.  This reports an error if the packet was bad.
-    /// This takes two times: when the datagram was received, and the current time.
+    /// Take a datagram as input.  This reports an error if the packet was
+    /// bad. This takes two times: when the datagram was received, and the
+    /// current time.
     fn input(
         &mut self,
         d: Datagram<impl AsRef<[u8]> + AsMut<[u8]>>,
@@ -1851,7 +2766,8 @@ impl Connection {
                 Err(e) => {
                     match e.error {
                         Error::KeysPending(epoch) => {
-                            // This packet can't be decrypted because we don't have the keys yet.
+                            // This packet can't be decrypted because we don't have the keys
+                            // yet.
                             // Don't check this packet for a stateless reset, just return.
                             let remaining = slc_len;
                             self.save_datagram(epoch, d, remaining, now);
@@ -1893,7 +2809,8 @@ impl Connection {
         }
     }
 
-    /// Process a packet.  Returns true if the packet might initiate migration.
+    /// Process a packet.  Returns true if the packet might initiate
+    /// migration.
     fn process_packet(
         &mut self,
         path: &PathRef,
@@ -1910,7 +2827,8 @@ impl Connection {
         // OK, we have a valid packet.
 
         // Get the next packet number we'll send, for ACK verification.
-        // This is used by `input_frame` to verify that ACKs don't acknowledge unsent packets.
+        // This is used by `input_frame` to verify that ACKs don't acknowledge
+        // unsent packets.
         let next_pn = self
             .crypto
             .states()
@@ -1923,7 +2841,23 @@ impl Connection {
         while d.remaining() > 0 {
             #[cfg(feature = "build-fuzzing-corpus")]
             let pos = d.offset();
-            let f = self.decode_frame(&mut d)?;
+            #[cfg(feature = "mcquic")]
+            let inactive_mcquic = self.role == Role::Client
+                && self.mcquic_operation_state != crate::mcquic::OperationState::Active
+                && Self::next_frame_is_mcquic(&d);
+            let f = match self.decode_frame(&mut d) {
+                Ok(frame) => frame,
+                #[cfg(feature = "mcquic")]
+                Err(error) if inactive_mcquic => {
+                    qdebug!("[{self}] ignoring malformed inactive MCQUIC control: {error}");
+                    self.decline_pending_mcquic_operation();
+                    // The malformed frame has no trustworthy boundary. Do not
+                    // ACK this packet and thereby discard any ordinary QUIC
+                    // frames that might follow it.
+                    return Ok(false);
+                }
+                Err(error) => return Err(error),
+            };
             #[cfg(feature = "build-fuzzing-corpus")]
             neqo_common::write_item_to_fuzzing_corpus("frame", &packet[pos..d.offset()]);
             ack_eliciting |= f.ack_eliciting();
@@ -1957,9 +2891,9 @@ impl Connection {
                 packet.packet_type(),
             );
             // This was a valid packet that caused the same packet number to be
-            // discarded.  This happens when the client discards the Initial packet
-            // number space after receiving the ServerHello.  Remember this so
-            // that we guarantee that we send a Handshake packet.
+            // discarded.  This happens when the client discards the Initial
+            // packet number space after receiving the ServerHello.  Remember
+            // this so that we guarantee that we send a Handshake packet.
             self.received_untracked = true;
             // We don't migrate during the handshake, so return false.
             false
@@ -1971,6 +2905,13 @@ impl Connection {
     #[cfg(not(feature = "mcquic"))]
     fn decode_frame<'a>(&self, dec: &mut Decoder<'a>) -> Res<Frame<'a>> {
         Frame::decode(dec)
+    }
+
+    #[cfg(feature = "mcquic")]
+    fn next_frame_is_mcquic(dec: &Decoder) -> bool {
+        let mut peek = Decoder::from(dec.as_ref());
+        peek.decode_varint()
+            .is_some_and(crate::mcquic::is_frame_type)
     }
 
     #[cfg(feature = "mcquic")]
@@ -2014,7 +2955,22 @@ impl Connection {
             .decode(usize::from(channel_id_len))
             .ok_or(Error::NoMoreData)?;
 
-        Ok(self.mcquic_integrity_hash_lens.get(channel_id).copied())
+        if let Some(hash_len) = self.mcquic_integrity_hash_lens.get(channel_id) {
+            return Ok(Some(*hash_len));
+        }
+
+        self.mcquic_pending_operation_controls
+            .iter()
+            .rev()
+            .find_map(|frame| match frame {
+                crate::mcquic::Frame::Announce(announce) if announce.channel_id == channel_id => {
+                    Some(crate::mcquic::integrity_hash_len_from_id(
+                        announce.integrity_hash_algorithm,
+                    ))
+                }
+                _ => None,
+            })
+            .transpose()
     }
 
     /// During connection setup, the first path needs to be setup.
@@ -2044,8 +3000,8 @@ impl Connection {
     fn ensure_permanent(&mut self, path: &PathRef, now: Instant) -> Res<()> {
         if self.paths.is_temporary(path) {
             // If there isn't a connection ID to use for this path, the packet
-            // will be processed, but it won't be attributed to a path.  That means
-            // no path probes or PATH_RESPONSE.  But it's not fatal.
+            // will be processed, but it won't be attributed to a path.  That
+            // means no path probes or PATH_RESPONSE.  But it's not fatal.
             match self.cids.next() {
                 Some(cid) => {
                     self.paths.make_permanent(path, None, cid, now);
@@ -2076,9 +3032,10 @@ impl Connection {
         }
     }
 
-    /// After an error, a permanent path is needed to send the `CONNECTION_CLOSE`.
-    /// This attempts to ensure that this exists.  As the connection is now
-    /// temporary, there is no reason to do anything special here.
+    /// After an error, a permanent path is needed to send the
+    /// `CONNECTION_CLOSE`. This attempts to ensure that this exists.  As the
+    /// connection is now temporary, there is no reason to do anything special
+    /// here.
     fn ensure_error_path(&mut self, path: &PathRef, packet: &packet::Decrypted, now: Instant) {
         path.borrow_mut().set_valid(now);
         if self.paths.is_temporary(path) {
@@ -2114,16 +3071,17 @@ impl Connection {
     }
 
     /// Migrate to the provided path.
-    /// Either local or remote address (but not both) may be provided as `None` to have
-    /// the address from the current primary path used.
-    /// If `force` is true, then migration is immediate.
-    /// Otherwise, migration occurs after the path is probed successfully.
-    /// Either way, the path is probed and will be abandoned if the probe fails.
+    /// Either local or remote address (but not both) may be provided as `None`
+    /// to have the address from the current primary path used. If `force` is
+    /// true, then migration is immediate. Otherwise, migration occurs after the
+    /// path is probed successfully. Either way, the path is probed and will be
+    /// abandoned if the probe fails.
     ///
     /// # Errors
     ///
-    /// Fails if this is not a client, not confirmed, the peer disabled connection migration, or
-    /// there are not enough connection IDs available to use.
+    /// Fails if this is not a client, not confirmed, the peer disabled
+    /// connection migration, or there are not enough connection IDs available
+    /// to use.
     pub fn migrate(
         &mut self,
         local: Option<SocketAddr>,
@@ -2131,6 +3089,7 @@ impl Connection {
         force: bool,
         now: Instant,
     ) -> Res<()> {
+        self.ensure_output_resolved()?;
         if self.role != Role::Client {
             return Err(Error::InvalidMigration);
         }
@@ -2160,8 +3119,8 @@ impl Connection {
             return Err(Error::InvalidMigration);
         }
         if (local.ip().is_loopback() ^ remote.ip().is_loopback()) && !local.ip().is_unspecified() {
-            // Block attempts to migrate to a path with loopback on only one end, unless the local
-            // address is unspecified.
+            // Block attempts to migrate to a path with loopback on only one end,
+            // unless the local address is unspecified.
             return Err(Error::InvalidMigration);
         }
 
@@ -2178,10 +3137,13 @@ impl Connection {
             path.borrow(),
             if force { "now" } else { "after" }
         );
-        if self
-            .paths
-            .migrate(&path, force, now, &mut self.stats.borrow_mut())
-        {
+        if self.paths.migrate(
+            &path,
+            force,
+            self.conn_params.ecn_enabled(),
+            now,
+            &mut self.stats.borrow_mut(),
+        ) {
             self.loss_recovery.migrate();
             self.path_migrated(&path);
         }
@@ -2208,10 +3170,11 @@ impl Connection {
             // The connection ID isn't special, so just save it.
             self.cids.add_remote(cid)?;
 
-            // The preferred address doesn't dictate what the local address is, so this
-            // has to use the existing address.  So only pay attention to a preferred
-            // address from the same family as is currently in use. More thought will
-            // be needed to work out how to get addresses from a different family.
+            // The preferred address doesn't dictate what the local address is, so
+            // this has to use the existing address.  So only pay attention to a
+            // preferred address from the same family as is currently in use. More
+            // thought will be needed to work out how to get addresses from a
+            // different family.
             let prev = self
                 .paths
                 .primary()
@@ -2224,8 +3187,8 @@ impl Connection {
             };
 
             if let Some(remote) = remote {
-                // Ignore preferred address that move to loopback from non-loopback.
-                // `migrate` doesn't enforce this rule.
+                // Ignore preferred address that move to loopback from
+                // non-loopback. `migrate` doesn't enforce this rule.
                 if !prev.ip().is_loopback() && remote.ip().is_loopback() {
                     qwarn!("[{self}] Ignoring a move to a loopback address: {remote}");
                     return Ok(());
@@ -2272,9 +3235,13 @@ impl Connection {
         }
     }
 
-    fn output(&mut self, now: Instant, max_datagrams: NonZeroUsize) -> SendOptionBatch {
+    fn output(
+        &mut self,
+        now: Instant,
+        max_datagrams: NonZeroUsize,
+    ) -> Result<SendOptionBatch, OutputGenerationError> {
         qtrace!("[{self}] output {now:?}");
-        let res = match &self.state {
+        match &self.state {
             State::Init
             | State::WaitInitial
             | State::WaitVersion
@@ -2283,8 +3250,11 @@ impl Connection {
             | State::Confirmed => self.paths.select_path().map_or_else(
                 || Ok(SendOptionBatch::default()),
                 |path| {
-                    let res = self.output_dgram_batch_on_path(&path, now, None, max_datagrams);
-                    self.capture_error(Some(path), now, FrameType::Padding, res)
+                    self.output_dgram_batch_on_path(&path, now, None, max_datagrams)
+                        .map_err(|error| OutputGenerationError {
+                            path: Some(path),
+                            error,
+                        })
                 },
             ),
             State::Closing { .. } | State::Draining { .. } | State::Closed(_) => {
@@ -2292,13 +3262,17 @@ impl Connection {
                     || Ok(SendOptionBatch::default()),
                     |details| {
                         let path = Rc::clone(details.path());
-                        // In some error cases, we will not be able to make a new, permanent path.
-                        // For example, if we run out of connection IDs and the error results from
-                        // a packet on a new path, we avoid sending (and the privacy risk) rather
-                        // than reuse a connection ID.
-                        let res = if path.borrow().is_temporary() {
+                        // In some error cases, we will not be able to make a
+                        // new, permanent path. For example, if we run out of
+                        // connection IDs and the error results from a packet
+                        // on a new path, we avoid sending (and the privacy
+                        // risk) rather than reuse a connection ID.
+                        if path.borrow().is_temporary() {
                             qerror!("[{self}] Attempting to close with a temporary path");
-                            Err(Error::Internal)
+                            Err(OutputGenerationError {
+                                path: Some(path),
+                                error: Error::Internal,
+                            })
                         } else {
                             self.output_dgram_batch_on_path(
                                 &path,
@@ -2306,13 +3280,15 @@ impl Connection {
                                 Some(&details),
                                 max_datagrams,
                             )
-                        };
-                        self.capture_error(Some(path), now, FrameType::Padding, res)
+                            .map_err(|error| OutputGenerationError {
+                                path: Some(path),
+                                error,
+                            })
+                        }
                     },
                 )
             }
-        };
-        res.unwrap_or_default()
+        }
     }
 
     #[expect(clippy::too_many_arguments, reason = "no easy way to simplify")]
@@ -2399,6 +3375,10 @@ impl Connection {
 
     /// Write the frames that are exchanged in the application data space.
     /// The order of calls here determines the relative priority of frames.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "frame priority is expressed by one ordered application-space dispatcher"
+    )]
     fn write_appdata_frames(
         &mut self,
         builder: &mut packet::Builder<&mut Vec<u8>>,
@@ -2420,23 +3400,56 @@ impl Connection {
                 frame_stats.handshake_done += 1;
             }
 
-            self.streams
-                .write_frames(TransmissionPriority::Critical, builder, tokens, frame_stats);
+            self.streams.write_frames_tracked(
+                TransmissionPriority::Critical,
+                builder,
+                tokens,
+                frame_stats,
+                &mut self
+                    .output_building
+                    .as_mut()
+                    .expect("output transaction active")
+                    .current
+                    .as_mut()
+                    .expect("output segment active")
+                    .streams,
+            );
             if builder.is_full() {
                 return;
             }
 
-            self.streams
-                .write_maintenance_frames(builder, tokens, frame_stats, now, rtt);
+            self.streams.write_maintenance_frames_tracked(
+                builder,
+                tokens,
+                frame_stats,
+                now,
+                rtt,
+                &mut self
+                    .output_building
+                    .as_mut()
+                    .expect("output transaction active")
+                    .current
+                    .as_mut()
+                    .expect("output segment active")
+                    .streams,
+            );
             if builder.is_full() {
                 return;
             }
 
-            self.streams.write_frames(
+            self.streams.write_frames_tracked(
                 TransmissionPriority::Important,
                 builder,
                 tokens,
                 frame_stats,
+                &mut self
+                    .output_building
+                    .as_mut()
+                    .expect("output transaction active")
+                    .current
+                    .as_mut()
+                    .expect("output segment active")
+                    .streams,
             );
             if builder.is_full() {
                 return;
@@ -2454,15 +3467,40 @@ impl Connection {
             }
 
             for prio in [TransmissionPriority::High, TransmissionPriority::Normal] {
-                self.streams
-                    .write_frames(prio, builder, tokens, &mut stats.frame_tx);
+                self.streams.write_frames_tracked(
+                    prio,
+                    builder,
+                    tokens,
+                    &mut stats.frame_tx,
+                    &mut self
+                        .output_building
+                        .as_mut()
+                        .expect("output transaction active")
+                        .current
+                        .as_mut()
+                        .expect("output segment active")
+                        .streams,
+                );
                 if builder.is_full() {
                     return;
                 }
             }
 
-            // Datagrams are best-effort and unreliable.  Let streams starve them for now.
-            self.quic_datagrams.write_frames(builder, tokens, stats);
+            // Datagrams are best-effort and unreliable.  Let streams starve
+            // them for now.
+            self.quic_datagrams.write_frames(
+                builder,
+                tokens,
+                stats,
+                &mut self
+                    .output_building
+                    .as_mut()
+                    .expect("output transaction active")
+                    .current
+                    .as_mut()
+                    .expect("output segment active")
+                    .quic_datagrams,
+            );
             if builder.is_full() {
                 return;
             }
@@ -2476,7 +3514,8 @@ impl Connection {
         }
 
         // CRYPTO here only includes NewSessionTicket, plus NEW_TOKEN.
-        // Both of these are only used for resumption and so can be relatively low priority.
+        // Both of these are only used for resumption and so can be relatively low
+        // priority.
         let stats = &mut self.stats.borrow_mut();
         let frame_stats = &mut stats.frame_tx;
         self.crypto.write_frame(
@@ -2495,8 +3534,20 @@ impl Connection {
             return;
         }
 
-        self.streams
-            .write_frames(TransmissionPriority::Low, builder, tokens, frame_stats);
+        self.streams.write_frames_tracked(
+            TransmissionPriority::Low,
+            builder,
+            tokens,
+            frame_stats,
+            &mut self
+                .output_building
+                .as_mut()
+                .expect("output transaction active")
+                .current
+                .as_mut()
+                .expect("output segment active")
+                .streams,
+        );
     }
 
     #[cfg(feature = "mcquic")]
@@ -2505,20 +3556,20 @@ impl Connection {
         builder: &mut packet::Builder<&mut Vec<u8>>,
         tokens: &mut recovery::Tokens,
     ) -> bool {
-        while let Some(frame) = self.mcquic_send.pop_front() {
-            let encoded = frame
+        while let Some(queued) = self.mcquic_send.pop_front() {
+            let encoded = queued
+                .frame
                 .to_vec()
                 .expect("MCQUIC frames are validated when queued");
             if encoded.len() > builder.remaining() {
-                self.mcquic_send.push_front(frame);
+                self.mcquic_send.restore_front(queued);
                 return false;
             }
 
-            let requires_packet_end = frame.requires_packet_end();
+            debug_assert_eq!(encoded.len(), queued.encoded_len);
+            let requires_packet_end = queued.frame.requires_packet_end();
             builder.encode(&encoded);
-            if frame.retransmit_on_loss() {
-                tokens.push(recovery::Token::Mcquic(frame));
-            }
+            tokens.push(recovery::Token::Mcquic(queued.frame));
             if requires_packet_end {
                 return true;
             }
@@ -2576,15 +3627,16 @@ impl Connection {
     }
 
     /// Write frames to the provided builder.  Returns a list of tokens used for
-    /// tracking loss or acknowledgment, whether any frame was ACK eliciting, and
-    /// whether the packet was padded.
+    /// tracking loss or acknowledgment, whether any frame was ACK eliciting,
+    /// and whether the packet was padded.
     fn write_frames(
         &mut self,
         path: &PathRef,
         space: PacketNumberSpace,
         profile: &SendProfile,
         builder: &mut packet::Builder<&mut Vec<u8>>,
-        coalesced: bool, // Whether this packet is coalesced behind another one.
+        coalesced: bool, // Whether this packet is coalesced
+        // behind another one.
         now: Instant,
     ) -> (recovery::Tokens, bool, bool) {
         let mut tokens = recovery::Tokens::new();
@@ -2608,8 +3660,8 @@ impl Connection {
         // but send them even when we don't have space.
         let full_mtu = profile.limit() == path.borrow().plpmtu();
         if space == PacketNumberSpace::ApplicationData && self.state.connected() {
-            // Path validation probes should only be padded if the full MTU is available.
-            // The probing code needs to know so it can track that.
+            // Path validation probes should only be padded if the full MTU is
+            // available. The probing code needs to know so it can track that.
             if path.borrow_mut().write_frames(
                 builder,
                 &mut self.stats.borrow_mut().frame_tx,
@@ -2627,10 +3679,11 @@ impl Connection {
 
         if primary {
             if space == PacketNumberSpace::ApplicationData {
-                if self.state.connected()
-                    && path.borrow().pmtud().needs_probe()
-                    && !coalesced // Only send PMTUD probes using non-coalesced packets.
-                    && full_mtu
+                if self
+              .state.connected() && path.borrow().pmtud().needs_probe() &&
+                  !coalesced  // Only send PMTUD probes using non-coalesced
+                              // packets.
+                  && full_mtu
                 {
                     path.borrow_mut().pmtud_mut().send_probe(
                         builder,
@@ -2658,16 +3711,18 @@ impl Connection {
             }
         }
 
-        // Maybe send a probe now, either to probe for losses or to keep the connection live.
+        // Maybe send a probe now, either to probe for losses or to keep the
+        // connection live.
         let force_probe = profile.should_probe(space);
         ack_eliciting |= self.maybe_probe(path, force_probe, builder, ack_end, &mut tokens, now);
         // If this is not the primary path, this should be ack-eliciting.
         debug_assert!(primary || ack_eliciting);
 
-        // Add padding.  Only pad 1-RTT packets so that we don't prevent coalescing.
-        // And avoid padding packets that otherwise only contain ACK because adding PADDING
-        // causes those packets to consume congestion window, which is not tracked (yet).
-        // And avoid padding if we don't have a full MTU available.
+        // Add padding.  Only pad 1-RTT packets so that we don't prevent
+        // coalescing. And avoid padding packets that otherwise only contain ACK
+        // because adding PADDING causes those packets to consume congestion
+        // window, which is not tracked (yet). And avoid padding if we don't have
+        // a full MTU available.
         let stats = &mut self.stats.borrow_mut().frame_tx;
         let padded = if ack_eliciting && full_mtu && builder.pad() {
             stats.padding += 1;
@@ -2751,24 +3806,32 @@ impl Connection {
                 // can be up to `mtu` large. Break in case the next could be
                 // larger than the ones already in the batch.
                 datagram_size < mtu
-                // GSO allows total datagram batch size up to the address family
-                // max MTU. If the next datagram could exceed that limit, break.
-                //
-                // See for example Linux kernel:
-                // https://github.com/torvalds/linux/blob/fb4d33ab452ea254e2c319bac5703d1b56d895bf/include/linux/netdevice.h#L2402
-                || address_family_max_mtu - send_buffer.len() < mtu
+               // GSO allows total datagram batch size up to the address family
+               // max MTU. If the next datagram could exceed that limit, break.
+               //
+               // See for example Linux kernel:
+               // https://github.com/torvalds/linux/blob/fb4d33ab452ea254e2c319bac5703d1b56d895bf/include/linux/netdevice.h#L2402
+               || address_family_max_mtu - send_buffer.len() < mtu
             }) {
                 break;
             }
 
-            match self.output_dgram_on_path(
+            self.begin_output_segment(path)?;
+
+            let output = self.output_dgram_on_path(
                 path,
                 now,
                 closing_frame.take(),
                 Encoder::new_borrowed_vec(&mut send_buffer),
                 packet_tos,
-            )? {
-                SendOption::Yes => {
+            );
+            match output {
+                Err(error) => {
+                    self.rollback_current_output_segment()?;
+                    return Err(error);
+                }
+                Ok(SendOption::Yes) => {
+                    self.finish_output_segment()?;
                     debug_assert_eq!(
                         mtu,
                         path.borrow().plpmtu(),
@@ -2787,11 +3850,20 @@ impl Connection {
                         break;
                     }
                 }
-                SendOption::No(paced) => {
+                Ok(SendOption::No(paced)) => {
+                    let datagram_output = self.take_current_quic_datagram_output()?;
+                    self.rollback_current_output_segment()?;
                     if num_datagrams == 0 {
                         debug_assert!(send_buffer.is_empty());
+                        self.commit_quic_datagram_output(datagram_output);
                         return Ok(SendOptionBatch::No(paced));
                     }
+                    self.output_building
+                        .as_mut()
+                        .and_then(|building| building.segments.last_mut())
+                        .ok_or(Error::Internal)?
+                        .quic_datagrams
+                        .append(datagram_output);
                     break;
                 }
             }
@@ -2820,7 +3892,7 @@ impl Connection {
         mut encoder: Encoder<&mut Vec<u8>>,
         packet_tos: Tos,
     ) -> Res<SendOption> {
-        let mut initial_sent = None;
+        let mut initial_sent: Option<sent::Packet> = None;
         let mut needs_padding = false;
         let grease_quic_bit = self.can_grease_quic_bit();
         let version = self.version();
@@ -2829,9 +3901,16 @@ impl Connection {
         let profile = self.loss_recovery.send_profile(&path.borrow(), now);
         qdebug!("[{self}] output_dgram_on_path send_profile {profile:?}");
 
-        // Frames for different epochs must go in different packets, but then these
-        // packets can go in a single datagram
+        // Frames for different epochs must go in different packets, but then
+        // these packets can go in a single datagram
         for space in PacketNumberSpace::iter() {
+            if self
+                .output_building
+                .as_ref()
+                .is_some_and(|building| building.discard_spaces.contains(space))
+            {
+                continue;
+            }
             // Ensure we have tx crypto state for this epoch, or skip it.
             let Some((epoch, tx)) = self.crypto.states_mut().select_tx_mut(self.version, space)
             else {
@@ -2871,7 +3950,8 @@ impl Connection {
                 limit,
                 self.loss_recovery.largest_acknowledged_pn(space),
             );
-            // The builder will set the limit to 0 if there isn't enough space for the header.
+            // The builder will set the limit to 0 if there isn't enough space
+            // for the header.
             if builder.is_full() {
                 encoder = builder.abort();
                 break;
@@ -2928,8 +4008,23 @@ impl Connection {
                 .states_mut()
                 .tx_mut(self.version, epoch)
                 .ok_or(Error::Internal)?;
-            encoder = builder.build(tx)?;
-            self.crypto.states_mut().auto_update()?;
+            encoder = match builder.build(tx) {
+                Ok(encoder) => encoder,
+                Err(error) => {
+                    self.track_unregistered_output_tokens(tokens)?;
+                    if let Some(initial) = initial_sent.take() {
+                        self.track_unregistered_output_tokens(initial.into_tokens())?;
+                    }
+                    return Err(error);
+                }
+            };
+            if let Err(error) = self.crypto.states_mut().auto_update() {
+                self.track_unregistered_output_tokens(tokens)?;
+                if let Some(initial) = initial_sent.take() {
+                    self.track_unregistered_output_tokens(initial.into_tokens())?;
+                }
+                return Err(error);
+            }
 
             if ack_eliciting {
                 self.idle_timeout.on_packet_sent(now);
@@ -2944,29 +4039,31 @@ impl Connection {
             );
             if padded {
                 needs_padding = false;
-                self.loss_recovery.on_packet_sent(path, sent, now);
+                self.track_output_packet(sent, path, now)?;
             } else if pt == packet::Type::Initial && (self.role == Role::Client || ack_eliciting) {
-                // Packets containing Initial packets might need padding, and we want to
-                // track that padding along with the Initial packet.  So defer tracking.
+                // Packets containing Initial packets might need padding, and we
+                // want to track that padding along with the Initial packet.  So
+                // defer tracking.
                 initial_sent = Some(sent);
                 needs_padding = true;
             } else {
                 if pt.is_long() && self.role == Role::Client && initial_sent.is_none() {
-                    // Disable padding for any long header packet if the UDP packet doesn't include
-                    // an Initial packet.
+                    // Disable padding for any long header packet if the UDP
+                    // packet doesn't include an Initial packet.
                     needs_padding = false;
                 }
-                self.loss_recovery.on_packet_sent(path, sent, now);
+                self.track_output_packet(sent, path, now)?;
             }
 
             if space == PacketNumberSpace::Handshake {
                 if self.role == Role::Client {
-                    // We're sending a Handshake packet, so we can discard Initial keys.
-                    self.discard_keys(PacketNumberSpace::Initial, now);
+                    // We're sending a Handshake packet, so we can discard
+                    // Initial keys after the containing UDP segment is accepted.
+                    self.defer_discard_keys(PacketNumberSpace::Initial)?;
                 } else if self.role == Role::Server && self.state == State::Confirmed {
                     // We could discard handshake keys in set_state,
                     // but wait until after sending an ACK.
-                    self.discard_keys(PacketNumberSpace::Handshake, now);
+                    self.defer_discard_keys(PacketNumberSpace::Handshake)?;
                 }
             }
 
@@ -2992,7 +4089,7 @@ impl Connection {
                 if needs_padding {
                     self.pad_initial(&mut encoder, &mut initial, &profile);
                 }
-                self.loss_recovery.on_packet_sent(path, initial, now);
+                self.track_output_packet(initial, path, now)?;
             }
             path.borrow_mut().add_sent(encoder.len());
             Ok(SendOption::Yes)
@@ -3017,8 +4114,9 @@ impl Connection {
         let pad_amount = profile.limit() - encoder.len();
         initial.track_padding(pad_amount);
         if self.conn_params.scone_enabled() {
-            // This ensures that the last bytes are a SCONE indication, if there is enough space.
-            // This is not tracked, other than for congestion control (above)
+            // This ensures that the last bytes are a SCONE indication, if there
+            // is enough space. This is not tracked, other than for congestion
+            // control (above)
             if pad_amount >= Self::SCONE_INDICATION.len() {
                 encoder.pad_to(
                     profile.limit() - Self::SCONE_INDICATION.len() + 1,
@@ -3036,6 +4134,7 @@ impl Connection {
     /// # Errors
     /// When connection state is not valid.
     pub fn initiate_key_update(&mut self) -> Res<()> {
+        self.ensure_output_resolved()?;
         if self.state == State::Confirmed {
             let la = self
                 .loss_recovery
@@ -3096,6 +4195,7 @@ impl Connection {
 
     /// Close the connection.
     pub fn close<A: AsRef<str>>(&mut self, now: Instant, app_error: AppError, msg: A) {
+        self.assert_output_resolved();
         let error = CloseReason::Application(app_error);
         let timeout = self.get_closing_period_time(now);
         match self.paths.primary() {
@@ -3247,8 +4347,8 @@ impl Connection {
     fn validate_versions(&self) -> Res<()> {
         let tph = self.tps.borrow();
         let remote_tps = tph.remote_handshake().ok_or(Error::TransportParameter)?;
-        // `current` and `other` are the value from the peer's transport parameters.
-        // We're checking that these match our expectations.
+        // `current` and `other` are the value from the peer's transport
+        // parameters. We're checking that these match our expectations.
         if let Some((current, other)) = remote_tps.get_versions() {
             qtrace!(
                 "[{self}] validate_versions: current={:x} chosen={current:x} other={other:x?}",
@@ -3316,7 +4416,8 @@ impl Connection {
                 .original_destination_cid
                 .as_ref()
                 .ok_or(Error::ProtocolViolation)?;
-            // No need to randomize the starting packet number; that's already taken care of.
+            // No need to randomize the starting packet number; that's already taken
+            // care of.
             self.crypto.states_mut().init_server(version, dcid, false)?;
             version
         };
@@ -3367,7 +4468,8 @@ impl Connection {
         }
 
         // There is a chance that this could be called less often, but getting the
-        // conditions right is a little tricky, so call whenever CRYPTO data is used.
+        // conditions right is a little tricky, so call whenever CRYPTO data is
+        // used.
         if try_update {
             // We have transport parameters, it's go time.
             if self.tps.borrow().remote_handshake().is_some() {
@@ -3394,7 +4496,9 @@ impl Connection {
                 .pmtud_mut()
                 .start(now, &mut self.stats.borrow_mut());
         }
-        self.paths.start_ecn(&mut self.stats.borrow_mut());
+        if self.conn_params.ecn_enabled() {
+            self.paths.start_ecn(&mut self.stats.borrow_mut());
+        }
         Ok(())
     }
 
@@ -3438,8 +4542,8 @@ impl Connection {
                 ecn_count,
             } => {
                 // Ensure that the largest acknowledged packet number was actually sent.
-                // (If we ever start using non-contiguous packet numbers, we need to check all the
-                // packet numbers in the ACKed ranges.)
+                // (If we ever start using non-contiguous packet numbers, we need to check
+                // all the packet numbers in the ACKed ranges.)
                 if largest_acknowledged >= next_pn {
                     qwarn!("Largest ACKed {largest_acknowledged} was never sent");
                     return Err(Error::AckedUnsentPacket);
@@ -3476,8 +4580,8 @@ impl Connection {
                     self.handshake(now, packet_version, space, Some(&buf))?;
                     self.create_resumption_token(now);
                 } else {
-                    // If we get a useless CRYPTO frame send outstanding CRYPTO frames and 0-RTT
-                    // data again.
+                    // If we get a useless CRYPTO frame send outstanding CRYPTO frames and
+                    // 0-RTT data again.
                     self.crypto.resend_unacked(space);
                     if space == PacketNumberSpace::Initial {
                         self.crypto.resend_unacked(PacketNumberSpace::Handshake);
@@ -3617,6 +4721,17 @@ impl Connection {
 
     #[cfg(feature = "mcquic")]
     fn input_mcquic_frame(&mut self, frame: crate::mcquic::Frame, now: Instant) -> Res<()> {
+        if self.role == Role::Client {
+            match self.mcquic_operation_state {
+                crate::mcquic::OperationState::Pending => {
+                    return self.queue_pending_mcquic_operation_control(frame, now);
+                }
+                crate::mcquic::OperationState::Prohibited
+                | crate::mcquic::OperationState::Revoked => return Ok(()),
+                crate::mcquic::OperationState::Active => {}
+            }
+        }
+
         if !self.mcquic_negotiated() {
             return Err(Error::ProtocolViolation);
         }
@@ -3629,19 +4744,167 @@ impl Connection {
             return Err(Error::ProtocolViolation);
         }
 
-        let released = self.apply_mcquic_channel_control(&frame)?;
-        self.mcquic_recv.push_back(frame);
-        self.process_mcquic_released_packets(released, now)
-            .map_err(|(_, error)| error)
+        if Self::mcquic_control_channel_id(&frame)
+            .is_some_and(|channel_id| self.mcquic_retired_channels.contains_key(channel_id))
+        {
+            return Ok(());
+        }
+
+        let encoded_len = frame.encoded_len_erasing()?;
+        let recv_bytes = self
+            .mcquic_recv_bytes
+            .checked_add(encoded_len)
+            .ok_or(Error::McquicResourceLimit)?;
+        if self.mcquic_recv.len() >= MAX_MCQUIC_ACTIVE_CONTROL_FRAMES
+            || recv_bytes > MAX_MCQUIC_ACTIVE_CONTROL_BYTES
+        {
+            if let Some(channel_id) = Self::mcquic_control_channel_id(&frame) {
+                let channel_id = channel_id.to_vec();
+                self.limit_mcquic_channel(&channel_id, now);
+            } else {
+                self.mcquic_revoke_operation();
+                self.mcquic_resource_limited_channels.push_back(Vec::new());
+            }
+            return Ok(());
+        }
+
+        let released = match self.apply_mcquic_channel_control(&frame, now) {
+            Ok(released) => released,
+            Err(Error::McquicResourceLimit) => {
+                if let Some(channel_id) = Self::mcquic_control_channel_id(&frame) {
+                    self.limit_mcquic_channel(channel_id, now);
+                } else {
+                    self.mcquic_revoke_operation();
+                }
+                return Ok(());
+            }
+            Err(Error::McquicOwnershipViolation) => {
+                self.note_mcquic_ownership_violation();
+                return Ok(());
+            }
+            Err(error) => return Err(error),
+        };
+        self.mcquic_recv.push_back(PendingMcquicControl {
+            frame,
+            encoded_len,
+            inserted_at: now,
+        });
+        self.mcquic_recv_bytes = recv_bytes;
+        let released_channel = released.first().map(|packet| packet.channel_id.clone());
+        match self.process_mcquic_released_packets_with_ownership(released, now) {
+            Ok(()) => Ok(()),
+            Err((_, Error::McquicResourceLimit)) => {
+                if let Some(channel_id) = released_channel {
+                    self.limit_mcquic_channel(&channel_id, now);
+                } else {
+                    self.mcquic_revoke_operation();
+                }
+                Ok(())
+            }
+            Err((_, error)) => Err(error),
+        }
     }
 
     #[cfg(feature = "mcquic")]
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "the fallible shape is retained for direct cap tests and control-path symmetry"
+    )]
+    fn queue_pending_mcquic_operation_control(
+        &mut self,
+        frame: crate::mcquic::Frame,
+        now: Instant,
+    ) -> Res<()> {
+        let Ok(encoded_len) = frame.encoded_len_erasing() else {
+            self.decline_pending_mcquic_operation();
+            return Ok(());
+        };
+        let Some(pending_bytes) = self
+            .mcquic_pending_operation_control_bytes
+            .checked_add(encoded_len)
+        else {
+            self.decline_pending_mcquic_operation();
+            return Ok(());
+        };
+        if pending_bytes > MAX_PENDING_MCQUIC_OPERATION_CONTROL_BYTES
+            || self.mcquic_pending_operation_controls.len()
+                >= MAX_PENDING_MCQUIC_OPERATION_CONTROL_FRAMES
+        {
+            self.decline_pending_mcquic_operation();
+            return Ok(());
+        }
+
+        self.mcquic_pending_operation_controls.push_back(frame);
+        self.mcquic_pending_operation_control_bytes = pending_bytes;
+        self.mcquic_pending_operation_control_started_at
+            .get_or_insert(now);
+        Ok(())
+    }
+
+    #[cfg(feature = "mcquic")]
+    fn decline_pending_mcquic_operation(&mut self) {
+        if self.role == Role::Client
+            && self.mcquic_operation_state == crate::mcquic::OperationState::Pending
+        {
+            self.mcquic_operation_state = crate::mcquic::OperationState::Prohibited;
+        }
+        self.mcquic_pending_operation_controls.clear();
+        self.mcquic_pending_operation_control_bytes = 0;
+        self.mcquic_pending_operation_control_started_at = None;
+    }
+
+    #[cfg(feature = "mcquic")]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "all draft -08 channel-control transitions are kept in one exhaustive match"
+    )]
     fn apply_mcquic_channel_control(
         &mut self,
         frame: &crate::mcquic::Frame,
+        now: Instant,
     ) -> Res<Vec<crate::mcquic::ChannelPacket>> {
-        match frame {
+        let released = match frame {
             crate::mcquic::Frame::Announce(announce) => {
+                if !self.mcquic_channels.contains_key(&announce.channel_id) {
+                    let params = self
+                        .tps
+                        .borrow()
+                        .local()
+                        .get_mcquic_client_params()
+                        .cloned()
+                        .ok_or(Error::NotAvailable)?;
+                    let tracked_ids = self
+                        .mcquic_channels
+                        .len()
+                        .checked_add(
+                            self.mcquic_pending_channel_controls.len()
+                                - usize::from(
+                                    self.mcquic_pending_channel_controls
+                                        .contains_key(&announce.channel_id),
+                                ),
+                        )
+                        .ok_or(Error::McquicResourceLimit)?;
+                    let aggregate_rate_kibps = self
+                        .mcquic_channels
+                        .iter()
+                        .filter(|(channel_id, _)| {
+                            channel_id.as_slice() != announce.channel_id.as_slice()
+                        })
+                        .try_fold(announce.max_rate_kibps, |total, (_, channel)| {
+                            total
+                                .checked_add(channel.announce().max_rate_kibps)
+                                .ok_or(Error::McquicResourceLimit)
+                        })?;
+                    if tracked_ids >= MAX_MCQUIC_CHANNELS
+                        || u64::try_from(tracked_ids)? >= params.limits.max_channel_ids
+                        || (announce.source.is_ipv4() && !params.limits.ipv4_channels_allowed)
+                        || (announce.source.is_ipv6() && !params.limits.ipv6_channels_allowed)
+                        || announce.source.is_ipv4() != announce.group.is_ipv4()
+                        || aggregate_rate_kibps > params.limits.max_aggregate_rate_kibps
+                    {
+                        return Err(Error::McquicResourceLimit);
+                    }
+                }
                 let hash_len =
                     crate::mcquic::integrity_hash_len_from_id(announce.integrity_hash_algorithm)?;
                 if let Some(existing) = self.mcquic_channels.get(&announce.channel_id) {
@@ -3660,6 +4923,18 @@ impl Connection {
                     .mcquic_pending_channel_controls
                     .remove(&announce.channel_id)
                     .unwrap_or_default();
+                self.mcquic_pending_channel_control_started_at
+                    .remove(&announce.channel_id);
+                let pending_bytes = pending
+                    .iter()
+                    .filter_map(|frame| frame.encoded_len_erasing().ok())
+                    .sum::<usize>();
+                self.mcquic_pending_channel_control_bytes = self
+                    .mcquic_pending_channel_control_bytes
+                    .saturating_sub(pending_bytes);
+                self.mcquic_pending_channel_control_count = self
+                    .mcquic_pending_channel_control_count
+                    .saturating_sub(pending.len());
                 let state = self
                     .mcquic_channels
                     .get_mut(&announce.channel_id)
@@ -3669,31 +4944,498 @@ impl Connection {
                     released.extend(Self::apply_known_mcquic_channel_control(
                         state,
                         &pending_frame,
+                        now,
                     )?);
                 }
                 Ok(released)
             }
             crate::mcquic::Frame::Key(key) => {
                 let Some(state) = self.mcquic_channels.get_mut(&key.channel_id) else {
-                    self.mcquic_pending_channel_controls
-                        .entry(key.channel_id.clone())
-                        .or_default()
-                        .push_back(frame.clone());
+                    self.queue_unknown_mcquic_control(&key.channel_id, frame.clone(), now)?;
                     return Ok(Vec::new());
                 };
-                Self::apply_known_mcquic_channel_control(state, frame)
+                Self::apply_known_mcquic_channel_control(state, frame, now)
             }
             crate::mcquic::Frame::Integrity(integrity) => {
                 let Some(state) = self.mcquic_channels.get_mut(&integrity.channel_id) else {
-                    self.mcquic_pending_channel_controls
-                        .entry(integrity.channel_id.clone())
-                        .or_default()
-                        .push_back(frame.clone());
+                    self.queue_unknown_mcquic_control(&integrity.channel_id, frame.clone(), now)?;
                     return Ok(Vec::new());
                 };
-                Self::apply_known_mcquic_channel_control(state, frame)
+                Self::apply_known_mcquic_channel_control(state, frame, now)
+            }
+            crate::mcquic::Frame::Retire(retire) => {
+                self.retire_mcquic_channel_state(&retire.channel_id, now);
+                Ok(Vec::new())
             }
             _ => Ok(Vec::new()),
+        }?;
+        if !self.mcquic_channel_resources_within_limits() {
+            return Err(Error::McquicResourceLimit);
+        }
+        Ok(released)
+    }
+
+    #[cfg(feature = "mcquic")]
+    fn mcquic_channel_resources_within_limits(&self) -> bool {
+        let usage = self.mcquic_channels.values().fold(
+            crate::mcquic::ChannelResourceUsage::default(),
+            |mut total, channel| {
+                let channel = channel.resource_usage();
+                total.keys = total.keys.saturating_add(channel.keys);
+                total.key_bytes = total.key_bytes.saturating_add(channel.key_bytes);
+                total.integrity_hashes = total
+                    .integrity_hashes
+                    .saturating_add(channel.integrity_hashes);
+                total.integrity_bytes = total
+                    .integrity_bytes
+                    .saturating_add(channel.integrity_bytes);
+                total.pending_packets = total
+                    .pending_packets
+                    .saturating_add(channel.pending_packets);
+                total.pending_packet_bytes = total
+                    .pending_packet_bytes
+                    .saturating_add(channel.pending_packet_bytes);
+                total.datagrams = total.datagrams.saturating_add(channel.datagrams);
+                total.datagram_bytes = total.datagram_bytes.saturating_add(channel.datagram_bytes);
+                total
+            },
+        );
+        usage.keys <= MAX_MCQUIC_CONNECTION_KEYS
+            && usage.key_bytes <= MAX_MCQUIC_CONNECTION_KEY_BYTES
+            && usage.integrity_hashes <= MAX_MCQUIC_CONNECTION_INTEGRITY_HASHES
+            && usage.integrity_bytes <= MAX_MCQUIC_CONNECTION_INTEGRITY_BYTES
+            && usage.pending_packets <= MAX_MCQUIC_CONNECTION_PENDING_PACKETS
+            && usage.pending_packet_bytes <= MAX_MCQUIC_CONNECTION_PENDING_PACKET_BYTES
+            && usage.datagrams <= MAX_MCQUIC_CONNECTION_DATAGRAMS
+            && usage.datagram_bytes <= MAX_MCQUIC_CONNECTION_DATAGRAM_BYTES
+    }
+
+    #[cfg(feature = "mcquic")]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "bounded expiry coordinates all related MCQUIC resource indexes"
+    )]
+    fn expire_mcquic_resources(&mut self, now: Instant) {
+        while self
+            .mcquic_recv
+            .front()
+            .is_some_and(|pending| pending.inserted_at + MAX_MCQUIC_ACTIVE_CONTROL_AGE <= now)
+        {
+            let pending = self.mcquic_recv.pop_front().expect("front exists");
+            self.mcquic_recv_bytes = self.mcquic_recv_bytes.saturating_sub(pending.encoded_len);
+            if let Some(channel_id) = Self::mcquic_control_channel_id(&pending.frame) {
+                let channel_id = channel_id.to_vec();
+                self.limit_mcquic_channel(&channel_id, now);
+            } else {
+                self.mcquic_revoke_operation();
+                self.mcquic_resource_limited_channels.push_back(Vec::new());
+                return;
+            }
+        }
+
+        if self
+            .mcquic_pending_operation_control_started_at
+            .is_some_and(|started| started + MAX_MCQUIC_PENDING_CONTROL_AGE <= now)
+        {
+            self.decline_pending_mcquic_operation();
+        }
+
+        let expired_unknown = self
+            .mcquic_pending_channel_control_started_at
+            .iter()
+            .filter(|(_, started)| **started + MAX_MCQUIC_PENDING_CONTROL_AGE <= now)
+            .map(|(channel_id, _)| channel_id.clone())
+            .collect::<Vec<_>>();
+        for channel_id in expired_unknown {
+            self.limit_mcquic_channel(&channel_id, now);
+        }
+
+        for _ in 0..MAX_MCQUIC_OWNER_EXPIRIES_PER_TURN {
+            let Some((deadline, stream_id)) = self.mcquic_pending_owner_expiries.first().copied()
+            else {
+                break;
+            };
+            if deadline > now {
+                break;
+            }
+            self.mcquic_pending_owner_expiries
+                .remove(&(deadline, stream_id));
+            let Some(frames) = self.mcquic_pending_stream_frames.get(&stream_id) else {
+                continue;
+            };
+            if frames
+                .front()
+                .is_some_and(|frame| frame.inserted_at + MAX_MCQUIC_PENDING_OWNER_AGE > now)
+            {
+                continue;
+            }
+            let channels = frames
+                .iter()
+                .filter_map(|frame| frame.channel_id.clone())
+                .collect::<BTreeSet<_>>();
+            self.mcquic_retire_stream(stream_id);
+            if channels.is_empty() {
+                self.mcquic_revoke_operation();
+                self.mcquic_resource_limited_channels.push_back(Vec::new());
+                return;
+            }
+            for channel_id in channels {
+                self.limit_mcquic_channel(&channel_id, now);
+            }
+        }
+
+        for _ in 0..MAX_MCQUIC_OWNER_EXPIRIES_PER_TURN {
+            let Some((deadline, stream_id)) =
+                self.mcquic_authorized_stream_expiries.first().copied()
+            else {
+                break;
+            };
+            if deadline > now {
+                break;
+            }
+            self.mcquic_authorized_stream_expiries
+                .remove(&(deadline, stream_id));
+            if self
+                .mcquic_authorized_streams
+                .get(&stream_id)
+                .is_some_and(|last_seen| *last_seen + MAX_MCQUIC_AUTHORIZED_OWNER_AGE <= now)
+            {
+                // An idle authorized stream no longer has a prefix event with
+                // which to re-establish ownership. Revoke the optimization
+                // instead of silently stranding later unicast recovery.
+                self.mcquic_revoke_operation();
+                self.mcquic_resource_limited_channels.push_back(Vec::new());
+                return;
+            }
+        }
+
+        if self
+            .mcquic_retired_channels
+            .values()
+            .any(|retired_at| *retired_at + MAX_MCQUIC_RETIRED_CHANNEL_AGE <= now)
+        {
+            // Retired channel IDs cannot be safely reused within an operation.
+            // End the optimization when its bounded tombstone lifetime ends.
+            self.mcquic_revoke_operation();
+            self.mcquic_resource_limited_channels.push_back(Vec::new());
+            return;
+        }
+
+        let limited = self
+            .mcquic_channels
+            .iter_mut()
+            .filter_map(|(channel_id, channel)| {
+                channel.prune_expired(now).err().map(|_| channel_id.clone())
+            })
+            .collect::<Vec<_>>();
+        for channel_id in limited {
+            self.limit_mcquic_channel(&channel_id, now);
+        }
+    }
+
+    #[cfg(feature = "mcquic")]
+    fn next_mcquic_resource_expiry(&self) -> Option<Instant> {
+        self.mcquic_channels
+            .values()
+            .filter_map(crate::mcquic::ChannelReceiveState::next_expiry)
+            .chain(
+                self.mcquic_pending_operation_control_started_at
+                    .map(|started| started + MAX_MCQUIC_PENDING_CONTROL_AGE),
+            )
+            .chain(
+                self.mcquic_pending_channel_control_started_at
+                    .values()
+                    .map(|started| *started + MAX_MCQUIC_PENDING_CONTROL_AGE),
+            )
+            .chain(
+                self.mcquic_pending_owner_expiries
+                    .first()
+                    .map(|(deadline, _)| *deadline),
+            )
+            .chain(
+                self.mcquic_authorized_stream_expiries
+                    .first()
+                    .map(|(deadline, _)| *deadline),
+            )
+            .chain(
+                self.mcquic_retired_channels
+                    .values()
+                    .map(|retired_at| *retired_at + MAX_MCQUIC_RETIRED_CHANNEL_AGE),
+            )
+            .chain(
+                self.mcquic_recv
+                    .front()
+                    .map(|pending| pending.inserted_at + MAX_MCQUIC_ACTIVE_CONTROL_AGE),
+            )
+            .min()
+    }
+    #[cfg(feature = "mcquic")]
+    fn mcquic_control_channel_id(frame: &crate::mcquic::Frame) -> Option<&[u8]> {
+        match frame {
+            crate::mcquic::Frame::Announce(frame) => Some(&frame.channel_id),
+            crate::mcquic::Frame::Key(frame) => Some(&frame.channel_id),
+            crate::mcquic::Frame::Join(frame) => Some(&frame.channel_id),
+            crate::mcquic::Frame::Leave(frame) => Some(&frame.channel_id),
+            crate::mcquic::Frame::Integrity(frame) => Some(&frame.channel_id),
+            crate::mcquic::Frame::Ack(frame) => Some(&frame.channel_id),
+            crate::mcquic::Frame::Retire(frame) => Some(&frame.channel_id),
+            crate::mcquic::Frame::State(frame) => Some(&frame.channel_id),
+            crate::mcquic::Frame::Limits(_) => None,
+        }
+    }
+
+    #[cfg(feature = "mcquic")]
+    fn mcquic_pending_owner_deadline(
+        frames: &VecDeque<PendingMcquicStreamFrame>,
+    ) -> Option<Instant> {
+        frames
+            .front()
+            .map(|frame| frame.inserted_at + MAX_MCQUIC_PENDING_OWNER_AGE)
+    }
+
+    #[cfg(feature = "mcquic")]
+    #[expect(
+        clippy::unwrap_in_result,
+        reason = "exact owner accounting is an internal invariant after the owner entry is removed"
+    )]
+    fn take_pending_mcquic_stream_frames(
+        &mut self,
+        stream_id: StreamId,
+    ) -> Option<VecDeque<PendingMcquicStreamFrame>> {
+        let frames = self.mcquic_pending_stream_frames.remove(&stream_id)?;
+        self.mcquic_pending_owner_checks.remove(&stream_id);
+        if let Some(deadline) = Self::mcquic_pending_owner_deadline(&frames) {
+            self.mcquic_pending_owner_expiries
+                .remove(&(deadline, stream_id));
+        }
+
+        let bytes = frames
+            .iter()
+            .map(|pending| Self::mcquic_stream_frame_bytes(&pending.frame))
+            .sum::<usize>();
+        self.mcquic_pending_stream_bytes = self
+            .mcquic_pending_stream_bytes
+            .checked_sub(bytes)
+            .expect("MCQUIC pending stream byte accounting");
+        self.mcquic_pending_stream_frame_count = self
+            .mcquic_pending_stream_frame_count
+            .checked_sub(frames.len())
+            .expect("MCQUIC pending stream frame accounting");
+
+        let channels = frames
+            .iter()
+            .filter_map(|pending| pending.channel_id.as_ref())
+            .collect::<BTreeSet<_>>();
+        for channel_id in channels {
+            let remove_channel = {
+                let streams = self
+                    .mcquic_pending_channel_streams
+                    .get_mut(channel_id)
+                    .expect("MCQUIC pending channel reverse index");
+                assert!(streams.remove(&stream_id));
+                streams.is_empty()
+            };
+            self.mcquic_pending_channel_owner_links = self
+                .mcquic_pending_channel_owner_links
+                .checked_sub(1)
+                .expect("MCQUIC pending owner link accounting");
+            if remove_channel {
+                self.mcquic_pending_channel_streams.remove(channel_id);
+            }
+        }
+        Some(frames)
+    }
+
+    #[cfg(feature = "mcquic")]
+    fn set_mcquic_authorized_stream(&mut self, stream_id: StreamId, now: Instant) -> Res<()> {
+        if let Some(previous) = self.mcquic_authorized_streams.get(&stream_id).copied() {
+            assert!(
+                self.mcquic_authorized_stream_expiries
+                    .remove(&(previous + MAX_MCQUIC_AUTHORIZED_OWNER_AGE, stream_id))
+            );
+        } else if self.mcquic_authorized_streams.len() >= MAX_AUTHORIZED_MCQUIC_STREAMS
+            || self.mcquic_authorized_stream_expiries.len() >= MAX_AUTHORIZED_MCQUIC_OWNER_EXPIRIES
+        {
+            return Err(Error::McquicResourceLimit);
+        }
+
+        self.mcquic_authorized_streams.insert(stream_id, now);
+        assert!(
+            self.mcquic_authorized_stream_expiries
+                .insert((now + MAX_MCQUIC_AUTHORIZED_OWNER_AGE, stream_id))
+        );
+        Ok(())
+    }
+
+    #[cfg(feature = "mcquic")]
+    fn remove_mcquic_authorized_stream(&mut self, stream_id: StreamId) {
+        if let Some(last_seen) = self.mcquic_authorized_streams.remove(&stream_id) {
+            assert!(
+                self.mcquic_authorized_stream_expiries
+                    .remove(&(last_seen + MAX_MCQUIC_AUTHORIZED_OWNER_AGE, stream_id))
+            );
+        }
+    }
+
+    #[cfg(feature = "mcquic")]
+    fn retire_mcquic_channel_state(&mut self, channel_id: &[u8], now: Instant) {
+        if !self.mcquic_retired_channels.contains_key(channel_id)
+            && (self.mcquic_retired_channels.len() >= MAX_MCQUIC_RETIRED_CHANNELS
+                || self
+                    .mcquic_retired_channels
+                    .keys()
+                    .map(Vec::len)
+                    .sum::<usize>()
+                    .saturating_add(channel_id.len())
+                    > MAX_MCQUIC_RETIRED_CHANNEL_BYTES)
+        {
+            self.mcquic_revoke_operation();
+            self.mcquic_resource_limited_channels.push_back(Vec::new());
+            return;
+        }
+        self.mcquic_retired_channels
+            .insert(channel_id.to_vec(), now);
+        self.mcquic_channels.remove(channel_id);
+        self.mcquic_integrity_hash_lens.remove(channel_id);
+        if let Some(pending) = self.mcquic_pending_channel_controls.remove(channel_id) {
+            self.mcquic_pending_channel_control_started_at
+                .remove(channel_id);
+            let bytes = pending
+                .iter()
+                .filter_map(|frame| frame.encoded_len_erasing().ok())
+                .sum::<usize>();
+            self.mcquic_pending_channel_control_bytes = self
+                .mcquic_pending_channel_control_bytes
+                .saturating_sub(bytes);
+            self.mcquic_pending_channel_control_count = self
+                .mcquic_pending_channel_control_count
+                .saturating_sub(pending.len());
+        }
+
+        let affected_streams = self
+            .mcquic_pending_channel_streams
+            .remove(channel_id)
+            .unwrap_or_default();
+        self.mcquic_pending_channel_owner_links = self
+            .mcquic_pending_channel_owner_links
+            .checked_sub(affected_streams.len())
+            .expect("MCQUIC pending owner link accounting");
+
+        for stream_id in affected_streams {
+            let frames = self
+                .mcquic_pending_stream_frames
+                .get_mut(&stream_id)
+                .expect("MCQUIC pending channel reverse index");
+            let old_deadline = Self::mcquic_pending_owner_deadline(frames)
+                .expect("pending stream has at least one frame");
+            assert!(
+                self.mcquic_pending_owner_expiries
+                    .remove(&(old_deadline, stream_id))
+            );
+            let old_len = frames.len();
+            let removed_bytes = frames
+                .iter()
+                .filter(|pending| pending.channel_id.as_deref() == Some(channel_id))
+                .map(|pending| Self::mcquic_stream_frame_bytes(&pending.frame))
+                .sum::<usize>();
+            frames.retain(|pending| pending.channel_id.as_deref() != Some(channel_id));
+            let removed_frames = old_len - frames.len();
+            assert!(removed_frames > 0);
+            self.mcquic_pending_stream_bytes = self
+                .mcquic_pending_stream_bytes
+                .checked_sub(removed_bytes)
+                .expect("MCQUIC pending stream byte accounting");
+            self.mcquic_pending_stream_frame_count = self
+                .mcquic_pending_stream_frame_count
+                .checked_sub(removed_frames)
+                .expect("MCQUIC pending stream frame accounting");
+
+            if let Some(deadline) = Self::mcquic_pending_owner_deadline(frames) {
+                assert!(
+                    self.mcquic_pending_owner_expiries
+                        .insert((deadline, stream_id))
+                );
+            } else {
+                self.mcquic_pending_stream_frames.remove(&stream_id);
+                self.mcquic_pending_owner_checks.remove(&stream_id);
+            }
+        }
+    }
+
+    #[cfg(feature = "mcquic")]
+    fn queue_unknown_mcquic_control(
+        &mut self,
+        channel_id: &[u8],
+        frame: crate::mcquic::Frame,
+        now: Instant,
+    ) -> Res<()> {
+        let encoded_len = frame.encoded_len_erasing()?;
+        let params = self
+            .tps
+            .borrow()
+            .local()
+            .get_mcquic_client_params()
+            .cloned()
+            .ok_or(Error::NotAvailable)?;
+        let is_new_channel = !self
+            .mcquic_pending_channel_controls
+            .contains_key(channel_id);
+        let tracked_ids = self
+            .mcquic_channels
+            .len()
+            .checked_add(self.mcquic_pending_channel_controls.len())
+            .ok_or(Error::McquicResourceLimit)?;
+        let pending_bytes = self
+            .mcquic_pending_channel_control_bytes
+            .checked_add(encoded_len)
+            .ok_or(Error::McquicResourceLimit)?;
+        let per_channel = self
+            .mcquic_pending_channel_controls
+            .get(channel_id)
+            .map_or(0, VecDeque::len);
+        if (is_new_channel
+            && (tracked_ids >= MAX_MCQUIC_CHANNELS
+                || u64::try_from(tracked_ids)? >= params.limits.max_channel_ids))
+            || per_channel >= MAX_MCQUIC_UNKNOWN_CONTROLS_PER_CHANNEL
+            || self.mcquic_pending_channel_control_count >= MAX_MCQUIC_UNKNOWN_CONTROL_FRAMES
+            || pending_bytes > MAX_MCQUIC_UNKNOWN_CONTROL_BYTES
+        {
+            return Err(Error::McquicResourceLimit);
+        }
+
+        self.mcquic_pending_channel_controls
+            .entry(channel_id.to_vec())
+            .or_default()
+            .push_back(frame);
+        self.mcquic_pending_channel_control_bytes = pending_bytes;
+        self.mcquic_pending_channel_control_count += 1;
+        self.mcquic_pending_channel_control_started_at
+            .entry(channel_id.to_vec())
+            .or_insert(now);
+        Ok(())
+    }
+
+    #[cfg(feature = "mcquic")]
+    fn limit_mcquic_channel(&mut self, channel_id: &[u8], now: Instant) {
+        self.retire_mcquic_channel_state(channel_id, now);
+        if self.mcquic_operation_state == crate::mcquic::OperationState::Revoked {
+            return;
+        }
+        self.mcquic_recv
+            .retain(|pending| Self::mcquic_control_channel_id(&pending.frame) != Some(channel_id));
+        self.mcquic_recv_bytes = self
+            .mcquic_recv
+            .iter()
+            .map(|pending| pending.encoded_len)
+            .sum();
+        if self.mcquic_resource_limited_channels.len() < MAX_MCQUIC_RESOURCE_LIMIT_NOTICES
+            && !self
+                .mcquic_resource_limited_channels
+                .iter()
+                .any(|pending| pending == channel_id)
+        {
+            self.mcquic_resource_limited_channels
+                .push_back(channel_id.to_vec());
         }
     }
 
@@ -3701,11 +5443,12 @@ impl Connection {
     fn apply_known_mcquic_channel_control(
         state: &mut crate::mcquic::ChannelReceiveState,
         frame: &crate::mcquic::Frame,
+        now: Instant,
     ) -> Res<Vec<crate::mcquic::ChannelPacket>> {
         match frame {
-            crate::mcquic::Frame::Key(key) => state.insert_key_for_connection(key.clone()),
+            crate::mcquic::Frame::Key(key) => state.insert_key_for_connection(key.clone(), now),
             crate::mcquic::Frame::Integrity(integrity) => {
-                state.insert_integrity_for_connection(integrity)
+                state.insert_integrity_for_connection(integrity, now)
             }
             _ => Err(Error::Internal),
         }
@@ -3718,19 +5461,55 @@ impl Connection {
         now: Instant,
     ) -> Result<(), (FrameType, Error)> {
         for packet in packets {
-            self.mcquic_channels
-                .get_mut(&packet.channel_id)
-                .ok_or((FrameType::Padding, Error::Internal))?
-                .note_released_at(now);
+            if self.role == Role::Client
+                && packet.frames.iter().any(|frame| {
+                    matches!(
+                        frame,
+                        crate::mcquic::ChannelFrame::Stream { stream_id, .. }
+                            | crate::mcquic::ChannelFrame::ResetStream { stream_id, .. }
+                            if {
+                                let stream_id = StreamId::from(*stream_id);
+                                !stream_id.is_remote_initiated(self.role) || !stream_id.is_uni()
+                            }
+                    )
+                })
+            {
+                return Err((FrameType::Stream, Error::McquicOwnershipViolation));
+            }
+            let channel_id = packet.channel_id;
+            let packet_number = packet.packet_number;
             for frame in packet.frames {
                 let frame_type = Self::mcquic_channel_frame_type(&frame)
                     .map_err(|error| (FrameType::Padding, error))?;
-                if let Err(error) = self.input_mcquic_channel_frame(frame, now) {
+                if let Err(error) =
+                    self.input_mcquic_channel_frame_from_packet(frame, now, Some(&channel_id))
+                {
                     return Err((frame_type, error));
                 }
             }
+            let state = self
+                .mcquic_channels
+                .get_mut(&channel_id)
+                .ok_or((FrameType::Padding, Error::Internal))?;
+            state.mark_packet_released(packet_number);
+            state.note_released_at(now);
         }
         Ok(())
+    }
+
+    #[cfg(feature = "mcquic")]
+    fn process_mcquic_released_packets_with_ownership(
+        &mut self,
+        packets: Vec<crate::mcquic::ChannelPacket>,
+        now: Instant,
+    ) -> Result<(), (FrameType, Error)> {
+        match self.process_mcquic_released_packets(packets, now) {
+            Err((_, Error::McquicOwnershipViolation)) => {
+                self.note_mcquic_ownership_violation();
+                Ok(())
+            }
+            result => result,
+        }
     }
 
     #[cfg(feature = "mcquic")]
@@ -3746,13 +5525,26 @@ impl Connection {
             }
         })
     }
-
-    #[cfg(feature = "mcquic")]
+    #[cfg(all(feature = "mcquic", test))]
     fn input_mcquic_channel_frame(
         &mut self,
         frame: crate::mcquic::ChannelFrame,
         now: Instant,
     ) -> Res<()> {
+        self.input_mcquic_channel_frame_from_packet(frame, now, None)
+    }
+
+    #[cfg(feature = "mcquic")]
+    fn input_mcquic_channel_frame_from_packet(
+        &mut self,
+        frame: crate::mcquic::ChannelFrame,
+        now: Instant,
+        channel_id: Option<&[u8]>,
+    ) -> Res<()> {
+        if channel_id.is_some_and(|id| self.mcquic_retired_channels.contains_key(id)) {
+            return Ok(());
+        }
+
         match frame {
             crate::mcquic::ChannelFrame::Padding { len } => {
                 self.stats.borrow_mut().frame_rx.padding += len;
@@ -3760,6 +5552,148 @@ impl Connection {
             crate::mcquic::ChannelFrame::Ping => {
                 self.stats.borrow_mut().frame_rx.ping += 1;
             }
+            frame @ (crate::mcquic::ChannelFrame::ResetStream { .. }
+            | crate::mcquic::ChannelFrame::Stream { .. }) => {
+                self.queue_or_input_mcquic_stream_frame(frame, channel_id, now)?;
+            }
+            crate::mcquic::ChannelFrame::Datagram { data } => {
+                self.stats.borrow_mut().frame_rx.datagram += 1;
+                self.quic_datagrams
+                    .handle_datagram(&data, &mut self.stats.borrow_mut())?;
+            }
+            crate::mcquic::ChannelFrame::Multicast(frame) => {
+                self.input_mcquic_frame(frame, now)?;
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "mcquic")]
+    fn mcquic_stream_frame_id(frame: &crate::mcquic::ChannelFrame) -> StreamId {
+        match frame {
+            crate::mcquic::ChannelFrame::ResetStream { stream_id, .. }
+            | crate::mcquic::ChannelFrame::Stream { stream_id, .. } => StreamId::from(*stream_id),
+            _ => unreachable!("only STREAM and RESET_STREAM frames are queued"),
+        }
+    }
+
+    #[cfg(feature = "mcquic")]
+    fn mcquic_stream_frame_bytes(frame: &crate::mcquic::ChannelFrame) -> usize {
+        match frame {
+            crate::mcquic::ChannelFrame::Stream { data, .. } => data.len(),
+            crate::mcquic::ChannelFrame::ResetStream { .. } => 0,
+            _ => unreachable!("only STREAM and RESET_STREAM frames are queued"),
+        }
+    }
+
+    #[cfg(feature = "mcquic")]
+    fn queue_or_input_mcquic_stream_frame(
+        &mut self,
+        frame: crate::mcquic::ChannelFrame,
+        channel_id: Option<&[u8]>,
+        now: Instant,
+    ) -> Res<()> {
+        if self.role != Role::Client {
+            return self.input_authorized_mcquic_stream_frame(frame);
+        }
+
+        let stream_id = Self::mcquic_stream_frame_id(&frame);
+        if !stream_id.is_remote_initiated(self.role) || !stream_id.is_uni() {
+            return Err(Error::McquicOwnershipViolation);
+        }
+        if !self.streams.is_stream_id_allowed(stream_id) {
+            return Err(Error::StreamLimit);
+        }
+        if self.mcquic_authorized_streams.contains_key(&stream_id) {
+            let refresh = self
+                .mcquic_authorized_streams
+                .get(&stream_id)
+                .is_some_and(|last_seen| *last_seen + MCQUIC_AUTHORIZED_OWNER_REFRESH <= now);
+            if refresh && self.set_mcquic_authorized_stream(stream_id, now).is_err() {
+                self.mcquic_revoke_operation();
+                self.mcquic_resource_limited_channels.push_back(Vec::new());
+                return Ok(());
+            }
+            return self.input_authorized_mcquic_stream_frame(frame);
+        }
+
+        let frame_bytes = Self::mcquic_stream_frame_bytes(&frame);
+        let channel_id = channel_id.map(<[u8]>::to_vec);
+        let new_owner = !self.mcquic_pending_stream_frames.contains_key(&stream_id);
+        let new_channel_link = channel_id.as_ref().is_some_and(|channel_id| {
+            !self
+                .mcquic_pending_channel_streams
+                .get(channel_id)
+                .is_some_and(|streams| streams.contains(&stream_id))
+        });
+        if new_owner
+            && (self.mcquic_pending_stream_frames.len() >= MAX_PENDING_MCQUIC_STREAM_OWNERS
+                || self.mcquic_pending_owner_checks.len() >= MAX_PENDING_MCQUIC_OWNER_EXPIRIES
+                || self.mcquic_pending_owner_expiries.len() >= MAX_PENDING_MCQUIC_OWNER_EXPIRIES)
+        {
+            return Err(Error::McquicResourceLimit);
+        }
+        if new_channel_link
+            && self.mcquic_pending_channel_owner_links >= MAX_MCQUIC_PENDING_CHANNEL_OWNER_LINKS
+        {
+            return Err(Error::McquicResourceLimit);
+        }
+        let pending_bytes = self
+            .mcquic_pending_stream_bytes
+            .checked_add(frame_bytes)
+            .ok_or(Error::McquicResourceLimit)?;
+        let transport_limit =
+            usize::try_from(self.tps.borrow().local().get_integer(InitialMaxData))
+                .unwrap_or(usize::MAX);
+        if pending_bytes > transport_limit {
+            return Err(Error::FlowControl);
+        }
+        if pending_bytes > MAX_PENDING_MCQUIC_STREAM_BYTES
+            || self.mcquic_pending_stream_frame_count >= MAX_PENDING_MCQUIC_STREAM_FRAMES
+            || self
+                .mcquic_pending_stream_frames
+                .get(&stream_id)
+                .map_or(0, VecDeque::len)
+                >= MAX_PENDING_MCQUIC_STREAM_FRAMES_PER_OWNER
+        {
+            return Err(Error::McquicResourceLimit);
+        }
+
+        self.mcquic_pending_stream_frames
+            .entry(stream_id)
+            .or_default()
+            .push_back(PendingMcquicStreamFrame {
+                channel_id: channel_id.clone(),
+                frame,
+                inserted_at: now,
+            });
+        self.mcquic_pending_stream_bytes = pending_bytes;
+        self.mcquic_pending_stream_frame_count += 1;
+        if new_owner {
+            assert!(self.mcquic_pending_owner_checks.insert(stream_id));
+            assert!(
+                self.mcquic_pending_owner_expiries
+                    .insert((now + MAX_MCQUIC_PENDING_OWNER_AGE, stream_id))
+            );
+        }
+        if new_channel_link {
+            assert!(
+                self.mcquic_pending_channel_streams
+                    .entry(channel_id.expect("new channel link has a channel"))
+                    .or_default()
+                    .insert(stream_id)
+            );
+            self.mcquic_pending_channel_owner_links += 1;
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "mcquic")]
+    fn input_authorized_mcquic_stream_frame(
+        &mut self,
+        frame: crate::mcquic::ChannelFrame,
+    ) -> Res<()> {
+        match frame {
             crate::mcquic::ChannelFrame::ResetStream {
                 stream_id,
                 error_code,
@@ -3771,7 +5705,7 @@ impl Connection {
                     final_size,
                 };
                 self.streams
-                    .input_frame(&frame, &mut self.stats.borrow_mut().frame_rx)?;
+                    .input_frame(&frame, &mut self.stats.borrow_mut().frame_rx)
             }
             crate::mcquic::ChannelFrame::Stream {
                 stream_id,
@@ -3787,30 +5721,23 @@ impl Connection {
                     fill: false,
                 };
                 self.streams
-                    .input_frame(&frame, &mut self.stats.borrow_mut().frame_rx)?;
+                    .input_frame(&frame, &mut self.stats.borrow_mut().frame_rx)
             }
-            crate::mcquic::ChannelFrame::Datagram { data } => {
-                self.stats.borrow_mut().frame_rx.datagram += 1;
-                self.quic_datagrams
-                    .handle_datagram(&data, &mut self.stats.borrow_mut())?;
-            }
-            crate::mcquic::ChannelFrame::Multicast(frame) => {
-                self.input_mcquic_frame(frame, now)?;
-            }
+            _ => Err(Error::Internal),
         }
-        Ok(())
     }
 
-    /// Given a set of `sent::Packet` instances, ensure that the source of the packet
-    /// is told that they are lost.  This gives the frame generation code a chance
-    /// to retransmit the frame as needed.
+    /// Given a set of `sent::Packet` instances, ensure that the source of the
+    /// packet is told that they are lost.  This gives the frame generation code
+    /// a chance to retransmit the frame as needed.
     fn handle_lost_packets(&mut self, lost_packets: &[sent::Packet]) {
         for lost in lost_packets {
             for token in lost.tokens() {
                 qdebug!("[{self}] Lost: {token:?}");
                 match token {
                     recovery::Token::Ack(ack_token) => {
-                        // If we lost an ACK frame during the handshake, send another one.
+                        // If we lost an ACK frame during the handshake, send
+                        // another one.
                         if ack_token.space() != PacketNumberSpace::ApplicationData {
                             self.acks.immediate_ack(ack_token.space(), lost.time_sent());
                         }
@@ -3832,8 +5759,20 @@ impl Connection {
                     }
                     #[cfg(feature = "mcquic")]
                     recovery::Token::Mcquic(frame) => {
-                        if frame.retransmit_on_loss() {
-                            self.mcquic_send.push_back(frame.clone());
+                        if frame.retransmit_on_loss()
+                            && (self.role == Role::Server
+                                || self.mcquic_operation_state
+                                    == crate::mcquic::OperationState::Active
+                                || Self::mcquic_terminal_frame(frame))
+                            && self.mcquic_send.push_back(frame.clone()).is_err()
+                            && self.role == Role::Client
+                        {
+                            self.mcquic_revoke_operation();
+                            if self.mcquic_resource_limited_channels.len()
+                                < MAX_MCQUIC_RESOURCE_LIMIT_NOTICES
+                            {
+                                self.mcquic_resource_limited_channels.push_back(Vec::new());
+                            }
                         }
                     }
                     recovery::Token::EcnEct0 => self.paths.lost_ecn(&mut self.stats.borrow_mut()),
@@ -3851,8 +5790,8 @@ impl Connection {
             || Ok(Duration::default()),
             |r| {
                 let exponent = u32::try_from(r.get_integer(AckDelayExponent))?;
-                // ACK_DELAY_EXPONENT > 20 is invalid per RFC9000. We already checked that in
-                // TransportParameter::decode.
+                // ACK_DELAY_EXPONENT > 20 is invalid per RFC9000. We already
+                // checked that in TransportParameter::decode.
                 let corrected = if v.leading_zeros() >= exponent {
                     v << exponent
                 } else {
@@ -4040,10 +5979,13 @@ impl Connection {
     ///
     /// # Errors
     ///
-    /// `ConnectionState` if the connection stat does not allow to create streams.
-    /// `StreamLimitError` if we are limited by server's stream concurrence.
+    /// `ConnectionState` if the connection stat does not allow to create
+    /// streams. `StreamLimitError` if we are limited by server's stream
+    /// concurrence.
     pub fn stream_create(&mut self, st: StreamType) -> Res<StreamId> {
-        // Can't make streams while closing, otherwise rely on the stream limits.
+        self.ensure_output_resolved()?;
+        // Can't make streams while closing, otherwise rely on the stream
+        // limits.
         match self.state {
             State::Closing { .. } | State::Draining { .. } | State::Closed { .. } => {
                 return Err(Error::ConnectionState);
@@ -4071,13 +6013,15 @@ impl Connection {
         transmission: TransmissionPriority,
         retransmission: RetransmissionPriority,
     ) -> Res<()> {
+        self.ensure_output_resolved()?;
         self.streams
             .get_send_stream_mut(stream_id)?
             .set_priority(transmission, retransmission);
         Ok(())
     }
 
-    /// Set the `SendOrder` of a stream.  Re-enqueues to keep the ordering correct
+    /// Set the `SendOrder` of a stream.  Re-enqueues to keep the ordering
+    /// correct
     ///
     /// # Errors
     /// When the stream does not exist.
@@ -4086,6 +6030,7 @@ impl Connection {
         stream_id: StreamId,
         sendorder: Option<SendOrder>,
     ) -> Res<()> {
+        self.ensure_output_resolved()?;
         self.streams.set_sendorder(stream_id, sendorder)
     }
 
@@ -4094,6 +6039,7 @@ impl Connection {
     /// # Errors
     /// When the stream does not exist.
     pub fn stream_fairness(&mut self, stream_id: StreamId, fairness: bool) -> Res<()> {
+        self.ensure_output_resolved()?;
         self.streams.set_fairness(stream_id, fairness)
     }
 
@@ -4123,6 +6069,7 @@ impl Connection {
     /// `InvalidInput` if length of `data` is zero,
     /// `FinalSizeError` if the stream has already been closed.
     pub fn stream_send(&mut self, stream_id: StreamId, data: &[u8]) -> Res<usize> {
+        self.ensure_output_resolved()?;
         self.streams.get_send_stream_mut(stream_id)?.send(data)
     }
 
@@ -4136,6 +6083,7 @@ impl Connection {
     /// `InvalidInput` if length of `data` is zero,
     /// `FinalSizeError` if the stream has already been closed.
     pub fn stream_send_atomic(&mut self, stream_id: StreamId, data: &[u8]) -> Res<bool> {
+        self.ensure_output_resolved()?;
         let val = self
             .streams
             .get_send_stream_mut(stream_id)?
@@ -4181,6 +6129,7 @@ impl Connection {
         stream_id: StreamId,
         watermark: NonZeroUsize,
     ) -> Res<()> {
+        self.ensure_output_resolved()?;
         self.streams
             .get_send_stream_mut(stream_id)?
             .set_writable_event_low_watermark(watermark);
@@ -4191,6 +6140,7 @@ impl Connection {
     /// # Errors
     /// When the stream ID is invalid.
     pub fn stream_close_send(&mut self, stream_id: StreamId) -> Res<()> {
+        self.ensure_output_resolved()?;
         self.streams.get_send_stream_mut(stream_id)?.close();
         Ok(())
     }
@@ -4199,6 +6149,7 @@ impl Connection {
     /// # Errors
     /// When the stream ID is invalid.
     pub fn stream_reset_send(&mut self, stream_id: StreamId, err: AppError) -> Res<()> {
+        self.ensure_output_resolved()?;
         self.streams.get_send_stream_mut(stream_id)?.reset(err);
         Ok(())
     }
@@ -4209,8 +6160,10 @@ impl Connection {
     /// # Errors
     ///
     /// `InvalidStreamId` if the stream does not exist.
-    /// `NoMoreData` if data and fin bit were previously read by the application.
+    /// `NoMoreData` if data and fin bit were previously read by the
+    /// application.
     pub fn stream_recv(&mut self, stream_id: StreamId, data: &mut [u8]) -> Res<(usize, bool)> {
+        self.ensure_output_resolved()?;
         self.streams.recv(stream_id, data)
     }
 
@@ -4218,6 +6171,7 @@ impl Connection {
     /// # Errors
     /// When the stream ID is invalid.
     pub fn stream_stop_sending(&mut self, stream_id: StreamId, err: AppError) -> Res<()> {
+        self.ensure_output_resolved()?;
         self.streams.stop_sending(stream_id, err)
     }
 
@@ -4228,25 +6182,26 @@ impl Connection {
     /// Returns `InvalidStreamId` if a stream does not exist or the receiving
     /// side is closed.
     pub fn set_stream_max_data(&mut self, stream_id: StreamId, max_data: u64) -> Res<()> {
+        self.ensure_output_resolved()?;
         let stream = self.streams.get_recv_stream_mut(stream_id)?;
 
         stream.set_stream_max_data(max_data);
         Ok(())
     }
 
-    /// Mark a receive stream as being important enough to keep the connection alive
-    /// (if `keep` is `true`) or no longer important (if `keep` is `false`).  If any
-    /// stream is marked this way, PING frames will be used to keep the connection
-    /// alive, even when there is no activity.
+    /// Mark a receive stream as being important enough to keep the connection
+    /// alive (if `keep` is `true`) or no longer important (if `keep` is
+    /// `false`).  If any stream is marked this way, PING frames will be used to
+    /// keep the connection alive, even when there is no activity.
     ///
     /// # Errors
     ///
     /// Returns `InvalidStreamId` if a stream does not exist or the receiving
     /// side is closed.
     pub fn stream_keep_alive(&mut self, stream_id: StreamId, keep: bool) -> Res<()> {
+        self.ensure_output_resolved()?;
         self.streams.keep_alive(stream_id, keep)
     }
-
     #[must_use]
     pub const fn remote_datagram_size(&self) -> u64 {
         self.quic_datagrams.remote_datagram_size()
@@ -4308,18 +6263,19 @@ impl Connection {
     /// not fit into the packet. The app is encourage to use `max_datagram_size`
     /// to check the estimated max datagram size and to use smaller datagrams.
     /// `max_datagram_size` is just a current estimate and will change over
-    /// time depending on the encoded size of the packet number, ack frames, etc.
+    /// time depending on the encoded size of the packet number, ack frames,
+    /// etc.
     pub fn send_datagram<I: Into<DatagramTracking>>(&mut self, buf: Vec<u8>, id: I) -> Res<()> {
+        self.ensure_output_resolved()?;
         self.quic_datagrams
             .add_datagram(buf, id.into(), &mut self.stats.borrow_mut())
     }
-
     /// Process one protected multicast UDP payload for an announced channel.
     ///
     /// Authenticated `STREAM` and `RESET_STREAM` frames enter the ordinary QUIC
-    /// receive-stream machinery. Authenticated `DATAGRAM` frames also retain the
-    /// legacy channel `DATAGRAM` queue while entering ordinary QUIC `DATAGRAM`
-    /// delivery.
+    /// receive-stream machinery. Authenticated `DATAGRAM` frames also retain
+    /// the legacy channel `DATAGRAM` queue while entering ordinary QUIC
+    /// `DATAGRAM` delivery.
     ///
     /// # Errors
     ///
@@ -4334,19 +6290,48 @@ impl Connection {
         protected_packet: &[u8],
         now: Instant,
     ) -> Res<()> {
-        if !self.mcquic_negotiated() {
+        self.ensure_output_resolved()?;
+        if self.mcquic_operation_state != crate::mcquic::OperationState::Active
+            || !self.mcquic_negotiated()
+        {
             return Err(Error::NotAvailable);
         }
-        let released = self
+        let released = match self
             .mcquic_channels
             .get_mut(channel_id)
             .ok_or(Error::NotAvailable)?
-            .process_protected_packet_for_connection(protected_packet)?;
+            .process_protected_packet_for_connection(protected_packet, now)
+        {
+            Ok(released) => released,
+            Err(Error::McquicResourceLimit) => {
+                self.limit_mcquic_channel(channel_id, now);
+                return Err(Error::McquicResourceLimit);
+            }
+            Err(Error::McquicOwnershipViolation) => {
+                self.note_mcquic_ownership_violation();
+                return Ok(());
+            }
+            Err(error) => return Err(error),
+        };
+        if !self.mcquic_channel_resources_within_limits() {
+            self.limit_mcquic_channel(channel_id, now);
+            return Err(Error::McquicResourceLimit);
+        }
 
-        match self.process_mcquic_released_packets(released, now) {
+        match self.process_mcquic_released_packets_with_ownership(released, now) {
             Ok(()) => Ok(()),
+            Err((_, Error::McquicResourceLimit)) => {
+                self.limit_mcquic_channel(channel_id, now);
+                Err(Error::McquicResourceLimit)
+            }
             Err((frame_type, error)) => self.capture_error(None, now, frame_type, Err(error)),
         }
+    }
+
+    #[cfg(feature = "mcquic")]
+    fn note_mcquic_ownership_violation(&mut self) {
+        self.revoke_mcquic_operation_inner();
+        self.mcquic_ownership_violation = true;
     }
 
     /// Pop a legacy DATAGRAM released from an authenticated channel packet.
@@ -4354,11 +6339,11 @@ impl Connection {
     /// New stream-based integrations do not need this compatibility API.
     #[cfg(feature = "mcquic")]
     pub fn mcquic_pop_channel_datagram(&mut self) -> Option<crate::mcquic::ChannelDatagram> {
+        self.assert_output_resolved();
         self.mcquic_channels
             .values_mut()
             .find_map(crate::mcquic::ChannelReceiveState::pop_datagram)
     }
-
     /// Queue all pending channel acknowledgements for unicast delivery.
     ///
     /// # Errors
@@ -4366,6 +6351,7 @@ impl Connection {
     /// Returns an error if MCQUIC is unavailable or an ACK cannot be queued.
     #[cfg(feature = "mcquic")]
     pub fn mcquic_send_pending_acks(&mut self) -> Res<bool> {
+        self.ensure_output_resolved()?;
         self.mcquic_send_acks(None)
     }
 
@@ -4376,11 +6362,16 @@ impl Connection {
     /// Returns an error if MCQUIC is unavailable or an ACK cannot be queued.
     #[cfg(feature = "mcquic")]
     pub fn mcquic_send_due_acks(&mut self, now: Instant) -> Res<bool> {
+        self.ensure_output_resolved()?;
         self.mcquic_send_acks(Some(now))
     }
 
     #[cfg(feature = "mcquic")]
     fn mcquic_send_acks(&mut self, now: Option<Instant>) -> Res<bool> {
+        if self.mcquic_operation_state != crate::mcquic::OperationState::Active {
+            return Err(Error::NotAvailable);
+        }
+
         let pending = self
             .mcquic_channels
             .iter()
@@ -4413,7 +6404,10 @@ impl Connection {
     /// error if the frame is malformed.
     #[cfg(feature = "mcquic")]
     pub fn mcquic_send(&mut self, frame: crate::mcquic::Frame) -> Res<()> {
-        if !self.mcquic_negotiated() {
+        self.ensure_output_resolved()?;
+        if self.mcquic_operation_state != crate::mcquic::OperationState::Active
+            || !self.mcquic_negotiated()
+        {
             return Err(Error::NotAvailable);
         }
 
@@ -4425,17 +6419,53 @@ impl Connection {
             return Err(Error::ProtocolViolation);
         }
 
-        frame.to_vec()?;
-        queue_mcquic_frame(&mut self.mcquic_send, frame);
-        Ok(())
+        self.mcquic_send.push_back(frame)
+    }
+
+    /// Queue terminal MCQUIC state after this operation has been revoked.
+    ///
+    /// Only zero limits and `LEFT`/`RETIRED` state generated after revocation
+    /// are accepted. This keeps stale pre-revocation output from escaping.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for non-client connections, active operations,
+    /// nonterminal frames, wrong-sender frames, or bounded queue exhaustion.
+    #[cfg(feature = "mcquic")]
+    pub fn mcquic_send_terminal(&mut self, frame: crate::mcquic::Frame) -> Res<()> {
+        self.ensure_output_resolved()?;
+        if self.role != Role::Client
+            || self.mcquic_operation_state != crate::mcquic::OperationState::Revoked
+            || !Self::mcquic_terminal_frame(&frame)
+            || frame.sender() != crate::mcquic::Sender::Client
+        {
+            return Err(Error::NotAvailable);
+        }
+        self.mcquic_send.push_back(frame)
     }
 
     /// Pop the next received experimental MCQUIC control frame.
     #[cfg(feature = "mcquic")]
     pub fn mcquic_recv(&mut self) -> Option<crate::mcquic::Frame> {
-        self.mcquic_recv.pop_front()
+        self.assert_output_resolved();
+        let pending = self.mcquic_recv.pop_front()?;
+        self.mcquic_recv_bytes = self.mcquic_recv_bytes.saturating_sub(pending.encoded_len);
+        Some(pending.frame)
     }
 
+    /// Pop a channel that was locally declined due to a receiver bound.
+    #[cfg(feature = "mcquic")]
+    pub fn mcquic_take_resource_limited_channel(&mut self) -> Option<Vec<u8>> {
+        self.assert_output_resolved();
+        self.mcquic_resource_limited_channels.pop_front()
+    }
+    /// Return and clear a transport-level multicast stream ownership
+    /// violation.
+    #[cfg(feature = "mcquic")]
+    pub fn mcquic_take_ownership_violation(&mut self) -> bool {
+        self.assert_output_resolved();
+        mem::take(&mut self.mcquic_ownership_violation)
+    }
     /// Return whether an experimental MCQUIC control frame is ready.
     #[cfg(feature = "mcquic")]
     #[must_use]
@@ -4443,6 +6473,178 @@ impl Connection {
         !self.mcquic_recv.is_empty()
     }
 
+    /// Accept CONNECT negotiation for this connection-isolated operation.
+    ///
+    /// # Errors
+    ///
+    /// Returns `NotAvailable` unless a permitted client operation is pending
+    /// and both peers advertised MCQUIC transport capability.
+    #[cfg(feature = "mcquic")]
+    pub fn mcquic_accept_operation(&mut self, now: Instant) -> Res<()> {
+        self.ensure_output_resolved()?;
+        if self.role != Role::Client
+            || self.mcquic_operation_state != crate::mcquic::OperationState::Pending
+            || !self.mcquic_negotiated()
+        {
+            return Err(Error::NotAvailable);
+        }
+        self.mcquic_ownership_violation = false;
+        self.mcquic_operation_state = crate::mcquic::OperationState::Active;
+        let pending = mem::take(&mut self.mcquic_pending_operation_controls);
+        self.mcquic_pending_operation_control_bytes = 0;
+        self.mcquic_pending_operation_control_started_at = None;
+        for frame in pending {
+            if let Err(error) = self.input_mcquic_frame(frame, now) {
+                self.mcquic_revoke_operation();
+                return Err(error);
+            }
+        }
+        Ok(())
+    }
+
+    /// Bind a receive stream's ordinary application prefix to the permitted
+    /// operation and release authenticated frames queued for that stream.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the operation is inactive or if ordinary QUIC
+    /// stream validation rejects any queued frame.
+    #[cfg(feature = "mcquic")]
+    pub fn mcquic_authorize_stream(&mut self, stream_id: StreamId, now: Instant) -> Res<()> {
+        self.ensure_output_resolved()?;
+        if self.role != Role::Client
+            || self.mcquic_operation_state != crate::mcquic::OperationState::Active
+            || !stream_id.is_remote_initiated(self.role)
+            || !stream_id.is_uni()
+        {
+            return Err(Error::NotAvailable);
+        }
+
+        if self.set_mcquic_authorized_stream(stream_id, now).is_err() {
+            self.mcquic_revoke_operation();
+            self.mcquic_resource_limited_channels.push_back(Vec::new());
+            return Ok(());
+        }
+        let Some(mut frames) = self.take_pending_mcquic_stream_frames(stream_id) else {
+            return Ok(());
+        };
+        while let Some(pending) = frames.pop_front() {
+            self.input_authorized_mcquic_stream_frame(pending.frame)?;
+        }
+        Ok(())
+    }
+
+    /// Return whether authenticated frames are waiting for a stream's ordinary
+    /// application prefix to establish ownership.
+    #[cfg(feature = "mcquic")]
+    #[must_use]
+    pub fn mcquic_has_pending_stream(&self, stream_id: StreamId) -> bool {
+        self.mcquic_pending_stream_frames.contains_key(&stream_id)
+    }
+    /// Return stream IDs with authenticated data waiting for HTTP/3 ownership
+    /// validation.
+    #[cfg(feature = "mcquic")]
+    #[must_use]
+    pub fn mcquic_pending_stream_ids(&self) -> Vec<StreamId> {
+        self.mcquic_pending_stream_frames.keys().copied().collect()
+    }
+
+    /// Pop one newly pending stream for incremental HTTP/3 ownership checking.
+    #[cfg(feature = "mcquic")]
+    pub fn mcquic_take_pending_stream_owner(&mut self) -> Option<StreamId> {
+        self.assert_output_resolved();
+        while let Some(stream_id) = self.mcquic_pending_owner_checks.pop_first() {
+            if self.mcquic_pending_stream_frames.contains_key(&stream_id) {
+                return Some(stream_id);
+            }
+        }
+        None
+    }
+
+    /// Retire all operation ownership state associated with a closed stream.
+    #[cfg(feature = "mcquic")]
+    pub fn mcquic_retire_stream(&mut self, stream_id: StreamId) {
+        self.assert_output_resolved();
+        self.take_pending_mcquic_stream_frames(stream_id);
+        self.remove_mcquic_authorized_stream(stream_id);
+    }
+
+    /// Revoke or decline this connection-isolated operation permanently.
+    #[cfg(feature = "mcquic")]
+    pub fn mcquic_revoke_operation(&mut self) {
+        self.assert_output_resolved();
+        self.revoke_mcquic_operation_inner();
+    }
+
+    /// Fallible revocation entry point for embedders that cannot unwind across
+    /// an FFI boundary.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::OutputPending`] while tracked socket output is
+    /// unresolved.
+    #[cfg(feature = "mcquic")]
+    pub fn try_mcquic_revoke_operation(&mut self) -> Res<()> {
+        self.ensure_output_resolved()?;
+        self.revoke_mcquic_operation_inner();
+        Ok(())
+    }
+
+    #[cfg(feature = "mcquic")]
+    fn revoke_mcquic_operation_inner(&mut self) {
+        if self.role != Role::Client {
+            return;
+        }
+        self.mcquic_operation_state = crate::mcquic::OperationState::Revoked;
+        self.mcquic_send.clear();
+        self.mcquic_pending_operation_controls.clear();
+        self.mcquic_pending_operation_control_bytes = 0;
+        self.mcquic_pending_operation_control_started_at = None;
+        self.mcquic_recv.clear();
+        self.mcquic_recv_bytes = 0;
+        self.mcquic_integrity_hash_lens.clear();
+        self.mcquic_channels.clear();
+        self.mcquic_retired_channels.clear();
+        self.mcquic_resource_limited_channels.clear();
+        self.mcquic_pending_channel_controls.clear();
+        self.mcquic_pending_channel_control_bytes = 0;
+        self.mcquic_pending_channel_control_count = 0;
+        self.mcquic_pending_channel_control_started_at.clear();
+        self.mcquic_pending_stream_frames.clear();
+        self.mcquic_pending_owner_checks.clear();
+        self.mcquic_pending_owner_expiries.clear();
+        self.mcquic_pending_channel_streams.clear();
+        self.mcquic_pending_channel_owner_links = 0;
+        self.mcquic_authorized_streams.clear();
+        self.mcquic_authorized_stream_expiries.clear();
+        self.mcquic_pending_stream_bytes = 0;
+        self.mcquic_pending_stream_frame_count = 0;
+    }
+
+    #[cfg(feature = "mcquic")]
+    const fn mcquic_terminal_frame(frame: &crate::mcquic::Frame) -> bool {
+        match frame {
+            crate::mcquic::Frame::Limits(limits) => {
+                !limits.limits.ipv4_channels_allowed
+                    && !limits.limits.ipv6_channels_allowed
+                    && limits.limits.max_aggregate_rate_kibps == 0
+                    && limits.limits.max_channel_ids == 0
+                    && limits.max_joined_count == 0
+            }
+            crate::mcquic::Frame::State(state) => matches!(
+                state.state,
+                crate::mcquic::ChannelState::Left | crate::mcquic::ChannelState::Retired
+            ),
+            _ => false,
+        }
+    }
+
+    /// Return this connection's MCQUIC application authorization state.
+    #[cfg(feature = "mcquic")]
+    #[must_use]
+    pub const fn mcquic_operation_state(&self) -> crate::mcquic::OperationState {
+        self.mcquic_operation_state
+    }
     /// Return whether the peer advertised MCQUIC server support.
     #[cfg(feature = "mcquic")]
     #[must_use]
@@ -4468,7 +6670,8 @@ impl Connection {
     ///
     /// # Panics
     ///
-    /// The function panics if there is no primary path. (Should be fine for test usage.)
+    /// The function panics if there is no primary path. (Should be fine for
+    /// test usage.)
     #[cfg(test)]
     #[must_use]
     pub fn plpmtu(&self) -> usize {
@@ -4496,20 +6699,6 @@ impl Connection {
     }
 }
 
-#[cfg(feature = "mcquic")]
-fn queue_mcquic_frame(queue: &mut VecDeque<crate::mcquic::Frame>, frame: crate::mcquic::Frame) {
-    if let crate::mcquic::Frame::Ack(new_ack) = &frame
-        && let Some(queued) = queue.iter_mut().find(|queued| {
-            matches!(queued, crate::mcquic::Frame::Ack(ack) if ack.channel_id == new_ack.channel_id)
-        })
-    {
-        *queued = frame;
-        return;
-    }
-
-    queue.push_back(frame);
-}
-
 impl EventProvider for Connection {
     type Event = ConnectionEvent;
 
@@ -4522,6 +6711,7 @@ impl EventProvider for Connection {
     /// correctly handles cases where handling one event can obsolete
     /// previously-queued events, or cause new events to be generated.
     fn next_event(&mut self) -> Option<Self::Event> {
+        self.assert_output_resolved();
         self.events.next_event()
     }
 }

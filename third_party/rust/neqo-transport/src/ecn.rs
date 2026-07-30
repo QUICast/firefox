@@ -157,7 +157,7 @@ pub enum ValidationOutcome {
     NotCapable(ValidationError),
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct Info {
     /// The current state of ECN validation on this path.
     state: ValidationState,

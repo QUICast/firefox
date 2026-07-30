@@ -22,12 +22,12 @@ class NeqoHttp3Conn final {
       const NetAddr& aLocalAddr, const NetAddr& aRemoteAddr,
       uint32_t aMaxTableSize, uint16_t aMaxBlockedStreams, uint64_t aMaxData,
       uint64_t aMaxStreamData, bool aVersionNegotiation, bool aWebTransport,
-      bool aMcquicEnabled, const nsACString& aQlogDir, uint32_t aIdleTimeout,
-      uint32_t aFastPto, NeqoHttp3Conn** aConn) {
+      McquicOperationPolicyExternal aMcquicPolicy, const nsACString& aQlogDir,
+      uint32_t aIdleTimeout, uint32_t aFastPto, NeqoHttp3Conn** aConn) {
     return neqo_http3conn_new_use_nspr_for_io(
         &aOrigin, &aAlpn, &aLocalAddr, &aRemoteAddr, aMaxTableSize,
         aMaxBlockedStreams, aMaxData, aMaxStreamData, aVersionNegotiation,
-        aWebTransport, aMcquicEnabled, &aQlogDir, aIdleTimeout, aFastPto,
+        aWebTransport, aMcquicPolicy, &aQlogDir, aIdleTimeout, aFastPto,
         (const mozilla::net::NeqoHttp3Conn**)aConn);
   }
 
@@ -36,14 +36,15 @@ class NeqoHttp3Conn final {
                        uint32_t aMaxTableSize, uint16_t aMaxBlockedStreams,
                        uint64_t aMaxData, uint64_t aMaxStreamData,
                        bool aVersionNegotiation, bool aWebTransport,
-                       bool aMcquicEnabled, const nsACString& aQlogDir,
-                       uint32_t aIdleTimeout, uint32_t aFastPto, int64_t socket,
-                       bool aPMTUDEnabled, NeqoHttp3Conn** aConn) {
+                       McquicOperationPolicyExternal aMcquicPolicy,
+                       const nsACString& aQlogDir, uint32_t aIdleTimeout,
+                       uint32_t aFastPto, int64_t socket, bool aPMTUDEnabled,
+                       NeqoHttp3Conn** aConn) {
     return neqo_http3conn_new(
         &aOrigin, &aAlpn, &aLocalAddr, &aRemoteAddr, aMaxTableSize,
         aMaxBlockedStreams, aMaxData, aMaxStreamData, aVersionNegotiation,
-        aWebTransport, aMcquicEnabled, &aQlogDir, aIdleTimeout, aFastPto,
-        socket, aPMTUDEnabled, (const mozilla::net::NeqoHttp3Conn**)aConn);
+        aWebTransport, aMcquicPolicy, &aQlogDir, aIdleTimeout, aFastPto, socket,
+        aPMTUDEnabled, (const mozilla::net::NeqoHttp3Conn**)aConn);
   }
 
   void Close(uint64_t aError) { neqo_http3conn_close(this, aError); }
@@ -82,12 +83,19 @@ class NeqoHttp3Conn final {
                                                   aSetTimerFunc);
   }
 
+  nsresult AbandonOutput() { return neqo_http3conn_abandon_output(this); }
+
   nsresult GetEvent(Http3Event* aEvent, nsTArray<uint8_t>& aData) {
     return neqo_http3conn_event(this, aEvent, &aData);
   }
 
   nsresult McquicRecvControlFrame(McquicControlFrameExternal* aFrame) {
     return neqo_http3conn_mcquic_recv_control_frame(this, aFrame);
+  }
+
+  bool McquicTakeResourceLimitedChannel(nsTArray<uint8_t>& aChannelId) {
+    return neqo_http3conn_mcquic_take_resource_limited_channel(this,
+                                                               &aChannelId);
   }
 
   nsresult McquicProcessChannelPacket(const nsACString& aChannelId,
@@ -102,6 +110,26 @@ class NeqoHttp3Conn final {
 
   nsresult McquicSendLimits(uint64_t aSequence) {
     return neqo_http3conn_mcquic_send_limits(this, aSequence);
+  }
+
+  nsresult McquicSendZeroLimits(uint64_t aSequence) {
+    return neqo_http3conn_mcquic_send_zero_limits(this, aSequence);
+  }
+
+  nsresult McquicAcceptOperation(uint64_t aSessionId) {
+    return neqo_http3conn_mcquic_accept_operation(this, aSessionId);
+  }
+
+  nsresult McquicAuthorizeStream(uint64_t aStreamId, uint64_t aSessionId) {
+    return neqo_http3conn_mcquic_authorize_stream(this, aStreamId, aSessionId);
+  }
+
+  bool McquicTakeOwnershipViolation() {
+    return neqo_http3conn_mcquic_take_ownership_violation(this);
+  }
+
+  nsresult McquicRevokeOperation() {
+    return neqo_http3conn_mcquic_revoke_operation(this);
   }
 
   nsresult McquicSendJoinedState(const nsACString& aChannelId,

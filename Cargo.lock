@@ -5517,6 +5517,7 @@ dependencies = [
  "rustix",
  "static_assertions",
  "static_prefs",
+ "test-fixture",
  "thin-vec",
  "uuid",
  "winapi",

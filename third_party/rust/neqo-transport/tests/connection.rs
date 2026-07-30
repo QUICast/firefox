@@ -26,15 +26,18 @@ fn connect() {
 
 #[cfg(feature = "mcquic")]
 mod mcquic_tests {
-    use std::net::{IpAddr, Ipv4Addr};
+    use std::{
+        net::{IpAddr, Ipv4Addr},
+        time::Duration,
+    };
 
     use neqo_common::event::Provider as _;
     use neqo_transport::{
         Connection, ConnectionEvent, StreamId,
         mcquic::{
             Ack, Announce, ChannelFrame, ChannelSendState, ChannelState, ClientLimits,
-            ClientTransportParams, Frame, Integrity, Join, Key, Limits,
-            STATE_REASON_REQUESTED_BY_SERVER, State as McState, StateReasonScope,
+            ClientTransportParams, Frame, Integrity, Join, Key, Limits, OperationPolicy,
+            OperationState, STATE_REASON_REQUESTED_BY_SERVER, State as McState, StateReasonScope,
         },
     };
 
@@ -56,7 +59,9 @@ mod mcquic_tests {
     fn connected_mcquic() -> (Connection, Connection, ClientTransportParams) {
         let params = client_params();
         let mut client = new_client::<CountingConnectionIdGenerator>(
-            ConnectionParameters::default().mcquic_client_params(Some(params.clone())),
+            ConnectionParameters::default()
+                .mcquic_operation_policy(OperationPolicy::Allow)
+                .mcquic_client_params(Some(params.clone())),
         );
         let mut server = new_server::<CountingConnectionIdGenerator, &str>(
             DEFAULT_ALPN,
@@ -66,6 +71,9 @@ mod mcquic_tests {
         test_fixture::handshake(&mut client, &mut server);
         assert_eq!(*client.state(), State::Confirmed);
         assert_eq!(*server.state(), State::Confirmed);
+        client
+            .mcquic_accept_operation(now())
+            .expect("accept MCQUIC operation");
 
         (client, server, params)
     }
@@ -74,8 +82,14 @@ mod mcquic_tests {
         client_params: Option<ClientTransportParams>,
         server_support: bool,
     ) -> (Connection, Connection) {
+        let connection_parameters = ConnectionParameters::default();
+        let connection_parameters = if client_params.is_some() {
+            connection_parameters.mcquic_operation_policy(OperationPolicy::Allow)
+        } else {
+            connection_parameters
+        };
         let mut client = new_client::<CountingConnectionIdGenerator>(
-            ConnectionParameters::default().mcquic_client_params(client_params),
+            connection_parameters.mcquic_client_params(client_params),
         );
         let mut server = new_server::<CountingConnectionIdGenerator, &str>(
             DEFAULT_ALPN,
@@ -100,7 +114,7 @@ mod mcquic_tests {
             group: IpAddr::V4(Ipv4Addr::new(233, 252, 0, 1)),
             udp_port: 4433,
             header_protection_algorithm: 0x1301,
-            header_secret: vec![0x11; 32],
+            header_secret: vec![0x11; 32].into(),
             aead_algorithm: 0x1301,
             integrity_hash_algorithm: 1,
             max_rate_kibps: 10_000,
@@ -117,7 +131,7 @@ mod mcquic_tests {
             channel_id: channel_id(),
             key_sequence: 1,
             from_packet_number: 0,
-            secret: vec![0x22; 32],
+            secret: vec![0x22; 32].into(),
         }
     }
 
@@ -182,7 +196,9 @@ mod mcquic_tests {
         connection_parameters: ConnectionParameters,
     ) -> (Connection, Connection) {
         let mut client = new_client::<CountingConnectionIdGenerator>(
-            connection_parameters.mcquic_client_params(Some(client_params())),
+            connection_parameters
+                .mcquic_operation_policy(OperationPolicy::Allow)
+                .mcquic_client_params(Some(client_params())),
         );
         let mut server = new_server::<CountingConnectionIdGenerator, &str>(
             DEFAULT_ALPN,
@@ -192,7 +208,41 @@ mod mcquic_tests {
         test_fixture::handshake(&mut client, &mut server);
         assert_eq!(*client.state(), State::Confirmed);
         assert_eq!(*server.state(), State::Confirmed);
+        client
+            .mcquic_accept_operation(now())
+            .expect("accept MCQUIC operation");
         (client, server)
+    }
+
+    #[test]
+    fn controls_wait_for_application_acceptance() {
+        let params = client_params();
+        let mut client = new_client::<CountingConnectionIdGenerator>(
+            ConnectionParameters::default()
+                .mcquic_operation_policy(OperationPolicy::Allow)
+                .mcquic_client_params(Some(params)),
+        );
+        let mut server = new_server::<CountingConnectionIdGenerator, &str>(
+            DEFAULT_ALPN,
+            ConnectionParameters::default().mcquic_server_support(true),
+        );
+        test_fixture::handshake(&mut client, &mut server);
+
+        send_server_control(&mut client, &mut server, announce_frame());
+        send_server_control(&mut client, &mut server, key_frame());
+        assert_eq!(client.mcquic_operation_state(), OperationState::Pending);
+        assert!(!client.mcquic_readable());
+        assert_eq!(
+            client.mcquic_process_channel_packet(&channel_id(), b"ignored", now()),
+            Err(Error::NotAvailable)
+        );
+
+        client
+            .mcquic_accept_operation(now())
+            .expect("accept MCQUIC operation");
+        assert_eq!(client.mcquic_recv(), Some(announce_frame()));
+        assert_eq!(client.mcquic_recv(), Some(key_frame()));
+        assert_eq!(client.mcquic_recv(), None);
     }
 
     fn send_server_control(client: &mut Connection, server: &mut Connection, frame: Frame) {
@@ -256,12 +306,27 @@ mod mcquic_tests {
         (data, fin)
     }
 
+    fn authorize_stream(client: &mut Connection, stream_id: StreamId) {
+        client
+            .mcquic_authorize_stream(stream_id, now())
+            .expect("authorize multicast stream ownership");
+    }
+
     #[test]
     fn transport_params_negotiate() {
         let (client, server, params) = connected_mcquic();
 
         assert!(client.peer_mcquic_server_support());
         assert_eq!(server.peer_mcquic_client_params(), Some(params));
+    }
+
+    #[test]
+    fn client_transport_capability_does_not_grant_operation_permission() {
+        let client = new_client::<CountingConnectionIdGenerator>(
+            ConnectionParameters::default().mcquic_client_params(Some(client_params())),
+        );
+
+        assert_eq!(client.mcquic_operation_state(), OperationState::Prohibited);
     }
 
     #[test]
@@ -315,6 +380,7 @@ mod mcquic_tests {
             stream_id,
             &WEBTRANSPORT_UNI_PREFIX,
         );
+        authorize_stream(&mut client, stream_id);
         prepare_channel(&mut client, &mut server);
 
         let body = b"shared-body";
@@ -382,7 +448,12 @@ mod mcquic_tests {
         }]);
         send_server_control(&mut client, &mut server, Frame::Integrity(integrity));
         process_channel_packet(&mut client, &packet).expect("buffer out-of-order body");
-        assert_eq!(read_stream(&mut client, stream_id, 64), (Vec::new(), false));
+        assert!(client.mcquic_has_pending_stream(stream_id));
+        let mut data = [0; 64];
+        assert_eq!(
+            client.stream_recv(stream_id, &mut data),
+            Err(Error::InvalidStreamId)
+        );
 
         send_server_stream_data(
             &mut client,
@@ -390,6 +461,7 @@ mod mcquic_tests {
             stream_id,
             &WEBTRANSPORT_UNI_PREFIX,
         );
+        authorize_stream(&mut client, stream_id);
         let (received, fin) = read_stream(&mut client, stream_id, 64);
         assert_eq!(
             received,
@@ -411,6 +483,7 @@ mod mcquic_tests {
             stream_id,
             &WEBTRANSPORT_UNI_PREFIX,
         );
+        authorize_stream(&mut client, stream_id);
         send_server_stream_data(&mut client, &mut server, stream_id, body);
         prepare_channel(&mut client, &mut server);
 
@@ -443,6 +516,7 @@ mod mcquic_tests {
             stream_id,
             &WEBTRANSPORT_UNI_PREFIX,
         );
+        authorize_stream(&mut client, stream_id);
         send_server_stream_data(&mut client, &mut server, stream_id, b"unicast");
         prepare_channel(&mut client, &mut server);
 
@@ -485,13 +559,10 @@ mod mcquic_tests {
 
         let unicast = [WEBTRANSPORT_UNI_PREFIX.as_slice(), b"conflicts"].concat();
         send_server_stream_data(&mut client, &mut server, stream_id, &unicast);
-        assert!(matches!(
-            client.state(),
-            State::Closing {
-                error: CloseReason::Transport(Error::ProtocolViolation),
-                ..
-            }
-        ));
+        assert_eq!(
+            client.mcquic_authorize_stream(stream_id, now()),
+            Err(Error::ProtocolViolation)
+        );
     }
 
     #[test]
@@ -506,6 +577,7 @@ mod mcquic_tests {
             stream_id,
             &WEBTRANSPORT_UNI_PREFIX,
         );
+        authorize_stream(&mut client, stream_id);
         prepare_channel(&mut client, &mut server);
 
         let missing = b"lost-";
@@ -541,6 +613,7 @@ mod mcquic_tests {
             stream_id,
             &WEBTRANSPORT_UNI_PREFIX,
         );
+        authorize_stream(&mut client, stream_id);
         prepare_channel(&mut client, &mut server);
 
         let (packet, integrity) = encode_channel_packet(&[ChannelFrame::ResetStream {
@@ -551,13 +624,11 @@ mod mcquic_tests {
         send_server_control(&mut client, &mut server, Frame::Integrity(integrity));
         process_channel_packet(&mut client, &packet).expect("apply RESET_STREAM");
 
-        assert!(client.events().any(|event| matches!(
-            event,
-            ConnectionEvent::RecvStreamReset {
-                stream_id: id,
-                app_error: 42,
-            } if id == stream_id
-        )));
+        assert!(client.events().any(|event| matches !(
+                                     event, ConnectionEvent::RecvStreamReset {
+                                       stream_id:
+                                         id, app_error : 42,
+                                     } if id == stream_id)));
     }
 
     #[test]
@@ -572,6 +643,7 @@ mod mcquic_tests {
             stream_id,
             &WEBTRANSPORT_UNI_PREFIX,
         );
+        authorize_stream(&mut client, stream_id);
         send_server_control(&mut client, &mut server, announce_frame());
 
         let body = b"after-key";
@@ -612,6 +684,7 @@ mod mcquic_tests {
             stream_id,
             &WEBTRANSPORT_UNI_PREFIX,
         );
+        authorize_stream(&mut client, stream_id);
         prepare_channel(&mut client, &mut server);
 
         let body = b"after-integrity";
@@ -682,6 +755,7 @@ mod mcquic_tests {
             stream_id,
             &WEBTRANSPORT_UNI_PREFIX,
         );
+        authorize_stream(&mut client, stream_id);
         prepare_channel(&mut client, &mut server);
         let (packet, integrity) = encode_channel_packet(&[ChannelFrame::Stream {
             stream_id: stream_id.as_u64(),
@@ -722,6 +796,53 @@ mod mcquic_tests {
             assert_eq!(server.mcquic_recv(), Some(frame));
         }
         assert_eq!(server.mcquic_recv(), None);
+    }
+
+    #[test]
+    fn dropped_buffered_packet_recovers_unicast_without_revoked_control() {
+        let (mut client, mut server, _) = connected_mcquic();
+        let stream_id = client
+            .stream_create(StreamType::UniDi)
+            .expect("client stream");
+        let body = b"ordinary-recovery";
+        assert_eq!(
+            client.stream_send(stream_id, body).expect("queue stream"),
+            body.len()
+        );
+        client.stream_close_send(stream_id).expect("finish stream");
+        client
+            .mcquic_send(state_frame())
+            .expect("queue nonterminal MC_STATE");
+
+        let start = now();
+        drop(
+            client
+                .process_output(start)
+                .dgram()
+                .expect("packet buffered below Neqo"),
+        );
+        client.mcquic_revoke_operation();
+
+        let recovery_at = start + Duration::from_secs(1);
+        let mut delivered = false;
+        for _ in 0..2 {
+            if let Some(datagram) = client.process_output(recovery_at).dgram() {
+                server.process_input(datagram, recovery_at);
+                delivered = true;
+            }
+        }
+        assert!(delivered, "PTO produced a recovery packet");
+
+        let mut received = [0; 64];
+        let (amount, fin) = server
+            .stream_recv(stream_id, &mut received)
+            .expect("ordinary stream recovered");
+        assert_eq!(&received[..amount], body);
+        assert!(fin);
+        assert!(
+            !server.mcquic_readable(),
+            "the revoked nonterminal MC_STATE was not retransmitted"
+        );
     }
 
     #[test]
@@ -888,7 +1009,8 @@ fn reorder_server_initial() {
 
     // Now a connection can be made successfully.
     // Though we modified the server's Initial packet, we get away with it.
-    // TLS only authenticates the content of the CRYPTO frame, which was untouched.
+    // TLS only authenticates the content of the CRYPTO frame, which was
+    // untouched.
     client.process_input(reordered, now());
     client.process_input(server_hs.unwrap(), now());
     assert!(test_fixture::maybe_authenticate(&mut client));
@@ -911,8 +1033,8 @@ fn set_payload(server_packet: Option<&Datagram>, client_dcid: &[u8], payload: &[
     // Now decrypt the packet.
     let (aead, _, hp) = initial_aead_and_hp(client_dcid, Role::Server);
     let (mut header, pn) = header_protection::remove(&hp, protected_header, orig_payload);
-    // Re-encode the packet number as four bytes, so we have enough material for the header
-    // protection sample if payload is empty.
+    // Re-encode the packet number as four bytes, so we have enough material for
+    // the header protection sample if payload is empty.
     let pn_len = usize::from(header[0] & 0b0000_0011) + 1;
     let len_pos = header.len()
         - pn_len
@@ -937,7 +1059,8 @@ fn set_payload(server_packet: Option<&Datagram>, client_dcid: &[u8], payload: &[
     )
 }
 
-/// Test that the stack treats a packet without any frames as a protocol violation.
+/// Test that the stack treats a packet without any frames as a protocol
+/// violation.
 #[test]
 fn packet_without_frames() {
     let mut client = new_client::<CountingConnectionIdGenerator>(
@@ -1080,8 +1203,9 @@ fn handshake_mlkem768x25519() {
 
 #[test]
 fn client_initial_packet_number() {
-    // Check that the initial packet number is randomized (i.e, > 0) if the `randomize_first_pn`
-    // connection parameter is set, and that it is zero when not.
+    // Check that the initial packet number is randomized (i.e, > 0) if the
+    // `randomize_first_pn` connection parameter is set, and that it is zero
+    // when not.
     for randomize in [true, false] {
         // This test needs to decrypt the CI, so turn off MLKEM.
         let mut client = new_client::<CountingConnectionIdGenerator>(
@@ -1105,8 +1229,9 @@ fn client_initial_packet_number() {
 
 #[test]
 fn server_initial_packet_number() {
-    // Check that the initial packet number is randomized (i.e, > 0) if the `randomize_first_pn`
-    // connection parameter is set, and that it is zero when not.
+    // Check that the initial packet number is randomized (i.e, > 0) if the
+    // `randomize_first_pn` connection parameter is set, and that it is zero
+    // when not.
     for randomize in [true, false] {
         // This test needs to decrypt the CI, so turn off MLKEM.
         let mut client = new_client::<CountingConnectionIdGenerator>(

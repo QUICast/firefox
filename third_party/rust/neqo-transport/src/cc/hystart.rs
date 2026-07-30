@@ -33,7 +33,7 @@ pub enum HyStartCssBaseline {
     EntryThreshold,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct HyStart {
     /// > While an arriving ACK may newly acknowledge an arbitrary number of bytes, the HyStart++
     /// > algorithm limits the number of those bytes applied to increase the cwnd to `L*SMSS`

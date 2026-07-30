@@ -46,6 +46,22 @@ pub struct QuicDatagram {
     tracking: DatagramTracking,
 }
 
+#[derive(Default)]
+pub struct OutputJournal {
+    dropped_too_big: Vec<QuicDatagram>,
+}
+
+impl OutputJournal {
+    pub fn append(&mut self, mut other: Self) {
+        self.dropped_too_big.append(&mut other.dropped_too_big);
+    }
+
+    #[cfg(test)]
+    pub fn len(&self) -> usize {
+        self.dropped_too_big.len()
+    }
+}
+
 impl QuicDatagram {
     pub const MAX_SIZE: u64 = 65535;
 
@@ -107,6 +123,7 @@ impl QuicDatagrams {
         builder: &mut packet::Builder<B>,
         tokens: &mut recovery::Tokens,
         stats: &mut Stats,
+        journal: &mut OutputJournal,
     ) {
         while let Some(dgram) = self.datagrams.pop_front() {
             let len = dgram.as_ref().len();
@@ -135,17 +152,30 @@ impl QuicDatagrams {
                 tokens.push(recovery::Token::Datagram(*dgram.tracking()));
             } else if tokens.is_empty() {
                 // If the packet is empty, except packet headers, and the
-                // datagram cannot fit, drop it.
-                // Also continue trying to write the next QuicDatagram.
+                // datagram cannot fit, defer dropping it until this tentative
+                // output segment is accepted. Also continue trying to write
+                // the next QuicDatagram.
                 qdebug!("QUIC datagram ({}) does not fit MTU.", dgram.data.len());
-                self.conn_events
-                    .datagram_outcome(dgram.tracking(), OutgoingDatagramOutcome::DroppedTooBig);
-                stats.datagram_tx.dropped_too_big += 1;
+                journal.dropped_too_big.push(dgram);
             } else {
                 self.datagrams.push_front(dgram);
                 // Try later on an empty packet.
                 return;
             }
+        }
+    }
+
+    pub(crate) fn restore_output(&mut self, journal: OutputJournal) {
+        for datagram in journal.dropped_too_big.into_iter().rev() {
+            self.datagrams.push_front(datagram);
+        }
+    }
+
+    pub(crate) fn commit_output(&self, journal: OutputJournal, stats: &mut Stats) {
+        for datagram in journal.dropped_too_big {
+            self.conn_events
+                .datagram_outcome(datagram.tracking(), OutgoingDatagramOutcome::DroppedTooBig);
+            stats.datagram_tx.dropped_too_big += 1;
         }
     }
 

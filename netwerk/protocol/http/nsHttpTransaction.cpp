@@ -20,6 +20,7 @@
 #include "mozilla/Tokenizer.h"
 #include "mozilla/glean/NetwerkMetrics.h"
 #include "mozilla/glean/NetwerkProtocolHttpMetrics.h"
+#include "mozilla/net/SFV.h"
 #include "mozilla/net/SSLTokensCache.h"
 #include "nsCRT.h"
 #include "nsComponentManagerUtils.h"  // do_CreateInstance
@@ -246,6 +247,8 @@ nsresult nsHttpTransaction::Init(
   if (NS_FAILED(rv)) return rv;
 
   mConnInfo = cinfo->Clone();
+  rv = RefreshWebTransportMulticastRequest(requestHead, false);
+  if (NS_FAILED(rv)) return rv;
   // No lock needed: the transaction is initialized on the main thread only,
   // so there is no possibility of a race at this point.
   MOZ_PUSH_IGNORE_THREAD_SAFETY
@@ -1226,7 +1229,19 @@ void nsHttpTransaction::PrepareConnInfoForRetry(nsresult aReason) {
        "]",
        this, static_cast<uint32_t>(aReason)));
   RefPtr<nsHttpConnectionInfo> failedConnInfo = mConnInfo->Clone();
+  const bool requireMcquicBoundH3 =
+      failedConnInfo->IsWebTransportMulticastEligible();
   mConnInfo = nullptr;
+  auto enforceMcquicBoundH3 = MakeScopeExit([&] {
+    if (requireMcquicBoundH3 && mConnInfo &&
+        !mConnInfo->IsWebTransportMulticastEligible()) {
+      LOG(
+          ("Rejecting retry that lost the WebTransport MCQUIC binding "
+           "[this=%p]",
+           this));
+      mConnInfo = nullptr;
+    }
+  });
   bool echConfigUsed =
       nsHttpHandler::EchConfigEnabled(failedConnInfo->IsHttp3()) &&
       !failedConnInfo->GetEchConfig().IsEmpty();
@@ -1958,6 +1973,40 @@ void nsHttpTransaction::SetRestartReason(TRANSACTION_RESTART_REASON aReason) {
   }
 }
 
+nsresult nsHttpTransaction::RefreshWebTransportMulticastRequest(
+    nsHttpRequestHead* aRequestHead, bool aRebuildRequestStream) {
+  if (!mIsForWebTransport) {
+    return NS_OK;
+  }
+  if (!mConnInfo || !aRequestHead) {
+    return NS_ERROR_UNEXPECTED;
+  }
+
+  nsHttpAtom multicastHeader = nsHttp::ResolveAtom("WT-Multicast"_ns);
+  nsresult rv;
+  if (mConnInfo->IsWebTransportMulticastEligible()) {
+    // Regenerate the UA-controlled field only from the complete typed binding
+    // immediately before each request serialization.
+    rv = aRequestHead->SetHeader(multicastHeader, "?1"_ns, false);
+    mDontRetryWithDirectRoute = true;
+  } else {
+    rv = aRequestHead->ClearHeader(multicastHeader);
+  }
+  if (NS_FAILED(rv) || !aRebuildRequestStream) {
+    return rv;
+  }
+
+  // Extended CONNECT has no request body. Rebuild the retained serialized
+  // request as well so a fallback serializer cannot emit a stale field.
+  if (mHasRequestBody) {
+    return NS_ERROR_UNEXPECTED;
+  }
+  mReqHeaderBuf = nsHttp::ConvertRequestHeadToString(
+      *aRequestHead, false, false, mConnInfo->UsingConnect());
+  return NS_NewByteInputStream(getter_AddRefs(mRequestStream), mReqHeaderBuf,
+                               NS_ASSIGNMENT_DEPEND);
+}
+
 nsresult nsHttpTransaction::Restart() {
   MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
@@ -2026,6 +2075,12 @@ nsresult nsHttpTransaction::Restart() {
       mConnInfo = ci;
       RemoveAlternateServiceUsedHeader(mRequestHead);
     }
+  }
+
+  nsresult rv =
+      RefreshWebTransportMulticastRequest(mRequestHead, mIsForWebTransport);
+  if (NS_FAILED(rv)) {
+    return rv;
   }
 
   // Reset mDoNotRemoveAltSvc for the next try.
@@ -2405,6 +2460,17 @@ bool nsHttpTransaction::HandleWebTransportResponse(uint16_t aStatus) {
     return false;
   }
 
+  bool multicastAccepted = false;
+  nsAutoCString multicastResponse;
+  if (NS_SUCCEEDED(mResponseHead->GetHeader(
+          nsHttp::ResolveAtom("WT-Multicast"_ns), multicastResponse))) {
+    bool parsed = false;
+    multicastAccepted =
+        NS_SUCCEEDED(SFV::ParseItem<SFV::SFVBool>(multicastResponse, parsed)) &&
+        parsed;
+  }
+  wtSession->OnExtendedConnectResponse(multicastAccepted);
+
   nsCOMPtr<WebTransportSessionEventListener> webTransportListener;
   {
     MutexAutoLock lock(mLock);
@@ -2413,8 +2479,9 @@ bool nsHttpTransaction::HandleWebTransportResponse(uint16_t aStatus) {
   }
   if (nsCOMPtr<WebTransportSessionEventListenerInternal> listener =
           do_QueryInterface(webTransportListener)) {
-    listener->OnSessionReadyInternal(wtSession);
-    wtSession->SetWebTransportSessionEventListener(webTransportListener);
+    if (NS_SUCCEEDED(listener->OnSessionReadyInternal(wtSession))) {
+      wtSession->SetWebTransportSessionEventListener(webTransportListener);
+    }
   }
 
   return true;
@@ -2523,24 +2590,34 @@ nsresult nsHttpTransaction::HandleContentStart() {
             return NS_ERROR_NET_RESET;
           }
           break;
-        case 421:
+        case 421: {
           LOG(("Misdirected Request.\n"));
           gHttpHandler->ClearHostMapping(mConnInfo);
 
           m421Received = true;
           mCaps |= NS_HTTP_REFRESH_DNS;
+          const bool forceMcquicWebTransportRetryForTesting =
+              StaticPrefs::
+                  network_http_http3_mcquic_force_webtransport_421_retry_for_testing() &&
+              mIsForWebTransport && mConnInfo &&
+              mConnInfo->IsWebTransportMulticastEligible();
 
           // retry on a new connection - just in case
           // See bug 1609410, we can't restart the transaction when
           // NS_HTTP_STICKY_CONNECTION is set. In the case that a connection
           // already passed NTLM authentication, restarting the transaction will
           // cause the connection to be closed.
-          if (!mRestartCount && !(mCaps & NS_HTTP_STICKY_CONNECTION)) {
+          if (!mRestartCount && (!(mCaps & NS_HTTP_STICKY_CONNECTION) ||
+                                 forceMcquicWebTransportRetryForTesting)) {
+            if (forceMcquicWebTransportRetryForTesting) {
+              mCaps |= NS_HTTP_CONNECTION_RESTARTABLE;
+            }
             mCaps &= ~NS_HTTP_ALLOW_KEEPALIVE;
             mForceRestart = true;  // force restart has built in loop protection
             return NS_ERROR_NET_RESET;
           }
           break;
+        }
         case 425:
           LOG(("Too Early."));
           if ((mEarlyDataDisposition == EARLY_425) && !mDoNotTryEarlyData) {
@@ -2875,6 +2952,11 @@ void nsHttpTransaction::DisableHttp2ForProxy() {
 
 void nsHttpTransaction::DisableHttp3(bool aAllowRetryHTTPSRR) {
   MOZ_ASSERT(OnSocketThread(), "not on socket thread");
+
+  if (mIsForWebTransport && mConnInfo->IsWebTransportMulticastEligible()) {
+    mDontRetryWithDirectRoute = true;
+    return;
+  }
 
   // mOrigConnInfo is an indicator that HTTPS RR is used, so don't mess up the
   // connection info.
@@ -3639,6 +3721,14 @@ nsresult nsHttpTransaction::OnHTTPSRRAvailable(
 
   RefPtr<nsHttpConnectionInfo> newInfo =
       mConnInfo->CloneAndAdoptHTTPSSVCRecord(svcbRecord);
+  if (mIsForWebTransport && mConnInfo->IsWebTransportMulticastEligible() &&
+      !newInfo->IsWebTransportMulticastEligible()) {
+    LOG(
+        ("Rejecting HTTPS RR route that cannot carry the complete "
+         "WebTransport MCQUIC binding [this=%p]",
+         this));
+    return NS_ERROR_FAILURE;
+  }
   // Don't fallback until we support WebTransport over HTTP/2.
   // TODO: implement fallback in bug 1874102.
   // Note: We don't support HTTPS RR for proxy connection yet, so disable the
@@ -3887,6 +3977,17 @@ void nsHttpTransaction::OnFastFallbackTimer() {
 
 void nsHttpTransaction::HandleFallback(
     nsHttpConnectionInfo* aFallbackConnInfo) {
+  if (mIsForWebTransport && mConnInfo->IsWebTransportMulticastEligible() &&
+      (!aFallbackConnInfo ||
+       !aFallbackConnInfo->IsWebTransportMulticastEligible())) {
+    mDontRetryWithDirectRoute = true;
+    LOG(
+        ("Suppressing non-H3 fallback for WebTransport MCQUIC operation "
+         "[this=%p]",
+         this));
+    return;
+  }
+
   if (mConnection) {
     // Close the transaction with NS_ERROR_NET_RESET, since we know doing this
     // will make transaction to be restarted.

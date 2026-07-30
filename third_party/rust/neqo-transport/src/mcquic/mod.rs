@@ -13,7 +13,12 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
+    fmt::{self, Debug, Formatter},
+    mem,
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
+    ops::Deref,
+    ptr,
+    sync::atomic::{Ordering, compiler_fence},
     time::{Duration, Instant},
 };
 
@@ -35,9 +40,45 @@ use crate::{
 
 const IP_FLAG_V4_ALLOWED: u8 = 0x01;
 const IP_FLAG_V6_ALLOWED: u8 = 0x02;
+
+/// Application policy for one connection-isolated MCQUIC operation.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum OperationPolicy {
+    /// The application did not permit multicast for this operation.
+    #[default]
+    Prohibit,
+    /// The application permits opportunistic multicast after negotiation.
+    Allow,
+}
+
+/// Runtime authorization state for one connection-isolated MCQUIC operation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OperationState {
+    /// No application permission exists.
+    Prohibited,
+    /// Application permission exists, but CONNECT negotiation is incomplete.
+    Pending,
+    /// CONNECT negotiation accepted multicast for the operation.
+    Active,
+    /// Permission was declined or revoked and cannot be re-enabled.
+    Revoked,
+}
 const MAX_ACK_RANGE_COUNT: u64 = 32 * 1024;
 const MAX_TRACKED_ACK_RANGES: usize = 64;
 const ACK_HISTORY_PACKET_WINDOW: u64 = 4 * 1024;
+pub(crate) const MAX_CHANNEL_KEYS: usize = 4;
+pub(crate) const MAX_CHANNEL_KEY_BYTES: usize = MAX_CHANNEL_KEYS * MAX_CHANNEL_SECRET_BYTES;
+pub(crate) const MAX_CHANNEL_INTEGRITY_HASHES: usize = 4096;
+pub(crate) const MAX_CHANNEL_INTEGRITY_BYTES: usize = 256 * 1024;
+pub(crate) const MAX_CHANNEL_PENDING_PACKETS: usize = 1024;
+pub(crate) const MAX_CHANNEL_PENDING_PACKET_BYTES: usize = 4 * 1024 * 1024;
+pub(crate) const MAX_CHANNEL_DATAGRAMS: usize = 64;
+pub(crate) const MAX_CHANNEL_DATAGRAM_BYTES: usize = 256 * 1024;
+pub(crate) const MAX_CHANNEL_SECRET_BYTES: usize = 64;
+const MAX_KEY_AGE: Duration = Duration::from_secs(60);
+const MAX_INTEGRITY_AGE: Duration = Duration::from_secs(5);
+const MAX_PENDING_PACKET_AGE: Duration = Duration::from_secs(3);
+const MAX_DATAGRAM_AGE: Duration = Duration::from_secs(1);
 // Draft-08 has no wire field for the ACK threshold. Three packets keeps ACK
 // traffic bounded while the advertised maximum delay remains authoritative.
 const ACK_ELICITING_THRESHOLD: u64 = 2;
@@ -51,36 +92,36 @@ const HP_SAMPLE_SIZE: usize = 16;
 const HP_SAMPLE_OFFSET: usize = 4;
 
 /// Experimental transport parameter ID for client multicast capabilities.
-pub const CLIENT_PARAMS_TRANSPORT_PARAMETER_ID: u64 = 0xff3e800;
+pub const CLIENT_PARAMS_TRANSPORT_PARAMETER_ID: u64 = 0x0ff3_e800;
 /// Experimental transport parameter ID for server multicast support.
-pub const SERVER_SUPPORT_TRANSPORT_PARAMETER_ID: u64 = 0xff3e808;
+pub const SERVER_SUPPORT_TRANSPORT_PARAMETER_ID: u64 = 0x0ff3_e808;
 
 /// Experimental frame type for `MC_KEY`.
-pub const FRAME_TYPE_KEY: u64 = 0xff3e801;
+pub const FRAME_TYPE_KEY: u64 = 0x0ff3_e801;
 /// Experimental frame type for `MC_JOIN`.
-pub const FRAME_TYPE_JOIN: u64 = 0xff3e802;
+pub const FRAME_TYPE_JOIN: u64 = 0x0ff3_e802;
 /// Experimental frame type for `MC_LEAVE`.
-pub const FRAME_TYPE_LEAVE: u64 = 0xff3e803;
+pub const FRAME_TYPE_LEAVE: u64 = 0x0ff3_e803;
 /// Experimental frame type for `MC_INTEGRITY`.
-pub const FRAME_TYPE_INTEGRITY: u64 = 0xff3e804;
+pub const FRAME_TYPE_INTEGRITY: u64 = 0x0ff3_e804;
 /// Experimental frame type for `MC_INTEGRITY_WITH_LENGTH`.
-pub const FRAME_TYPE_INTEGRITY_WITH_LENGTH: u64 = 0xff3e805;
+pub const FRAME_TYPE_INTEGRITY_WITH_LENGTH: u64 = 0x0ff3_e805;
 /// Experimental frame type for `MC_ACK`.
-pub const FRAME_TYPE_ACK: u64 = 0xff3e806;
+pub const FRAME_TYPE_ACK: u64 = 0x0ff3_e806;
 /// Experimental frame type for `MC_ACK_ECN`.
-pub const FRAME_TYPE_ACK_ECN: u64 = 0xff3e807;
+pub const FRAME_TYPE_ACK_ECN: u64 = 0x0ff3_e807;
 /// Experimental frame type for `MC_LIMITS`.
-pub const FRAME_TYPE_LIMITS: u64 = 0xff3e809;
+pub const FRAME_TYPE_LIMITS: u64 = 0x0ff3_e809;
 /// Experimental frame type for `MC_RETIRE`.
-pub const FRAME_TYPE_RETIRE: u64 = 0xff3e80a;
+pub const FRAME_TYPE_RETIRE: u64 = 0x0ff3_e80a;
 /// Experimental frame type for transport-scoped `MC_STATE`.
-pub const FRAME_TYPE_STATE: u64 = 0xff3e80b;
+pub const FRAME_TYPE_STATE: u64 = 0x0ff3_e80b;
 /// Experimental frame type for application-scoped `MC_STATE`.
-pub const FRAME_TYPE_STATE_APPLICATION: u64 = 0xff3e80c;
+pub const FRAME_TYPE_STATE_APPLICATION: u64 = 0x0ff3_e80c;
 /// Experimental frame type for IPv4 `MC_ANNOUNCE`.
-pub const FRAME_TYPE_ANNOUNCE_V4: u64 = 0xff3e811;
+pub const FRAME_TYPE_ANNOUNCE_V4: u64 = 0x0ff3_e811;
 /// Experimental frame type for IPv6 `MC_ANNOUNCE`.
-pub const FRAME_TYPE_ANNOUNCE_V6: u64 = 0xff3e812;
+pub const FRAME_TYPE_ANNOUNCE_V6: u64 = 0x0ff3_e812;
 
 /// Transport-scoped `MC_STATE` reason used for server-requested transitions.
 pub const STATE_REASON_REQUESTED_BY_SERVER: u64 = 0x1;
@@ -100,7 +141,7 @@ pub struct ClientLimits {
 }
 
 impl ClientLimits {
-    fn flags(&self) -> u8 {
+    const fn flags(&self) -> u8 {
         let mut flags = 0;
         if self.ipv4_channels_allowed {
             flags |= IP_FLAG_V4_ALLOWED;
@@ -191,7 +232,7 @@ impl ClientTransportParams {
 }
 
 /// A full `MC_ANNOUNCE` frame payload.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Announce {
     /// The channel ID being announced.
     pub channel_id: Vec<u8>,
@@ -204,7 +245,7 @@ pub struct Announce {
     /// Header protection algorithm from the TLS cipher suite registry.
     pub header_protection_algorithm: u16,
     /// Header protection secret.
-    pub header_secret: Vec<u8>,
+    pub header_secret: SecretBytes,
     /// AEAD algorithm from the TLS cipher suite registry.
     pub aead_algorithm: u16,
     /// Packet integrity hash algorithm identifier.
@@ -215,8 +256,32 @@ pub struct Announce {
     pub max_ack_delay_ms: u64,
 }
 
+impl Debug for Announce {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Announce")
+            .field("channel_id", &self.channel_id)
+            .field("source", &self.source)
+            .field("group", &self.group)
+            .field("udp_port", &self.udp_port)
+            .field(
+                "header_protection_algorithm",
+                &self.header_protection_algorithm,
+            )
+            .field("header_secret", &RedactedSecret)
+            .field("aead_algorithm", &self.aead_algorithm)
+            .field("integrity_hash_algorithm", &self.integrity_hash_algorithm)
+            .field("max_rate_kibps", &self.max_rate_kibps)
+            .field("max_ack_delay_ms", &self.max_ack_delay_ms)
+            .finish()
+    }
+}
+
 /// A full `MC_KEY` frame payload.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "public field names mirror draft -08 wire terminology"
+)]
 pub struct Key {
     /// The channel ID being updated.
     pub channel_id: Vec<u8>,
@@ -225,7 +290,193 @@ pub struct Key {
     /// First packet number to which the secret applies.
     pub from_packet_number: u64,
     /// Packet protection secret.
-    pub secret: Vec<u8>,
+    pub secret: SecretBytes,
+}
+
+impl Debug for Key {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Key")
+            .field("channel_id", &self.channel_id)
+            .field("key_sequence", &self.key_sequence)
+            .field("from_packet_number", &self.from_packet_number)
+            .field("secret", &RedactedSecret)
+            .finish()
+    }
+}
+
+struct RedactedSecret;
+
+impl Debug for RedactedSecret {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str("<redacted>")
+    }
+}
+
+/// Secret bytes with redacted formatting and allocation erasure on drop.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub struct SecretBytes {
+    bytes: Vec<u8>,
+}
+
+impl From<Vec<u8>> for SecretBytes {
+    fn from(bytes: Vec<u8>) -> Self {
+        Self { bytes }
+    }
+}
+
+impl Deref for SecretBytes {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        &self.bytes
+    }
+}
+
+impl Debug for SecretBytes {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        RedactedSecret.fmt(f)
+    }
+}
+
+impl Drop for SecretBytes {
+    fn drop(&mut self) {
+        erase_secret_vec(&mut self.bytes);
+    }
+}
+
+fn erase_secret_slice(secret: &mut [u8]) {
+    for byte in secret {
+        // SAFETY: `byte` is a valid, exclusively borrowed byte in the secret.
+        unsafe {
+            ptr::write_volatile(byte, 0);
+        }
+    }
+    compiler_fence(Ordering::SeqCst);
+}
+
+fn erase_secret_vec(secret: &mut Vec<u8>) {
+    #[cfg(test)]
+    let initialized_len = secret.len();
+    #[cfg(test)]
+    let capacity = secret.capacity();
+    erase_secret_slice(secret);
+    for byte in secret.spare_capacity_mut() {
+        // SAFETY: every slot belongs to the vector's spare allocation. Writing
+        // a byte initializes it without changing the vector's logical length.
+        unsafe {
+            ptr::write_volatile(byte.as_mut_ptr(), 0);
+        }
+    }
+    compiler_fence(Ordering::SeqCst);
+
+    #[cfg(test)]
+    record_secret_erasure(secret, initialized_len, capacity);
+
+    secret.clear();
+}
+
+#[derive(Default)]
+struct ErasingBuffer {
+    bytes: Vec<u8>,
+}
+
+impl ErasingBuffer {
+    fn with_capacity(capacity: usize) -> Self {
+        Self {
+            bytes: Vec::with_capacity(capacity),
+        }
+    }
+
+    fn as_slice(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    fn as_mut_slice(&mut self) -> &mut [u8] {
+        &mut self.bytes
+    }
+
+    const fn as_mut_vec(&mut self) -> &mut Vec<u8> {
+        &mut self.bytes
+    }
+
+    const fn len(&self) -> usize {
+        self.bytes.len()
+    }
+
+    fn into_vec(mut self) -> Vec<u8> {
+        mem::take(&mut self.bytes)
+    }
+}
+
+impl From<Vec<u8>> for ErasingBuffer {
+    fn from(bytes: Vec<u8>) -> Self {
+        Self { bytes }
+    }
+}
+
+impl Debug for ErasingBuffer {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("ErasingBuffer")
+            .field(&RedactedSecret)
+            .finish()
+    }
+}
+
+impl Drop for ErasingBuffer {
+    fn drop(&mut self) {
+        erase_secret_vec(&mut self.bytes);
+    }
+}
+
+struct ErasingArray<const N: usize>([u8; N]);
+
+impl<const N: usize> Drop for ErasingArray<N> {
+    fn drop(&mut self) {
+        erase_secret_slice(&mut self.0);
+    }
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SecretErasure {
+    initialized_len: usize,
+    capacity: usize,
+    all_zero: bool,
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static SECRET_ERASURES: std::cell::RefCell<Vec<SecretErasure>> = const {
+        std::cell::RefCell::new(Vec::new())
+    };
+}
+
+#[cfg(test)]
+fn record_secret_erasure(secret: &Vec<u8>, initialized_len: usize, capacity: usize) {
+    // SAFETY: `erase_secret_vec` initialized every byte in the allocation
+    // immediately before this call, and `capacity` is that allocation's size.
+    let allocation = unsafe { std::slice::from_raw_parts(secret.as_ptr(), capacity) };
+    SECRET_ERASURES.with(|erasures| {
+        erasures.borrow_mut().push(SecretErasure {
+            initialized_len,
+            capacity,
+            all_zero: allocation.iter().all(|byte| *byte == 0),
+        });
+    });
+}
+
+#[cfg(test)]
+fn take_secret_erasures() -> Vec<SecretErasure> {
+    SECRET_ERASURES.with(|erasures| mem::take(&mut *erasures.borrow_mut()))
+}
+
+#[cfg(test)]
+pub(crate) fn take_secret_erasure_summary() -> (usize, bool) {
+    let erasures = take_secret_erasures();
+    (
+        erasures.len(),
+        erasures.iter().all(|erasure| erasure.all_zero),
+    )
 }
 
 /// A full `MC_JOIN` frame payload.
@@ -240,7 +491,6 @@ pub struct Join {
     /// Latest `MC_KEY` sequence processed by the server.
     pub mc_key_sequence: u64,
 }
-
 /// A full `MC_LEAVE` frame payload.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Leave {
@@ -251,7 +501,6 @@ pub struct Leave {
     /// Packet number after which the client should leave.
     pub after_packet_number: u64,
 }
-
 /// A full `MC_INTEGRITY` frame payload.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Integrity {
@@ -264,7 +513,6 @@ pub struct Integrity {
     /// Concatenated packet hashes.
     pub packet_hashes: Vec<u8>,
 }
-
 /// A non-initial ACK block from `MC_ACK`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AckRange {
@@ -273,9 +521,12 @@ pub struct AckRange {
     /// Encoded length of this ACK block.
     pub ack_range_length: u64,
 }
-
 /// ECN counters carried by `MC_ACK_ECN`.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "public field names mirror draft -08 wire terminology"
+)]
 pub struct AckEcnCounts {
     /// Count of ECT(0) packets.
     pub ect0_count: u64,
@@ -284,9 +535,12 @@ pub struct AckEcnCounts {
     /// Count of CE-marked packets.
     pub ecn_ce_count: u64,
 }
-
 /// A full `MC_ACK` frame payload.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "public field names mirror draft -08 wire terminology"
+)]
 pub struct Ack {
     /// The acknowledged channel ID.
     pub channel_id: Vec<u8>,
@@ -301,9 +555,12 @@ pub struct Ack {
     /// Optional ECN counters.
     pub ecn_counts: Option<AckEcnCounts>,
 }
-
 /// A full `MC_LIMITS` frame payload.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "public field names mirror draft -08 wire terminology"
+)]
 pub struct Limits {
     /// Client limits sequence number.
     pub sequence: u64,
@@ -312,7 +569,6 @@ pub struct Limits {
     /// Maximum number of concurrently joined channels.
     pub max_joined_count: u64,
 }
-
 /// A full `MC_RETIRE` frame payload.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Retire {
@@ -321,7 +577,6 @@ pub struct Retire {
     /// Packet number after which retirement should happen.
     pub after_packet_number: u64,
 }
-
 /// State values carried by `MC_STATE`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ChannelState {
@@ -336,7 +591,7 @@ pub enum ChannelState {
 }
 
 impl ChannelState {
-    fn decode(v: u8) -> Res<Self> {
+    const fn decode(v: u8) -> Res<Self> {
         match v {
             0x1 => Ok(Self::Left),
             0x2 => Ok(Self::DeclinedJoin),
@@ -366,9 +621,12 @@ pub enum StateReasonScope {
     /// Application-defined reason.
     Application,
 }
-
 /// A full `MC_STATE` frame payload.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "public field names mirror draft -08 wire terminology"
+)]
 pub struct State {
     /// The channel ID whose state changed.
     pub channel_id: Vec<u8>,
@@ -383,7 +641,6 @@ pub struct State {
     /// Free-form reason phrase bytes.
     pub reason_phrase: Vec<u8>,
 }
-
 /// A decoded multicast DATAGRAM payload delivered by a channel packet.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ChannelDatagram {
@@ -394,7 +651,6 @@ pub struct ChannelDatagram {
     /// The DATAGRAM payload bytes.
     pub data: Vec<u8>,
 }
-
 /// A multicast channel frame carried in a multicast 1-RTT packet.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ChannelFrame {
@@ -448,7 +704,6 @@ pub struct ChannelPacket {
     /// Decoded and validated channel frames.
     pub frames: Vec<ChannelFrame>,
 }
-
 /// The result of encoding one encrypted multicast channel packet.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ChannelSendOutput {
@@ -463,7 +718,6 @@ pub struct ChannelSendOutput {
     /// The matching `MC_INTEGRITY` payload for the encoded packet.
     pub integrity: Integrity,
 }
-
 /// Send-side state for encrypted multicast channel packets.
 #[derive(Clone, Debug)]
 pub struct ChannelSendState {
@@ -505,7 +759,6 @@ impl ChannelSendState {
     pub const fn announce(&self) -> &Announce {
         &self.announce
     }
-
     /// Return the active payload-protection key.
     #[must_use]
     pub const fn key(&self) -> &Key {
@@ -594,13 +847,15 @@ impl ChannelSendState {
 pub struct ChannelReceiveState {
     announce: Announce,
     keys: BTreeMap<u64, Key>,
+    key_inserted_at: BTreeMap<u64, Instant>,
     integrity_hash: IntegrityHashAlgorithm,
     integrity_hashes: BTreeMap<u64, Vec<u8>>,
+    integrity_inserted_at: BTreeMap<u64, Instant>,
     pending_packets: BTreeMap<u64, PendingChannelPacket>,
     accepted_packets: BTreeSet<u64>,
     largest_observed_packet_number: u64,
     ack_tracker: AckTracker,
-    datagrams: VecDeque<ChannelDatagram>,
+    datagrams: VecDeque<ReleasedChannelDatagram>,
 }
 
 impl ChannelReceiveState {
@@ -612,6 +867,9 @@ impl ChannelReceiveState {
     /// supported by this experimental implementation.
     pub fn new(announce: Announce) -> Res<Self> {
         validate_channel_id(&announce.channel_id)?;
+        if announce.header_secret.len() > MAX_CHANNEL_SECRET_BYTES {
+            return Err(Error::McquicResourceLimit);
+        }
         validate_encryption_algorithm(announce.header_protection_algorithm)?;
         validate_encryption_algorithm(announce.aead_algorithm)?;
         let integrity_hash = IntegrityHashAlgorithm::from_id(announce.integrity_hash_algorithm)?;
@@ -619,8 +877,10 @@ impl ChannelReceiveState {
         Ok(Self {
             announce,
             keys: BTreeMap::new(),
+            key_inserted_at: BTreeMap::new(),
             integrity_hash,
             integrity_hashes: BTreeMap::new(),
+            integrity_inserted_at: BTreeMap::new(),
             pending_packets: BTreeMap::new(),
             accepted_packets: BTreeSet::new(),
             largest_observed_packet_number: 0,
@@ -634,7 +894,6 @@ impl ChannelReceiveState {
     pub fn channel_id(&self) -> &[u8] {
         &self.announce.channel_id
     }
-
     /// Return the announcement that defines this receive state.
     #[must_use]
     pub const fn announce(&self) -> &Announce {
@@ -646,21 +905,54 @@ impl ChannelReceiveState {
     /// # Errors
     ///
     /// Returns an error if the key is for another channel.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "legacy standalone API; Connection callers use the explicit-time variant"
+    )]
     pub fn insert_key(&mut self, key: Key) -> Res<Vec<ChannelDatagram>> {
-        let packets = self.insert_key_for_connection(key)?;
+        let packets = self.insert_key_for_connection(key, Instant::now())?;
+        self.mark_packets_released(&packets);
         Ok(self.datagrams_from_packets(&packets))
     }
 
-    pub(crate) fn insert_key_for_connection(&mut self, key: Key) -> Res<Vec<ChannelPacket>> {
+    pub(crate) fn insert_key_for_connection(
+        &mut self,
+        key: Key,
+        now: Instant,
+    ) -> Res<Vec<ChannelPacket>> {
+        self.prune_expired(now)?;
         self.check_channel_id(&key.channel_id)?;
+        if key.secret.len() > MAX_CHANNEL_SECRET_BYTES {
+            return Err(Error::McquicResourceLimit);
+        }
         if let Some(existing) = self.keys.get(&key.key_sequence)
             && (existing.from_packet_number != key.from_packet_number
                 || existing.secret != key.secret)
         {
             return Err(Error::FrameEncoding);
         }
-        self.keys.insert(key.key_sequence, key);
-        self.release_ready_packets()
+        if !self.keys.contains_key(&key.key_sequence) && self.keys.len() >= MAX_CHANNEL_KEYS {
+            return Err(Error::McquicResourceLimit);
+        }
+        let existing_secret_len = self
+            .keys
+            .get(&key.key_sequence)
+            .map_or(0, |existing| existing.secret.len());
+        let key_bytes = self
+            .keys
+            .values()
+            .map(|existing| existing.secret.len())
+            .sum::<usize>()
+            .saturating_sub(existing_secret_len)
+            .checked_add(key.secret.len())
+            .ok_or(Error::McquicResourceLimit)?;
+        if key_bytes > MAX_CHANNEL_KEY_BYTES {
+            return Err(Error::McquicResourceLimit);
+        }
+        let sequence = key.key_sequence;
+        self.keys.insert(sequence, key);
+        self.key_inserted_at.insert(sequence, now);
+        self.release_ready_packets(now)
     }
 
     /// Insert an `MC_INTEGRITY` frame for this channel.
@@ -673,15 +965,22 @@ impl ChannelReceiveState {
         clippy::needless_pass_by_value,
         reason = "Public API accepts decoded frames by value for queue handoff."
     )]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "legacy standalone API; Connection callers use the explicit-time variant"
+    )]
     pub fn insert_integrity(&mut self, integrity: Integrity) -> Res<Vec<ChannelDatagram>> {
-        let packets = self.insert_integrity_for_connection(&integrity)?;
+        let packets = self.insert_integrity_for_connection(&integrity, Instant::now())?;
+        self.mark_packets_released(&packets);
         Ok(self.datagrams_from_packets(&packets))
     }
 
     pub(crate) fn insert_integrity_for_connection(
         &mut self,
         integrity: &Integrity,
+        now: Instant,
     ) -> Res<Vec<ChannelPacket>> {
+        self.prune_expired(now)?;
         self.check_channel_id(&integrity.channel_id)?;
         let hash_len = self.integrity_hash.output_len();
         let hash_count = if let Some(hash_count) = integrity.packet_hash_count {
@@ -700,6 +999,32 @@ impl ChannelReceiveState {
             u64::try_from(integrity.packet_hashes.len() / hash_len)?
         };
 
+        let mut new_hashes = 0_usize;
+        for offset in 0..hash_count {
+            let packet_number = integrity
+                .packet_number_start
+                .checked_add(offset)
+                .ok_or(Error::IntegerOverflow)?;
+            if !self.ack_tracker.is_retired(packet_number)
+                && !self.integrity_hashes.contains_key(&packet_number)
+            {
+                new_hashes = new_hashes
+                    .checked_add(1)
+                    .ok_or(Error::McquicResourceLimit)?;
+            }
+        }
+        let total_hashes = self
+            .integrity_hashes
+            .len()
+            .checked_add(new_hashes)
+            .ok_or(Error::McquicResourceLimit)?;
+        let hash_bytes = total_hashes
+            .checked_mul(hash_len)
+            .ok_or(Error::McquicResourceLimit)?;
+        if total_hashes > MAX_CHANNEL_INTEGRITY_HASHES || hash_bytes > MAX_CHANNEL_INTEGRITY_BYTES {
+            return Err(Error::McquicResourceLimit);
+        }
+
         for offset in 0..hash_count {
             let start = usize::try_from(offset)? * hash_len;
             let end = start + hash_len;
@@ -712,32 +1037,41 @@ impl ChannelReceiveState {
             }
             self.integrity_hashes
                 .insert(packet_number, integrity.packet_hashes[start..end].to_vec());
+            self.integrity_inserted_at.insert(packet_number, now);
         }
-        self.release_ready_packets()
+        self.release_ready_packets(now)
     }
 
     /// Process one protected multicast UDP payload for this channel.
     ///
     /// If the matching `MC_KEY` and `MC_INTEGRITY` are available, this
-    /// validates, decrypts, decodes, and releases DATAGRAM frames immediately.
-    /// Otherwise the packet is buffered until later control frames make it
-    /// releasable.
+    /// validates, decrypts, decodes, and releases DATAGRAM frames
+    /// immediately. Otherwise the packet is buffered until later control
+    /// frames make it releasable.
     ///
     /// # Errors
     ///
     /// Returns an error if the packet is malformed or for another channel.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "legacy standalone API; Connection callers use the explicit-time variant"
+    )]
     pub fn process_protected_packet(
         &mut self,
         protected_packet: &[u8],
     ) -> Res<Vec<ChannelDatagram>> {
-        let packets = self.process_protected_packet_for_connection(protected_packet)?;
+        let packets =
+            self.process_protected_packet_for_connection(protected_packet, Instant::now())?;
+        self.mark_packets_released(&packets);
         Ok(self.datagrams_from_packets(&packets))
     }
 
     pub(crate) fn process_protected_packet_for_connection(
         &mut self,
         protected_packet: &[u8],
+        now: Instant,
     ) -> Res<Vec<ChannelPacket>> {
+        self.prune_expired(now)?;
         let parsed = parse_channel_packet_metadata(
             &self.announce,
             protected_packet,
@@ -757,31 +1091,50 @@ impl ChannelReceiveState {
             return Ok(Vec::new());
         }
 
+        let pending_bytes = self
+            .pending_packets
+            .values()
+            .map(|packet| packet.protected_packet.len())
+            .sum::<usize>()
+            .checked_add(protected_packet.len())
+            .ok_or(Error::McquicResourceLimit)?;
+        if self.pending_packets.len() >= MAX_CHANNEL_PENDING_PACKETS
+            || pending_bytes > MAX_CHANNEL_PENDING_PACKET_BYTES
+        {
+            return Err(Error::McquicResourceLimit);
+        }
+
         self.pending_packets.insert(
             parsed.packet_number,
             PendingChannelPacket {
                 protected_packet: protected_packet.to_vec(),
                 key_phase: parsed.key_phase,
+                inserted_at: now,
             },
         );
 
         Ok(self
-            .try_release_packet(parsed.packet_number)?
+            .try_release_packet(parsed.packet_number, now)?
             .into_iter()
             .collect())
     }
 
-    /// Validate an already-decoded channel packet and release any DATAGRAMs.
+    /// Validate an already-decoded channel packet and release any
+    /// DATAGRAMs.
     ///
     /// `protected_packet` must be the protected UDP payload bytes that
-    /// correspond to `packet.packet_number`. This method validates those bytes
-    /// against prior `MC_INTEGRITY` state, then releases decoded DATAGRAM frames
-    /// upward and records ACK state.
+    /// correspond to `packet.packet_number`. This method validates those
+    /// bytes against prior `MC_INTEGRITY` state, then releases decoded
+    /// DATAGRAM frames upward and records ACK state.
     ///
     /// # Errors
     ///
-    /// Returns an error if the packet is for another channel, no matching key or
-    /// integrity is available, or the integrity hash does not match.
+    /// Returns an error if the packet is for another channel, no matching
+    /// key or integrity is available, or the integrity hash does not match.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "legacy standalone API; Connection callers use the explicit-time variant"
+    )]
     pub fn process_authenticated_packet(
         &mut self,
         packet: ChannelPacket,
@@ -801,14 +1154,25 @@ impl ChannelReceiveState {
         self.validate_integrity(packet_number, protected_packet)?;
 
         self.pending_packets.remove(&packet_number);
-        self.accepted_packets.insert(packet_number);
-        let packet = self.release_packet(packet);
+        let packet = self.release_packet(packet, Instant::now())?;
+        self.mark_packet_released(packet_number);
         Ok(self.datagrams_from_packets(std::slice::from_ref(&packet)))
     }
 
     /// Pop a released channel DATAGRAM.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "legacy standalone API; Connection callers drain with explicit expiry time"
+    )]
     pub fn pop_datagram(&mut self) -> Option<ChannelDatagram> {
-        self.datagrams.pop_front()
+        while self
+            .datagrams
+            .front()
+            .is_some_and(|entry| entry.inserted_at + MAX_DATAGRAM_AGE <= Instant::now())
+        {
+            self.datagrams.pop_front();
+        }
+        self.datagrams.pop_front().map(|entry| entry.datagram)
     }
 
     /// Build a pending `MC_ACK`, if any newly validated packets are waiting.
@@ -855,18 +1219,22 @@ impl ChannelReceiveState {
         }
     }
 
-    fn release_ready_packets(&mut self) -> Res<Vec<ChannelPacket>> {
+    fn release_ready_packets(&mut self, now: Instant) -> Res<Vec<ChannelPacket>> {
         let packet_numbers = self.pending_packets.keys().copied().collect::<Vec<_>>();
         let mut released = Vec::new();
         for packet_number in packet_numbers {
-            if let Some(packet) = self.try_release_packet(packet_number)? {
+            if let Some(packet) = self.try_release_packet(packet_number, now)? {
                 released.push(packet);
             }
         }
         Ok(released)
     }
 
-    fn try_release_packet(&mut self, packet_number: u64) -> Res<Option<ChannelPacket>> {
+    fn try_release_packet(
+        &mut self,
+        packet_number: u64,
+        now: Instant,
+    ) -> Res<Option<ChannelPacket>> {
         let Some(pending) = self.pending_packets.get(&packet_number) else {
             return Ok(None);
         };
@@ -889,8 +1257,7 @@ impl ChannelReceiveState {
             &pending.protected_packet,
             self.largest_observed_packet_number,
         )?;
-        self.accepted_packets.insert(packet_number);
-        Ok(Some(self.release_packet(packet)))
+        Ok(Some(self.release_packet(packet, now)?))
     }
 
     fn select_key(&self, packet_number: u64, key_phase: bool) -> Option<&Key> {
@@ -900,9 +1267,32 @@ impl ChannelReceiveState {
         })
     }
 
-    fn release_packet(&mut self, packet: ChannelPacket) -> ChannelPacket {
+    fn release_packet(&mut self, packet: ChannelPacket, now: Instant) -> Res<ChannelPacket> {
         let packet_number = packet.packet_number;
+        let new_datagrams = packet
+            .frames
+            .iter()
+            .filter_map(|frame| {
+                let ChannelFrame::Datagram { data } = frame else {
+                    return None;
+                };
+                Some(data.len())
+            })
+            .collect::<Vec<_>>();
+        let datagram_bytes = self
+            .datagrams
+            .iter()
+            .map(|entry| entry.datagram.data.len())
+            .sum::<usize>()
+            .checked_add(new_datagrams.iter().sum::<usize>())
+            .ok_or(Error::McquicResourceLimit)?;
+        if self.datagrams.len() + new_datagrams.len() > MAX_CHANNEL_DATAGRAMS
+            || datagram_bytes > MAX_CHANNEL_DATAGRAM_BYTES
+        {
+            return Err(Error::McquicResourceLimit);
+        }
         self.integrity_hashes.remove(&packet_number);
+        self.integrity_inserted_at.remove(&packet_number);
         for frame in &packet.frames {
             if let ChannelFrame::Datagram { data } = frame {
                 let datagram = ChannelDatagram {
@@ -910,12 +1300,14 @@ impl ChannelReceiveState {
                     packet_number,
                     data: data.clone(),
                 };
-                self.datagrams.push_back(datagram);
+                self.datagrams.push_back(ReleasedChannelDatagram {
+                    datagram,
+                    inserted_at: now,
+                });
             }
         }
-        self.ack_tracker.record_packet(packet_number);
         self.prune_receive_history();
-        packet
+        Ok(packet)
     }
 
     fn prune_receive_history(&mut self) {
@@ -928,8 +1320,95 @@ impl ChannelReceiveState {
             .retain(|packet_number| *packet_number >= retired_before);
         self.integrity_hashes
             .retain(|packet_number, _| *packet_number >= retired_before);
+        self.integrity_inserted_at
+            .retain(|packet_number, _| *packet_number >= retired_before);
         self.pending_packets
             .retain(|packet_number, _| *packet_number >= retired_before);
+    }
+
+    pub(crate) fn mark_packet_released(&mut self, packet_number: u64) {
+        self.accepted_packets.insert(packet_number);
+        self.ack_tracker.record_packet(packet_number);
+        self.prune_receive_history();
+    }
+
+    fn mark_packets_released(&mut self, packets: &[ChannelPacket]) {
+        for packet in packets {
+            self.mark_packet_released(packet.packet_number);
+        }
+    }
+
+    pub(crate) fn next_expiry(&self) -> Option<Instant> {
+        let newest_key = self.keys.keys().next_back().copied();
+        self.key_inserted_at
+            .iter()
+            .filter_map(|(sequence, inserted)| {
+                (Some(*sequence) != newest_key).then_some(*inserted + MAX_KEY_AGE)
+            })
+            .chain(
+                self.integrity_inserted_at
+                    .values()
+                    .map(|inserted| *inserted + MAX_INTEGRITY_AGE),
+            )
+            .chain(
+                self.pending_packets
+                    .values()
+                    .map(|packet| packet.inserted_at + MAX_PENDING_PACKET_AGE),
+            )
+            .chain(
+                self.datagrams
+                    .iter()
+                    .map(|entry| entry.inserted_at + MAX_DATAGRAM_AGE),
+            )
+            .min()
+    }
+
+    pub(crate) fn resource_usage(&self) -> ChannelResourceUsage {
+        ChannelResourceUsage {
+            keys: self.keys.len(),
+            key_bytes: self.keys.values().map(|key| key.secret.len()).sum(),
+            integrity_hashes: self.integrity_hashes.len(),
+            integrity_bytes: self.integrity_hashes.values().map(Vec::len).sum(),
+            pending_packets: self.pending_packets.len(),
+            pending_packet_bytes: self
+                .pending_packets
+                .values()
+                .map(|packet| packet.protected_packet.len())
+                .sum(),
+            datagrams: self.datagrams.len(),
+            datagram_bytes: self
+                .datagrams
+                .iter()
+                .map(|entry| entry.datagram.data.len())
+                .sum(),
+        }
+    }
+
+    pub(crate) fn prune_expired(&mut self, now: Instant) -> Res<()> {
+        // The newest key is live channel state, not a delayed artifact. Keep it
+        // until replacement or channel teardown; only superseded keys age out.
+        let newest_key = self.keys.keys().next_back().copied();
+        self.key_inserted_at.retain(|sequence, inserted| {
+            Some(*sequence) == newest_key || *inserted + MAX_KEY_AGE > now
+        });
+        self.keys
+            .retain(|sequence, _| self.key_inserted_at.contains_key(sequence));
+        self.integrity_inserted_at
+            .retain(|_, inserted| *inserted + MAX_INTEGRITY_AGE > now);
+        self.integrity_hashes
+            .retain(|packet_number, _| self.integrity_inserted_at.contains_key(packet_number));
+        self.datagrams
+            .retain(|entry| entry.inserted_at + MAX_DATAGRAM_AGE > now);
+        let expired_packet = self
+            .pending_packets
+            .values()
+            .any(|packet| packet.inserted_at + MAX_PENDING_PACKET_AGE <= now);
+        self.pending_packets
+            .retain(|_, packet| packet.inserted_at + MAX_PENDING_PACKET_AGE > now);
+        if expired_packet {
+            return Err(Error::McquicResourceLimit);
+        }
+        Ok(())
     }
 
     fn datagrams_from_packets(&self, packets: &[ChannelPacket]) -> Vec<ChannelDatagram> {
@@ -951,12 +1430,32 @@ impl ChannelReceiveState {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+#[expect(
+    clippy::field_scoped_visibility_modifiers,
+    reason = "Fields form a crate-internal resource snapshot consumed by connection accounting."
+)]
+pub(crate) struct ChannelResourceUsage {
+    pub(crate) keys: usize,
+    pub(crate) key_bytes: usize,
+    pub(crate) integrity_hashes: usize,
+    pub(crate) integrity_bytes: usize,
+    pub(crate) pending_packets: usize,
+    pub(crate) pending_packet_bytes: usize,
+    pub(crate) datagrams: usize,
+    pub(crate) datagram_bytes: usize,
+}
 #[derive(Clone, Debug)]
 struct PendingChannelPacket {
     protected_packet: Vec<u8>,
     key_phase: bool,
+    inserted_at: Instant,
 }
-
+#[derive(Clone, Debug)]
+struct ReleasedChannelDatagram {
+    datagram: ChannelDatagram,
+    inserted_at: Instant,
+}
 #[derive(Clone, Copy, Debug)]
 struct ParsedChannelPacket {
     packet_number: u64,
@@ -971,29 +1470,42 @@ fn encode_protected_channel_packet(
     frames: &[ChannelFrame],
 ) -> Res<Vec<u8>> {
     validate_channel_id(&announce.channel_id)?;
-    let mut payload = Encoder::default();
-    encode_channel_frames(&mut payload, frames)?;
+    let mut payload = ErasingBuffer::default();
+    {
+        let mut encoder = Encoder::new_borrowed_vec(payload.as_mut_vec());
+        encode_channel_frames(&mut encoder, frames)?;
+    }
+    protect_channel_payload(announce, key, packet_number, key_phase, payload.as_slice())
+}
 
-    let mut packet =
-        Vec::with_capacity(1 + announce.channel_id.len() + PACKET_NUMBER_LEN + payload.len() + 16);
+fn protect_channel_payload(
+    announce: &Announce,
+    key: &Key,
+    packet_number: u64,
+    key_phase: bool,
+    payload: &[u8],
+) -> Res<Vec<u8>> {
+    let mut packet = ErasingBuffer::with_capacity(
+        1 + announce.channel_id.len() + PACKET_NUMBER_LEN + payload.len() + 16,
+    );
     let first = SHORT_HEADER_FIXED_BIT
-        | (((key_phase as u8) << 2) & SHORT_HEADER_KEY_PHASE_BIT)
+        | ((u8::from(key_phase) << 2) & SHORT_HEADER_KEY_PHASE_BIT)
         | (u8::try_from(PACKET_NUMBER_LEN)? - 1);
-    packet.push(first);
-    packet.extend_from_slice(&announce.channel_id);
-    encode_packet_number(packet_number, PACKET_NUMBER_LEN, &mut packet)?;
+    packet.bytes.push(first);
+    packet.bytes.extend_from_slice(&announce.channel_id);
+    encode_packet_number(packet_number, PACKET_NUMBER_LEN, packet.as_mut_vec())?;
     let payload_offset = packet.len();
-    packet.extend_from_slice(payload.as_ref());
+    packet.bytes.extend_from_slice(payload);
 
     let cipher = cipher_from_id(announce.aead_algorithm)?;
     let mut seal =
         crypto_state_from_secret(&key.secret, cipher, CryptoDxDirection::Write, packet_number)?;
-    packet.resize(packet.len() + seal.expansion(), 0);
-    let encrypted_len = seal.encrypt(packet_number, 0..payload_offset, &mut packet)?;
-    packet.truncate(payload_offset + encrypted_len);
+    packet.bytes.resize(packet.len() + seal.expansion(), 0);
+    let encrypted_len = seal.encrypt(packet_number, 0..payload_offset, packet.as_mut_vec())?;
+    packet.bytes.truncate(payload_offset + encrypted_len);
 
-    apply_header_protection(announce, &mut packet)?;
-    Ok(packet)
+    apply_header_protection(announce, packet.as_mut_slice())?;
+    Ok(packet.into_vec())
 }
 
 fn parse_channel_packet_metadata(
@@ -1001,8 +1513,12 @@ fn parse_channel_packet_metadata(
     protected_packet: &[u8],
     largest_observed_packet_number: u64,
 ) -> Res<ParsedChannelPacket> {
-    let mut packet = protected_packet.to_vec();
-    let header = decrypt_channel_header(announce, &mut packet, largest_observed_packet_number)?;
+    let mut packet = ErasingBuffer::from(protected_packet.to_vec());
+    let header = decrypt_channel_header(
+        announce,
+        packet.as_mut_slice(),
+        largest_observed_packet_number,
+    )?;
     Ok(ParsedChannelPacket {
         packet_number: header.packet_number,
         key_phase: header.key_phase,
@@ -1020,8 +1536,12 @@ fn decrypt_channel_packet(
         return Err(Error::FrameEncoding);
     }
 
-    let mut packet = protected_packet.to_vec();
-    let header = decrypt_channel_header(announce, &mut packet, largest_observed_packet_number)?;
+    let mut packet = ErasingBuffer::from(protected_packet.to_vec());
+    let header = decrypt_channel_header(
+        announce,
+        packet.as_mut_slice(),
+        largest_observed_packet_number,
+    )?;
     if header.packet_number != packet_number {
         return Err(Error::InvalidPacket);
     }
@@ -1033,7 +1553,7 @@ fn decrypt_channel_packet(
         CryptoDxDirection::Read,
         key.from_packet_number,
     )?;
-    let plaintext_len = open.decrypt(packet_number, 0..header.header_end, &mut packet)?;
+    let plaintext_len = open.decrypt(packet_number, 0..header.header_end, packet.as_mut_vec())?;
     if plaintext_len == 0 {
         return Err(Error::InvalidPacket);
     }
@@ -1042,7 +1562,10 @@ fn decrypt_channel_packet(
         .header_end
         .checked_add(plaintext_len)
         .ok_or(Error::IntegerOverflow)?;
-    let frames = decode_channel_frames(announce, &packet[header.header_end..plaintext_end])?;
+    let frames = decode_channel_frames(
+        announce,
+        &packet.as_slice()[header.header_end..plaintext_end],
+    )?;
 
     Ok(ChannelPacket {
         channel_id: announce.channel_id.clone(),
@@ -1087,9 +1610,9 @@ fn decrypt_channel_header(
 
     let sample = <[u8; HP_SAMPLE_SIZE]>::try_from(&packet[sample_offset..sample_end])?;
     let header_open = header_crypto_state(announce)?;
-    let mask = header_open.compute_mask(&sample)?;
+    let mask = ErasingArray(header_open.compute_mask(&sample)?);
 
-    let first = packet[0] ^ (mask[0] & SHORT_HEADER_HP_MASK);
+    let first = packet[0] ^ (mask.0[0] & SHORT_HEADER_HP_MASK);
     if first & SHORT_HEADER_FORM_BIT != 0 || first & SHORT_HEADER_FIXED_BIT == 0 {
         return Err(Error::InvalidPacket);
     }
@@ -1105,7 +1628,7 @@ fn decrypt_channel_header(
     let mut truncated_packet_number = 0;
     for idx in 0..packet_number_len {
         let packet_number_byte = packet_number_offset + idx;
-        packet[packet_number_byte] ^= mask[1 + idx];
+        packet[packet_number_byte] ^= mask.0[1 + idx];
         truncated_packet_number =
             (truncated_packet_number << 8) | u64::from(packet[packet_number_byte]);
     }
@@ -1138,11 +1661,11 @@ fn apply_header_protection(announce: &Announce, packet: &mut [u8]) -> Res<()> {
 
     let sample = <[u8; HP_SAMPLE_SIZE]>::try_from(&packet[sample_offset..sample_end])?;
     let header_open = header_crypto_state(announce)?;
-    let mask = header_open.compute_mask(&sample)?;
+    let mask = ErasingArray(header_open.compute_mask(&sample)?);
 
-    packet[0] ^= mask[0] & SHORT_HEADER_HP_MASK;
+    packet[0] ^= mask.0[0] & SHORT_HEADER_HP_MASK;
     for idx in 0..PACKET_NUMBER_LEN {
-        packet[packet_number_offset + idx] ^= mask[1 + idx];
+        packet[packet_number_offset + idx] ^= mask.0[1 + idx];
     }
     Ok(())
 }
@@ -1156,7 +1679,7 @@ fn encode_packet_number(
         return Err(Error::FrameEncoding);
     }
     for shift in (0..packet_number_len).rev() {
-        out.push(u8::try_from(packet_number >> (shift * 8) & 0xff)?);
+        out.push(u8::try_from((packet_number >> (shift * 8)) & 0xff)?);
     }
     Ok(())
 }
@@ -1313,11 +1836,11 @@ fn validate_channel_stream_id(stream_id: u64) -> Res<()> {
     if stream_id.is_uni() && stream_id.is_server_initiated() {
         Ok(())
     } else {
-        Err(Error::FrameEncoding)
+        Err(Error::McquicOwnershipViolation)
     }
 }
 
-fn validate_channel_control_frame(frame: &Frame) -> Res<()> {
+const fn validate_channel_control_frame(frame: &Frame) -> Res<()> {
     match frame {
         Frame::Key(_) | Frame::Leave(_) | Frame::Integrity(_) | Frame::Retire(_) => Ok(()),
         _ => Err(Error::FrameEncoding),
@@ -1350,7 +1873,7 @@ fn crypto_state_from_secret(
     )
 }
 
-fn cipher_from_id(id: u16) -> Res<Cipher> {
+const fn cipher_from_id(id: u16) -> Res<Cipher> {
     match id {
         0x1301 => Ok(TLS_AES_128_GCM_SHA256),
         0x1302 => Ok(TLS_AES_256_GCM_SHA384),
@@ -1405,24 +1928,10 @@ impl Frame {
         integrity_hash_len: Option<usize>,
     ) -> Res<Self> {
         let frame = match frame_type {
-            FRAME_TYPE_ANNOUNCE_V4 | FRAME_TYPE_ANNOUNCE_V6 => Self::Announce(Announce {
-                channel_id: decode_channel_id(dec)?,
-                source: decode_ip_addr(dec, frame_type)?,
-                group: decode_ip_addr(dec, frame_type)?,
-                udp_port: decode_uint(dec)?,
-                header_protection_algorithm: decode_uint(dec)?,
-                header_secret: decode_vvec(dec)?,
-                aead_algorithm: decode_uint(dec)?,
-                integrity_hash_algorithm: decode_uint(dec)?,
-                max_rate_kibps: decode_varint(dec)?,
-                max_ack_delay_ms: decode_varint(dec)?,
-            }),
-            FRAME_TYPE_KEY => Self::Key(Key {
-                channel_id: decode_channel_id(dec)?,
-                key_sequence: decode_varint(dec)?,
-                from_packet_number: decode_varint(dec)?,
-                secret: decode_vvec(dec)?,
-            }),
+            FRAME_TYPE_ANNOUNCE_V4 | FRAME_TYPE_ANNOUNCE_V6 => {
+                Self::Announce(decode_announce(frame_type, dec)?)
+            }
+            FRAME_TYPE_KEY => Self::Key(decode_key(dec)?),
             FRAME_TYPE_JOIN => Self::Join(Join {
                 channel_id: decode_channel_id(dec)?,
                 mc_limits_sequence: decode_varint(dec)?,
@@ -1560,10 +2069,22 @@ impl Frame {
     /// # Errors
     ///
     /// Returns an error if this frame contains invalid values.
+    /// Secret-bearing frames place their wire encoding in the returned vector;
+    /// callers that retain it are responsible for erasing it after use.
     pub fn to_vec(&self) -> Res<Vec<u8>> {
-        let mut enc = Encoder::default();
+        let mut encoded = ErasingBuffer::default();
+        {
+            let mut enc = Encoder::new_borrowed_vec(encoded.as_mut_vec());
+            self.encode(&mut enc)?;
+        }
+        Ok(encoded.into_vec())
+    }
+
+    pub(crate) fn encoded_len_erasing(&self) -> Res<usize> {
+        let mut encoded = ErasingBuffer::default();
+        let mut enc = Encoder::new_borrowed_vec(encoded.as_mut_vec());
         self.encode(&mut enc)?;
-        Ok(enc.as_ref().to_vec())
+        Ok(enc.len())
     }
 
     /// Decode a multicast frame from bytes.
@@ -1585,7 +2106,7 @@ impl Frame {
     /// # Errors
     ///
     /// Returns an error if the frame cannot select a valid wire type.
-    pub fn frame_type(&self) -> Res<u64> {
+    pub const fn frame_type(&self) -> Res<u64> {
         Ok(match self {
             Self::Announce(frame) => match (&frame.source, &frame.group) {
                 (IpAddr::V4(_), IpAddr::V4(_)) => FRAME_TYPE_ANNOUNCE_V4,
@@ -1617,7 +2138,6 @@ impl Frame {
             },
         })
     }
-
     /// Return which endpoint is allowed to send this frame.
     #[must_use]
     pub const fn sender(&self) -> Sender {
@@ -1637,7 +2157,6 @@ impl Frame {
     pub const fn ack_eliciting(&self) -> bool {
         !matches!(self, Self::Ack(_))
     }
-
     /// Whether this frame should be retransmitted on loss.
     #[must_use]
     pub const fn retransmit_on_loss(&self) -> bool {
@@ -1665,7 +2184,6 @@ pub enum Sender {
     /// Server-to-client frame.
     Server,
 }
-
 /// Tracks cumulative multicast packet acknowledgments for one channel.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct AckTracker {
@@ -1682,13 +2200,6 @@ impl AckTracker {
     /// Record a validated multicast packet number.
     pub fn record_packet(&mut self, packet_number: u64) {
         self.record_packet_inner(packet_number);
-    }
-
-    #[cfg(test)]
-    fn record_packet_at(&mut self, packet_number: u64, now: Instant) {
-        if self.record_packet_inner(packet_number) {
-            self.note_pending_at(now);
-        }
     }
 
     fn record_packet_inner(&mut self, packet_number: u64) -> bool {
@@ -1777,10 +2288,12 @@ impl AckTracker {
             .iter()
             .rev()
         {
-            let gap = smallest_ack
+            let Some(gap) = smallest_ack
                 .checked_sub(span.end)
                 .and_then(|delta| delta.checked_sub(2))
-                .expect("ack spans are ordered and disjoint");
+            else {
+                unreachable!("ack spans are ordered and disjoint");
+            };
             ack_ranges.push(AckRange {
                 gap,
                 ack_range_length: span.end - span.start,
@@ -1807,11 +2320,11 @@ impl AckTracker {
         self.sent_once = true;
     }
 
-    fn is_retired(&self, packet_number: u64) -> bool {
+    const fn is_retired(&self, packet_number: u64) -> bool {
         packet_number < self.retired_before
     }
 
-    fn retired_before(&self) -> u64 {
+    const fn retired_before(&self) -> u64 {
         self.retired_before
     }
 
@@ -1842,7 +2355,6 @@ struct AckSpan {
     start: u64,
     end: u64,
 }
-
 /// Returns whether `frame_type` is an MCQUIC frame type.
 #[must_use]
 pub const fn is_frame_type(frame_type: u64) -> bool {
@@ -1862,6 +2374,46 @@ pub const fn is_frame_type(frame_type: u64) -> bool {
             | FRAME_TYPE_ANNOUNCE_V4
             | FRAME_TYPE_ANNOUNCE_V6
     )
+}
+
+fn decode_announce(frame_type: u64, dec: &mut Decoder) -> Res<Announce> {
+    let channel_id = decode_channel_id(dec)?;
+    let source = decode_ip_addr(dec, frame_type)?;
+    let group = decode_ip_addr(dec, frame_type)?;
+    let udp_port = decode_uint(dec)?;
+    let header_protection_algorithm = decode_uint(dec)?;
+    let header_secret = ErasingBuffer::from(decode_vvec(dec)?);
+    let aead_algorithm = decode_uint(dec)?;
+    let integrity_hash_algorithm = decode_uint(dec)?;
+    let max_rate_kibps = decode_varint(dec)?;
+    let max_ack_delay_ms = decode_varint(dec)?;
+
+    Ok(Announce {
+        channel_id,
+        source,
+        group,
+        udp_port,
+        header_protection_algorithm,
+        header_secret: header_secret.into_vec().into(),
+        aead_algorithm,
+        integrity_hash_algorithm,
+        max_rate_kibps,
+        max_ack_delay_ms,
+    })
+}
+
+fn decode_key(dec: &mut Decoder) -> Res<Key> {
+    let channel_id = decode_channel_id(dec)?;
+    let key_sequence = decode_varint(dec)?;
+    let from_packet_number = decode_varint(dec)?;
+    let secret = ErasingBuffer::from(decode_vvec(dec)?);
+
+    Ok(Key {
+        channel_id,
+        key_sequence,
+        from_packet_number,
+        secret: secret.into_vec().into(),
+    })
 }
 
 fn decode_ack(frame_type: u64, dec: &mut Decoder) -> Res<Frame> {
@@ -1950,7 +2502,7 @@ enum IntegrityHashAlgorithm {
 }
 
 impl IntegrityHashAlgorithm {
-    fn from_id(id: u16) -> Res<Self> {
+    const fn from_id(id: u16) -> Res<Self> {
         match id {
             1 => Ok(Self::Sha256 { output_len: 32 }),
             2 => Ok(Self::Sha256 { output_len: 16 }),
@@ -1992,14 +2544,13 @@ impl IntegrityHashAlgorithm {
 pub fn integrity_hash_len_from_id(id: u16) -> Res<usize> {
     Ok(IntegrityHashAlgorithm::from_id(id)?.output_len())
 }
-
 /// Return whether a draft encryption algorithm ID is supported.
 #[must_use]
 pub const fn encryption_algorithm_supported(id: u16) -> bool {
-    matches!(id, 0x1301 | 0x1302 | 0x1303)
+    matches!(id, 0x1301..=0x1303)
 }
 
-fn validate_encryption_algorithm(id: u16) -> Res<()> {
+const fn validate_encryption_algorithm(id: u16) -> Res<()> {
     if encryption_algorithm_supported(id) {
         Ok(())
     } else {
@@ -2025,7 +2576,7 @@ fn encode_channel_id<B: Buffer>(enc: &mut Encoder<B>, channel_id: &[u8]) -> Res<
     Ok(())
 }
 
-fn validate_channel_id(channel_id: &[u8]) -> Res<()> {
+const fn validate_channel_id(channel_id: &[u8]) -> Res<()> {
     if channel_id.is_empty() || channel_id.len() > ConnectionId::MAX_LEN {
         return Err(Error::FrameEncoding);
     }
@@ -2036,9 +2587,9 @@ fn decode_ip_addr(dec: &mut Decoder, frame_type: u64) -> Res<IpAddr> {
     match frame_type {
         FRAME_TYPE_ANNOUNCE_V4 => {
             let addr = dec.decode(4).ok_or(Error::NoMoreData)?;
-            Ok(IpAddr::V4(Ipv4Addr::new(
-                addr[0], addr[1], addr[2], addr[3],
-            )))
+            let mut octets = [0; 4];
+            octets.copy_from_slice(addr);
+            Ok(IpAddr::V4(Ipv4Addr::from(octets)))
         }
         FRAME_TYPE_ANNOUNCE_V6 => {
             let addr = dec.decode(16).ok_or(Error::NoMoreData)?;
@@ -2090,7 +2641,7 @@ fn encode_u16_list<B: Buffer>(enc: &mut Encoder<B>, values: &[u16]) {
     }
 }
 
-fn validate_state_reason(state: ChannelState, reason_code: u64) -> Res<()> {
+const fn validate_state_reason(state: ChannelState, reason_code: u64) -> Res<()> {
     match state {
         ChannelState::Joined | ChannelState::Retired
             if reason_code != STATE_REASON_REQUESTED_BY_SERVER =>
@@ -2119,7 +2670,6 @@ where
 fn usize_to_u64(value: usize) -> u64 {
     u64::try_from(value).expect("usize fits in u64 on supported targets")
 }
-
 #[cfg(test)]
 mod tests {
     use test_fixture::fixture_init;
@@ -2135,7 +2685,6 @@ mod tests {
     fn channel_id() -> Vec<u8> {
         b"channel-1".to_vec()
     }
-
     #[test]
     fn client_transport_params_roundtrip() {
         let params = ClientTransportParams {
@@ -2177,6 +2726,283 @@ mod tests {
         );
     }
 
+    fn assert_revision_08_frame_vector(frame: Frame, expected: &[u8]) {
+        assert_eq!(frame.to_vec().expect("encode revision -08 frame"), expected);
+        assert_eq!(
+            Frame::from_slice(expected).expect("decode revision -08 frame"),
+            frame
+        );
+    }
+
+    #[test]
+    fn revision_08_golden_vectors() {
+        let params = ClientTransportParams {
+            limits: ClientLimits {
+                ipv4_channels_allowed: true,
+                ipv6_channels_allowed: false,
+                max_aggregate_rate_kibps: 100_000,
+                max_channel_ids: 32,
+            },
+            hash_algorithms: vec![1, 2, 8],
+            encryption_algorithms: vec![0x1301, 0x1303],
+        };
+        let params_wire = [
+            0x01, 0x80, 0x01, 0x86, 0xa0, 0x20, 0x03, 0x02, 0x00, 0x01, 0x00, 0x02, 0x00, 0x08,
+            0x13, 0x01, 0x13, 0x03,
+        ];
+        assert_eq!(params.to_vec(), params_wire);
+        assert_eq!(
+            ClientTransportParams::from_slice(&params_wire)
+                .expect("decode revision -08 transport parameters"),
+            params
+        );
+
+        assert_revision_08_frame_vector(
+            Frame::Announce(Announce {
+                channel_id: channel_id(),
+                source: IpAddr::V4(Ipv4Addr::new(192, 0, 2, 1)),
+                group: IpAddr::V4(Ipv4Addr::new(233, 252, 0, 1)),
+                udp_port: 4433,
+                header_protection_algorithm: 0x1301,
+                header_secret: vec![1, 2, 3, 4].into(),
+                aead_algorithm: 0x1301,
+                integrity_hash_algorithm: 1,
+                max_rate_kibps: 10_000,
+                max_ack_delay_ms: 25,
+            }),
+            &[
+                0x8f, 0xf3, 0xe8, 0x11, 0x09, 0x63, 0x68, 0x61, 0x6e, 0x6e, 0x65, 0x6c, 0x2d, 0x31,
+                0xc0, 0x00, 0x02, 0x01, 0xe9, 0xfc, 0x00, 0x01, 0x11, 0x51, 0x13, 0x01, 0x04, 0x01,
+                0x02, 0x03, 0x04, 0x13, 0x01, 0x00, 0x01, 0x67, 0x10, 0x19,
+            ],
+        );
+        assert_revision_08_frame_vector(
+            Frame::Announce(Announce {
+                channel_id: channel_id(),
+                source: IpAddr::V6(Ipv6Addr::LOCALHOST),
+                group: IpAddr::V6("ff02::1".parse().expect("IPv6 multicast group")),
+                udp_port: 4433,
+                header_protection_algorithm: 0x1301,
+                header_secret: vec![1, 2, 3, 4].into(),
+                aead_algorithm: 0x1301,
+                integrity_hash_algorithm: 1,
+                max_rate_kibps: 10_000,
+                max_ack_delay_ms: 25,
+            }),
+            &[
+                0x8f, 0xf3, 0xe8, 0x12, 0x09, 0x63, 0x68, 0x61, 0x6e, 0x6e, 0x65, 0x6c, 0x2d, 0x31,
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x01, 0xff, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x01, 0x11, 0x51, 0x13, 0x01, 0x04, 0x01, 0x02, 0x03, 0x04, 0x13,
+                0x01, 0x00, 0x01, 0x67, 0x10, 0x19,
+            ],
+        );
+        let mut key_wire = vec![
+            0x8f, 0xf3, 0xe8, 0x01, 0x09, 0x63, 0x68, 0x61, 0x6e, 0x6e, 0x65, 0x6c, 0x2d, 0x31,
+            0x07, 0x09, 0x20,
+        ];
+        key_wire.extend_from_slice(&[0xaa; 32]);
+        assert_revision_08_frame_vector(
+            Frame::Key(Key {
+                channel_id: channel_id(),
+                key_sequence: 7,
+                from_packet_number: 9,
+                secret: vec![0xaa; 32].into(),
+            }),
+            &key_wire,
+        );
+        assert_revision_08_frame_vector(
+            Frame::Join(Join {
+                channel_id: channel_id(),
+                mc_limits_sequence: 1,
+                mc_state_sequence: 2,
+                mc_key_sequence: 3,
+            }),
+            &[
+                0x8f, 0xf3, 0xe8, 0x02, 0x09, 0x63, 0x68, 0x61, 0x6e, 0x6e, 0x65, 0x6c, 0x2d, 0x31,
+                0x01, 0x02, 0x03,
+            ],
+        );
+        assert_revision_08_frame_vector(
+            Frame::Leave(Leave {
+                channel_id: channel_id(),
+                mc_state_sequence: 3,
+                after_packet_number: 100,
+            }),
+            &[
+                0x8f, 0xf3, 0xe8, 0x03, 0x09, 0x63, 0x68, 0x61, 0x6e, 0x6e, 0x65, 0x6c, 0x2d, 0x31,
+                0x03, 0x40, 0x64,
+            ],
+        );
+        assert_revision_08_frame_vector(
+            Frame::Integrity(Integrity {
+                channel_id: channel_id(),
+                packet_number_start: 42,
+                packet_hash_count: None,
+                packet_hashes: vec![0xbb; 16],
+            }),
+            &[
+                0x8f, 0xf3, 0xe8, 0x04, 0x09, 0x63, 0x68, 0x61, 0x6e, 0x6e, 0x65, 0x6c, 0x2d, 0x31,
+                0x2a, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb,
+                0xbb, 0xbb, 0xbb,
+            ],
+        );
+        assert_revision_08_frame_vector(
+            Frame::Integrity(Integrity {
+                channel_id: channel_id(),
+                packet_number_start: 42,
+                packet_hash_count: Some(2),
+                packet_hashes: vec![0xbb; 16],
+            }),
+            &[
+                0x8f, 0xf3, 0xe8, 0x05, 0x09, 0x63, 0x68, 0x61, 0x6e, 0x6e, 0x65, 0x6c, 0x2d, 0x31,
+                0x2a, 0x02, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb,
+                0xbb, 0xbb, 0xbb, 0xbb,
+            ],
+        );
+        assert_revision_08_frame_vector(
+            Frame::Ack(Ack {
+                channel_id: channel_id(),
+                largest_acknowledged: 10,
+                ack_delay: 0,
+                first_ack_range: 3,
+                ack_ranges: vec![AckRange {
+                    gap: 1,
+                    ack_range_length: 2,
+                }],
+                ecn_counts: None,
+            }),
+            &[
+                0x8f, 0xf3, 0xe8, 0x06, 0x09, 0x63, 0x68, 0x61, 0x6e, 0x6e, 0x65, 0x6c, 0x2d, 0x31,
+                0x0a, 0x00, 0x01, 0x03, 0x01, 0x02,
+            ],
+        );
+        assert_revision_08_frame_vector(
+            Frame::Ack(Ack {
+                channel_id: channel_id(),
+                largest_acknowledged: 10,
+                ack_delay: 0,
+                first_ack_range: 3,
+                ack_ranges: vec![],
+                ecn_counts: Some(AckEcnCounts {
+                    ect0_count: 1,
+                    ect1_count: 2,
+                    ecn_ce_count: 3,
+                }),
+            }),
+            &[
+                0x8f, 0xf3, 0xe8, 0x07, 0x09, 0x63, 0x68, 0x61, 0x6e, 0x6e, 0x65, 0x6c, 0x2d, 0x31,
+                0x0a, 0x00, 0x00, 0x03, 0x01, 0x02, 0x03,
+            ],
+        );
+        assert_revision_08_frame_vector(
+            Frame::Limits(Limits {
+                sequence: 1,
+                limits: ClientLimits {
+                    ipv4_channels_allowed: true,
+                    ipv6_channels_allowed: true,
+                    max_aggregate_rate_kibps: 20_000,
+                    max_channel_ids: 8,
+                },
+                max_joined_count: 4,
+            }),
+            &[
+                0x8f, 0xf3, 0xe8, 0x09, 0x01, 0x03, 0x80, 0x00, 0x4e, 0x20, 0x08, 0x04,
+            ],
+        );
+        assert_revision_08_frame_vector(
+            Frame::Retire(Retire {
+                channel_id: channel_id(),
+                after_packet_number: 100,
+            }),
+            &[
+                0x8f, 0xf3, 0xe8, 0x0a, 0x09, 0x63, 0x68, 0x61, 0x6e, 0x6e, 0x65, 0x6c, 0x2d, 0x31,
+                0x40, 0x64,
+            ],
+        );
+        assert_revision_08_frame_vector(
+            Frame::State(State {
+                channel_id: channel_id(),
+                sequence: 1,
+                state: ChannelState::DeclinedJoin,
+                reason_scope: StateReasonScope::Application,
+                reason_code: 404,
+                reason_phrase: b"not found".to_vec(),
+            }),
+            &[
+                0x8f, 0xf3, 0xe8, 0x0c, 0x09, 0x63, 0x68, 0x61, 0x6e, 0x6e, 0x65, 0x6c, 0x2d, 0x31,
+                0x01, 0x02, 0x41, 0x94, 0x09, 0x6e, 0x6f, 0x74, 0x20, 0x66, 0x6f, 0x75, 0x6e, 0x64,
+            ],
+        );
+        assert_revision_08_frame_vector(
+            Frame::State(State {
+                channel_id: channel_id(),
+                sequence: 2,
+                state: ChannelState::Joined,
+                reason_scope: StateReasonScope::Transport,
+                reason_code: STATE_REASON_REQUESTED_BY_SERVER,
+                reason_phrase: b"joined".to_vec(),
+            }),
+            &[
+                0x8f, 0xf3, 0xe8, 0x0b, 0x09, 0x63, 0x68, 0x61, 0x6e, 0x6e, 0x65, 0x6c, 0x2d, 0x31,
+                0x02, 0x03, 0x01, 0x06, 0x6a, 0x6f, 0x69, 0x6e, 0x65, 0x64,
+            ],
+        );
+    }
+
+    #[test]
+    fn revision_08_protected_stream_and_reset_golden_vector() {
+        let announcement = announce();
+        let traffic_key = Key {
+            channel_id: channel_id(),
+            key_sequence: 1,
+            from_packet_number: 0,
+            secret: vec![0x22; 32].into(),
+        };
+        let frames = vec![
+            ChannelFrame::Stream {
+                stream_id: 3,
+                offset: 10,
+                fin: false,
+                data: b"body".to_vec(),
+            },
+            ChannelFrame::ResetStream {
+                stream_id: 7,
+                error_code: 0x42,
+                final_size: 12,
+            },
+        ];
+        let mut sender =
+            ChannelSendState::new(announcement.clone(), traffic_key.clone()).expect("send state");
+        let mut out = vec![0; 1200];
+        let sent = sender
+            .write_packet(&frames, &mut out)
+            .expect("encode protected STREAM and RESET_STREAM");
+        let protected = &out[..sent.packet_len];
+        assert_eq!(
+            protected,
+            &[
+                0x5c, 0x63, 0x68, 0x61, 0x6e, 0x6e, 0x65, 0x6c, 0x2d, 0x31, 0x53, 0x39, 0xa7, 0xd6,
+                0x7c, 0xd9, 0xf8, 0x1a, 0xb4, 0x12, 0x36, 0x27, 0x89, 0x13, 0x52, 0x29, 0xc3, 0x98,
+                0x5f, 0x19, 0x95, 0xf8, 0xb8, 0xd0, 0x29, 0xe0, 0x2a, 0x2c, 0xdf, 0x70, 0x30, 0xbc,
+                0x7a,
+            ]
+        );
+
+        let mut receiver = ChannelReceiveState::new(announcement).expect("receive state");
+        receiver
+            .insert_key_for_connection(traffic_key, Instant::now())
+            .expect("insert traffic key");
+        receiver
+            .insert_integrity_for_connection(&sent.integrity, Instant::now())
+            .expect("insert integrity");
+        let released = receiver
+            .process_protected_packet_for_connection(protected, Instant::now())
+            .expect("authenticate protected vector");
+        assert_eq!(released.len(), 1);
+        assert_eq!(released[0].frames, frames);
+    }
+
     #[test]
     fn frame_roundtrips() {
         roundtrip(Frame::Announce(Announce {
@@ -2185,7 +3011,7 @@ mod tests {
             group: IpAddr::V4(Ipv4Addr::new(233, 252, 0, 1)),
             udp_port: 4433,
             header_protection_algorithm: 0x1301,
-            header_secret: vec![1, 2, 3, 4],
+            header_secret: vec![1, 2, 3, 4].into(),
             aead_algorithm: 0x1301,
             integrity_hash_algorithm: 1,
             max_rate_kibps: 10_000,
@@ -2197,7 +3023,7 @@ mod tests {
             group: IpAddr::V6(Ipv6Addr::new(0xff3e, 0, 0, 0, 0, 0, 0, 1)),
             udp_port: 4433,
             header_protection_algorithm: 0x1301,
-            header_secret: vec![1, 2, 3, 4],
+            header_secret: vec![1, 2, 3, 4].into(),
             aead_algorithm: 0x1301,
             integrity_hash_algorithm: 1,
             max_rate_kibps: 10_000,
@@ -2207,7 +3033,7 @@ mod tests {
             channel_id: channel_id(),
             key_sequence: 7,
             from_packet_number: 9,
-            secret: vec![0xaa; 32],
+            secret: vec![0xaa; 32].into(),
         }));
         roundtrip(Frame::Join(Join {
             channel_id: channel_id(),
@@ -2293,7 +3119,7 @@ mod tests {
             channel_id: vec![],
             key_sequence: 0,
             from_packet_number: 0,
-            secret: vec![],
+            secret: vec![].into(),
         });
         assert_eq!(frame.to_vec().unwrap_err(), Error::FrameEncoding);
     }
@@ -2307,7 +3133,7 @@ mod tests {
                 group: IpAddr::V4(Ipv4Addr::new(224, 0, 0, 1)),
                 udp_port: 4433,
                 header_protection_algorithm: 0x1301,
-                header_secret: vec![],
+                header_secret: vec![].into(),
                 aead_algorithm: 0x1301,
                 integrity_hash_algorithm: 1,
                 max_rate_kibps: 1,
@@ -2347,6 +3173,71 @@ mod tests {
 
         tracker.mark_sent();
         assert!(tracker.pending_ack(b"ch").is_none());
+    }
+
+    #[test]
+    fn ack_range_decode_and_tracker_bounds_are_exact() {
+        let ranges_at_cap = vec![
+            AckRange {
+                gap: 0,
+                ack_range_length: 0,
+            };
+            usize::try_from(MAX_ACK_RANGE_COUNT).expect("ACK range cap")
+        ];
+        let at_cap = Frame::Ack(Ack {
+            channel_id: channel_id(),
+            largest_acknowledged: MAX_ACK_RANGE_COUNT * 2,
+            ack_delay: 0,
+            first_ack_range: 0,
+            ack_ranges: ranges_at_cap,
+            ecn_counts: None,
+        });
+        let encoded = at_cap.to_vec().expect("encode ACK at range cap");
+        assert_eq!(
+            Frame::from_slice(&encoded).expect("decode ACK at range cap"),
+            at_cap
+        );
+
+        let over_cap = Frame::Ack(Ack {
+            channel_id: channel_id(),
+            largest_acknowledged: (MAX_ACK_RANGE_COUNT + 1) * 2,
+            ack_delay: 0,
+            first_ack_range: 0,
+            ack_ranges: vec![
+                AckRange {
+                    gap: 0,
+                    ack_range_length: 0,
+                };
+                usize::try_from(MAX_ACK_RANGE_COUNT + 1).expect("ACK range cap + 1")
+            ],
+            ecn_counts: None,
+        })
+        .to_vec()
+        .expect("encode ACK over range cap");
+        assert_eq!(Frame::from_slice(&over_cap), Err(Error::TooMuchData));
+
+        let mut tracker = AckTracker::default();
+        for packet_number in (0..MAX_TRACKED_ACK_RANGES * 2)
+            .map(|index| u64::try_from(index * 2).expect("tracked ACK packet number"))
+        {
+            tracker.record_packet(packet_number);
+        }
+        assert_eq!(tracker.ranges.len(), MAX_TRACKED_ACK_RANGES);
+        assert_eq!(
+            tracker
+                .pending_ack(b"bounded")
+                .expect("bounded ACK")
+                .ack_ranges
+                .len(),
+            MAX_TRACKED_ACK_RANGES - 1
+        );
+
+        tracker.record_packet(ACK_HISTORY_PACKET_WINDOW * 4);
+        let retired_before = tracker.retired_before();
+        assert!(retired_before > 0);
+        let ranges = tracker.ranges.clone();
+        tracker.record_packet(retired_before - 1);
+        assert_eq!(tracker.ranges, ranges);
     }
 
     #[test]
@@ -2406,12 +3297,625 @@ mod tests {
             group: IpAddr::V4(Ipv4Addr::new(233, 252, 0, 1)),
             udp_port: 4433,
             header_protection_algorithm: 0x1301,
-            header_secret: vec![0x11; 32],
+            header_secret: vec![0x11; 32].into(),
             aead_algorithm: 0x1301,
             integrity_hash_algorithm: 1,
             max_rate_kibps: 10_000,
             max_ack_delay_ms: 25,
         }
+    }
+
+    fn key(sequence: u64, from_packet_number: u64) -> Key {
+        Key {
+            channel_id: channel_id(),
+            key_sequence: sequence,
+            from_packet_number,
+            secret: vec![u8::try_from(sequence).unwrap_or(0xaa); 32].into(),
+        }
+    }
+
+    fn assert_erased(erasures: &[SecretErasure]) {
+        assert!(!erasures.is_empty(), "expected at least one secret erasure");
+        assert!(
+            erasures.iter().all(|erasure| erasure.all_zero),
+            "every recorded secret allocation must be zeroed: {erasures:?}"
+        );
+    }
+
+    #[test]
+    fn secret_debug_output_is_redacted() {
+        let announce = announce();
+        let key = Key {
+            channel_id: channel_id(),
+            key_sequence: 7,
+            from_packet_number: 9,
+            secret: vec![0xde, 0xad, 0xbe, 0xef].into(),
+        };
+        let send_state = ChannelSendState::new(announce.clone(), key.clone()).expect("send state");
+        let mut receive_state = ChannelReceiveState::new(announce.clone()).expect("receive state");
+        receive_state
+            .insert_key_for_connection(key.clone(), Instant::now())
+            .expect("receive key");
+
+        let announce_debug = format!("{announce:?}");
+        let key_debug = format!("{key:?}");
+        let nested_debug = format!(
+            "{:?}",
+            (
+                Frame::Announce(announce.clone()),
+                Frame::Key(key.clone()),
+                ChannelFrame::Multicast(Frame::Key(key.clone())),
+                send_state,
+                receive_state,
+                ErasingBuffer::from(vec![0xde, 0xad, 0xbe, 0xef]),
+            )
+        );
+        for output in [&announce_debug, &key_debug, &nested_debug] {
+            assert!(output.contains("<redacted>"));
+            assert!(!output.contains("[17, 17"));
+            assert!(!output.contains("[222, 173, 190, 239]"));
+            assert!(!output.contains("deadbeef"));
+        }
+    }
+
+    #[test]
+    fn secret_erasure_overwrites_full_vector_capacity() {
+        take_secret_erasures();
+        let mut secret = Vec::with_capacity(64);
+        secret.extend_from_slice(&[0xde, 0xad, 0xbe, 0xef]);
+        erase_secret_vec(&mut secret);
+
+        assert!(secret.is_empty());
+        assert_eq!(secret.capacity(), 64);
+        // SAFETY: `erase_secret_vec` initializes and zeroes the vector's entire
+        // allocation, including its spare capacity.
+        let allocation = unsafe { std::slice::from_raw_parts(secret.as_ptr(), secret.capacity()) };
+        assert!(allocation.iter().all(|byte| *byte == 0));
+        assert_eq!(
+            take_secret_erasures(),
+            vec![SecretErasure {
+                initialized_len: 4,
+                capacity: 64,
+                all_zero: true,
+            }]
+        );
+    }
+
+    #[test]
+    fn private_buffer_erases_on_success_and_error_paths() {
+        take_secret_erasures();
+        {
+            let mut secret = ErasingBuffer::with_capacity(64);
+            secret.bytes.extend_from_slice(&[0xde, 0xad, 0xbe, 0xef]);
+        }
+        let erasures = take_secret_erasures();
+        assert_erased(&erasures);
+        assert_eq!(erasures[0].initialized_len, 4);
+        assert_eq!(erasures[0].capacity, 64);
+
+        let invalid_frames = [
+            ChannelFrame::Ping,
+            ChannelFrame::Stream {
+                stream_id: 0,
+                offset: 0,
+                fin: false,
+                data: vec![0x55; 4],
+            },
+        ];
+        take_secret_erasures();
+        assert_eq!(
+            encode_protected_channel_packet(&announce(), &key(0, 0), 0, false, &invalid_frames)
+                .unwrap_err(),
+            Error::McquicOwnershipViolation
+        );
+        let erasures = take_secret_erasures();
+        assert_erased(&erasures);
+        assert!(
+            erasures.iter().any(|erasure| erasure.initialized_len > 0),
+            "the partially encoded plaintext must be erased"
+        );
+    }
+
+    #[test]
+    fn channel_stream_ids_report_ownership_violations() {
+        assert_eq!(validate_channel_stream_id(3), Ok(()));
+        for stream_id in [0, 1, 2] {
+            assert_eq!(
+                validate_channel_stream_id(stream_id),
+                Err(Error::McquicOwnershipViolation)
+            );
+        }
+    }
+
+    #[test]
+    fn ownership_violation_survives_authentication_delay() {
+        let announcement = announce();
+        let key = key(0, 0);
+        let mut plaintext = Encoder::default();
+        // STREAM with LEN, no OFF or FIN. The regular channel encoder rejects
+        // this client-initiated stream ID; protect raw bytes only for the
+        // adversarial receive test.
+        plaintext
+            .encode_varint(0x0a_u64)
+            .encode_varint(2_u64)
+            .encode_varint(1_u64)
+            .encode_byte(0x55);
+        let packet =
+            protect_channel_payload(&announcement, &key, 0, false, plaintext.as_ref()).unwrap();
+        let integrity = Integrity {
+            channel_id: channel_id(),
+            packet_number_start: 0,
+            packet_hash_count: Some(1),
+            packet_hashes: IntegrityHashAlgorithm::from_id(1)
+                .unwrap()
+                .hash(&packet)
+                .unwrap(),
+        };
+        let now = Instant::now();
+
+        let mut immediate = ChannelReceiveState::new(announcement.clone()).unwrap();
+        immediate
+            .insert_key_for_connection(key.clone(), now)
+            .unwrap();
+        immediate
+            .insert_integrity_for_connection(&integrity, now)
+            .unwrap();
+        assert_eq!(
+            immediate.process_protected_packet_for_connection(&packet, now),
+            Err(Error::McquicOwnershipViolation)
+        );
+
+        let mut key_delayed = ChannelReceiveState::new(announcement.clone()).unwrap();
+        key_delayed
+            .insert_integrity_for_connection(&integrity, now)
+            .unwrap();
+        assert!(
+            key_delayed
+                .process_protected_packet_for_connection(&packet, now)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            key_delayed.insert_key_for_connection(key.clone(), now),
+            Err(Error::McquicOwnershipViolation)
+        );
+
+        let mut integrity_delayed = ChannelReceiveState::new(announcement).unwrap();
+        integrity_delayed
+            .insert_key_for_connection(key, now)
+            .unwrap();
+        assert!(
+            integrity_delayed
+                .process_protected_packet_for_connection(&packet, now)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            integrity_delayed.insert_integrity_for_connection(&integrity, now),
+            Err(Error::McquicOwnershipViolation)
+        );
+    }
+
+    #[test]
+    fn replacement_clear_and_drop_erase_persistent_secrets() {
+        let mut sender = ChannelSendState::new(announce(), key(1, 0)).expect("create send state");
+        take_secret_erasures();
+        sender.update_key(key(2, 1)).expect("replace send key");
+        let erasures = take_secret_erasures();
+        assert_erased(&erasures);
+        assert_eq!(erasures.len(), 1, "only the replaced key is erased");
+        assert_eq!(erasures[0].initialized_len, 32);
+
+        let now = Instant::now();
+        let mut receiver = ChannelReceiveState::new(announce()).expect("receive state");
+        receiver
+            .insert_key_for_connection(key(3, 0), now)
+            .expect("insert key");
+        take_secret_erasures();
+        receiver
+            .insert_key_for_connection(key(3, 0), now)
+            .expect("replace equal key");
+        let erasures = take_secret_erasures();
+        assert_erased(&erasures);
+        assert_eq!(erasures.len(), 1, "map replacement erases the old key");
+
+        take_secret_erasures();
+        receiver.keys.clear();
+        let erasures = take_secret_erasures();
+        assert_erased(&erasures);
+        assert_eq!(erasures.len(), 1, "map clear erases the retained key");
+
+        receiver
+            .insert_key_for_connection(key(4, 0), now)
+            .expect("insert key before drop");
+        take_secret_erasures();
+        drop(receiver);
+        let erasures = take_secret_erasures();
+        assert_erased(&erasures);
+        assert_eq!(
+            erasures
+                .iter()
+                .filter(|erasure| erasure.initialized_len == 32)
+                .count(),
+            2,
+            "channel drop erases its announcement and retained key"
+        );
+    }
+
+    #[test]
+    fn malformed_announce_erases_partially_decoded_secret() {
+        let mut encoded = ErasingBuffer::default();
+        {
+            let mut enc = Encoder::new_borrowed_vec(encoded.as_mut_vec());
+            enc.encode_varint(FRAME_TYPE_ANNOUNCE_V4);
+            encode_channel_id(&mut enc, &channel_id()).expect("channel ID");
+            encode_ip_addr(&mut enc, &IpAddr::V4(Ipv4Addr::new(192, 0, 2, 1)));
+            encode_ip_addr(&mut enc, &IpAddr::V4(Ipv4Addr::new(233, 252, 0, 1)));
+            enc.encode_uint(2, 4433_u16)
+                .encode_uint(2, 0x1301_u16)
+                .encode_vvec(&[0xde, 0xad, 0xbe, 0xef]);
+            // Deliberately omit every field after header_secret.
+        }
+
+        take_secret_erasures();
+        assert_eq!(
+            Frame::from_slice(encoded.as_slice()).unwrap_err(),
+            Error::NoMoreData
+        );
+        let erasures = take_secret_erasures();
+        assert_erased(&erasures);
+        assert_eq!(erasures.len(), 1);
+        assert_eq!(erasures[0].initialized_len, 4);
+    }
+
+    #[test]
+    fn temporary_frame_encoding_and_decrypted_packet_are_erased() {
+        let frame = Frame::Key(Key {
+            channel_id: channel_id(),
+            key_sequence: 7,
+            from_packet_number: 9,
+            secret: vec![0xde, 0xad, 0xbe, 0xef].into(),
+        });
+        take_secret_erasures();
+        assert!(frame.encoded_len_erasing().expect("encoded length") > 4);
+        let erasures = take_secret_erasures();
+        assert_erased(&erasures);
+        assert_eq!(erasures.len(), 1);
+
+        let announce = announce();
+        let traffic_key = key(1, 0);
+        let mut sender =
+            ChannelSendState::new(announce.clone(), traffic_key.clone()).expect("send state");
+        let mut receiver = ChannelReceiveState::new(announce).expect("receive state");
+        let now = Instant::now();
+        receiver
+            .insert_key_for_connection(traffic_key, now)
+            .expect("receive key");
+        let mut out = vec![0; 1200];
+        let sent = sender
+            .write_packet(&[ChannelFrame::Multicast(Frame::Key(key(9, 0)))], &mut out)
+            .expect("protected key frame");
+        receiver
+            .insert_integrity_for_connection(&sent.integrity, now)
+            .expect("integrity before packet");
+
+        take_secret_erasures();
+        let packets = receiver
+            .process_protected_packet_for_connection(&out[..sent.packet_len], now)
+            .expect("authenticated packet");
+        let erasures = take_secret_erasures();
+        assert_erased(&erasures);
+        assert_eq!(
+            erasures
+                .iter()
+                .filter(|erasure| erasure.initialized_len == sent.packet_len)
+                .count(),
+            2,
+            "metadata and plaintext packet scratch are both erased"
+        );
+
+        take_secret_erasures();
+        drop(packets);
+        let erasures = take_secret_erasures();
+        assert_erased(&erasures);
+        assert!(
+            erasures.iter().any(|erasure| erasure.initialized_len == 32),
+            "the decoded nested MC_KEY secret must erase on drop"
+        );
+    }
+
+    #[test]
+    fn key_cap_is_exact_and_live_key_does_not_expire() {
+        let start = Instant::now();
+        let mut state = ChannelReceiveState::new(announce()).expect("receive state");
+        for sequence in 0..MAX_CHANNEL_KEYS {
+            state
+                .insert_key_for_connection(
+                    key(u64::try_from(sequence).expect("sequence"), 0),
+                    start,
+                )
+                .expect("key at cap");
+        }
+        assert_eq!(state.resource_usage().keys, MAX_CHANNEL_KEYS);
+        assert_eq!(
+            state
+                .insert_key_for_connection(
+                    key(u64::try_from(MAX_CHANNEL_KEYS).expect("sequence"), 0),
+                    start,
+                )
+                .unwrap_err(),
+            Error::McquicResourceLimit
+        );
+
+        state
+            .prune_expired(start + MAX_KEY_AGE + Duration::from_secs(1))
+            .expect("prune superseded keys");
+        assert_eq!(state.keys.len(), 1);
+        assert!(
+            state
+                .keys
+                .contains_key(&u64::try_from(MAX_CHANNEL_KEYS - 1).expect("sequence"))
+        );
+        assert_eq!(
+            state.next_expiry(),
+            None,
+            "the live key must not keep an already-expired timer armed"
+        );
+    }
+
+    #[test]
+    fn integrity_count_and_byte_caps_are_exact() {
+        let mut high_count = announce();
+        high_count.integrity_hash_algorithm = 1;
+        let mut state = ChannelReceiveState::new(high_count).expect("receive state");
+        state
+            .insert_integrity_for_connection(
+                &Integrity {
+                    channel_id: channel_id(),
+                    packet_number_start: 0,
+                    packet_hash_count: Some(
+                        u64::try_from(MAX_CHANNEL_INTEGRITY_HASHES).expect("count"),
+                    ),
+                    packet_hashes: vec![0x44; MAX_CHANNEL_INTEGRITY_HASHES * 32],
+                },
+                Instant::now(),
+            )
+            .expect("integrity at count cap");
+        assert_eq!(
+            state
+                .insert_integrity_for_connection(
+                    &Integrity {
+                        channel_id: channel_id(),
+                        packet_number_start: u64::try_from(MAX_CHANNEL_INTEGRITY_HASHES)
+                            .expect("start"),
+                        packet_hash_count: Some(1),
+                        packet_hashes: vec![0x55; 32],
+                    },
+                    Instant::now(),
+                )
+                .unwrap_err(),
+            Error::McquicResourceLimit
+        );
+
+        let mut high_bytes = announce();
+        high_bytes.integrity_hash_algorithm = 8;
+        let mut state = ChannelReceiveState::new(high_bytes).expect("receive state");
+        state
+            .insert_integrity_for_connection(
+                &Integrity {
+                    channel_id: channel_id(),
+                    packet_number_start: 0,
+                    packet_hash_count: Some(
+                        u64::try_from(MAX_CHANNEL_INTEGRITY_HASHES).expect("count"),
+                    ),
+                    packet_hashes: vec![0x66; MAX_CHANNEL_INTEGRITY_BYTES],
+                },
+                Instant::now(),
+            )
+            .expect("integrity at byte cap");
+        assert_eq!(
+            state.resource_usage().integrity_bytes,
+            MAX_CHANNEL_INTEGRITY_BYTES
+        );
+    }
+
+    #[test]
+    fn datagram_count_and_byte_caps_are_exact() {
+        let now = Instant::now();
+        let mut state = ChannelReceiveState::new(announce()).expect("receive state");
+        state
+            .insert_key_for_connection(key(0, 0), now)
+            .expect("insert key");
+
+        for packet_number in 0..MAX_CHANNEL_DATAGRAMS {
+            let protected = [u8::try_from(packet_number).unwrap_or(0xaa)];
+            let packet_hash = state.integrity_hash.hash(&protected).expect("packet hash");
+            state
+                .insert_integrity_for_connection(
+                    &Integrity {
+                        channel_id: channel_id(),
+                        packet_number_start: u64::try_from(packet_number).expect("packet number"),
+                        packet_hash_count: Some(1),
+                        packet_hashes: packet_hash,
+                    },
+                    now,
+                )
+                .expect("integrity");
+            state
+                .process_authenticated_packet(
+                    ChannelPacket {
+                        channel_id: channel_id(),
+                        packet_number: u64::try_from(packet_number).expect("packet number"),
+                        key_sequence: 0,
+                        key_phase: false,
+                        frames: vec![ChannelFrame::Datagram { data: vec![0] }],
+                    },
+                    &protected,
+                )
+                .expect("datagram at count cap");
+        }
+        assert_eq!(state.resource_usage().datagrams, MAX_CHANNEL_DATAGRAMS);
+
+        let protected = [0xff];
+        let packet_hash = state.integrity_hash.hash(&protected).expect("packet hash");
+        state
+            .insert_integrity_for_connection(
+                &Integrity {
+                    channel_id: channel_id(),
+                    packet_number_start: u64::try_from(MAX_CHANNEL_DATAGRAMS)
+                        .expect("packet number"),
+                    packet_hash_count: Some(1),
+                    packet_hashes: packet_hash,
+                },
+                now,
+            )
+            .expect("integrity");
+        assert_eq!(
+            state
+                .process_authenticated_packet(
+                    ChannelPacket {
+                        channel_id: channel_id(),
+                        packet_number: u64::try_from(MAX_CHANNEL_DATAGRAMS).expect("packet number"),
+                        key_sequence: 0,
+                        key_phase: false,
+                        frames: vec![ChannelFrame::Datagram { data: vec![0] }],
+                    },
+                    &protected,
+                )
+                .unwrap_err(),
+            Error::McquicResourceLimit
+        );
+
+        let mut state = ChannelReceiveState::new(announce()).expect("receive state");
+        state
+            .insert_key_for_connection(key(0, 0), now)
+            .expect("insert key");
+        let protected = [0x7f];
+        let packet_hash = state.integrity_hash.hash(&protected).expect("packet hash");
+        state
+            .insert_integrity_for_connection(
+                &Integrity {
+                    channel_id: channel_id(),
+                    packet_number_start: 0,
+                    packet_hash_count: Some(1),
+                    packet_hashes: packet_hash,
+                },
+                now,
+            )
+            .expect("integrity");
+        state
+            .process_authenticated_packet(
+                ChannelPacket {
+                    channel_id: channel_id(),
+                    packet_number: 0,
+                    key_sequence: 0,
+                    key_phase: false,
+                    frames: vec![ChannelFrame::Datagram {
+                        data: vec![0; MAX_CHANNEL_DATAGRAM_BYTES],
+                    }],
+                },
+                &protected,
+            )
+            .expect("datagram at byte cap");
+        assert_eq!(
+            state.resource_usage().datagram_bytes,
+            MAX_CHANNEL_DATAGRAM_BYTES
+        );
+
+        let protected = [0x80];
+        let packet_hash = state.integrity_hash.hash(&protected).expect("packet hash");
+        state
+            .insert_integrity_for_connection(
+                &Integrity {
+                    channel_id: channel_id(),
+                    packet_number_start: 1,
+                    packet_hash_count: Some(1),
+                    packet_hashes: packet_hash,
+                },
+                now,
+            )
+            .expect("integrity");
+        assert_eq!(
+            state
+                .process_authenticated_packet(
+                    ChannelPacket {
+                        channel_id: channel_id(),
+                        packet_number: 1,
+                        key_sequence: 0,
+                        key_phase: false,
+                        frames: vec![ChannelFrame::Datagram { data: vec![0] }],
+                    },
+                    &protected,
+                )
+                .unwrap_err(),
+            Error::McquicResourceLimit
+        );
+    }
+
+    #[test]
+    fn pending_packet_count_byte_and_time_caps_are_exact() {
+        let announce = announce();
+        let key = key(0, 0);
+        let mut sender = ChannelSendState::new(announce.clone(), key).expect("send state");
+        let mut receiver = ChannelReceiveState::new(announce.clone()).expect("receive state");
+        let now = Instant::now();
+        let mut out = vec![0; 1200];
+
+        for _ in 0..MAX_CHANNEL_PENDING_PACKETS {
+            let sent = sender
+                .write_packet(&[ChannelFrame::Ping], &mut out)
+                .expect("protected packet");
+            assert!(
+                receiver
+                    .process_protected_packet_for_connection(&out[..sent.packet_len], now)
+                    .expect("packet at count cap")
+                    .is_empty()
+            );
+        }
+        assert_eq!(
+            receiver.resource_usage().pending_packets,
+            MAX_CHANNEL_PENDING_PACKETS
+        );
+
+        let sent = sender
+            .write_packet(&[ChannelFrame::Ping], &mut out)
+            .expect("protected packet");
+        assert_eq!(
+            receiver
+                .process_protected_packet_for_connection(&out[..sent.packet_len], now)
+                .unwrap_err(),
+            Error::McquicResourceLimit
+        );
+        assert_eq!(
+            receiver
+                .prune_expired(now + MAX_PENDING_PACKET_AGE)
+                .unwrap_err(),
+            Error::McquicResourceLimit
+        );
+        assert_eq!(receiver.resource_usage().pending_packets, 0);
+
+        let mut receiver = ChannelReceiveState::new(announce).expect("receive state");
+        receiver.pending_packets.insert(
+            0,
+            PendingChannelPacket {
+                protected_packet: vec![0; MAX_CHANNEL_PENDING_PACKET_BYTES],
+                key_phase: false,
+                inserted_at: now,
+            },
+        );
+        assert_eq!(
+            receiver.resource_usage().pending_packet_bytes,
+            MAX_CHANNEL_PENDING_PACKET_BYTES
+        );
+        let sent = sender
+            .write_packet(&[ChannelFrame::Ping], &mut out)
+            .expect("protected packet");
+        assert_eq!(
+            receiver
+                .process_protected_packet_for_connection(&out[..sent.packet_len], now)
+                .unwrap_err(),
+            Error::McquicResourceLimit
+        );
     }
 
     #[test]
@@ -2422,7 +3926,7 @@ mod tests {
                 channel_id: channel_id(),
                 key_sequence: 7,
                 from_packet_number: 0,
-                secret: vec![0xcc; 32],
+                secret: vec![0xcc; 32].into(),
             })
             .expect("insert key");
 
@@ -2468,7 +3972,7 @@ mod tests {
             channel_id: channel_id(),
             key_sequence: 1,
             from_packet_number: 0,
-            secret: vec![0x22; 32],
+            secret: vec![0x22; 32].into(),
         };
         let mut sender = ChannelSendState::new(announce.clone(), key.clone()).expect("send state");
         let mut out = vec![0; 1200];
@@ -2508,7 +4012,7 @@ mod tests {
             channel_id: channel_id(),
             key_sequence: 1,
             from_packet_number: 0,
-            secret: vec![0x22; 32],
+            secret: vec![0x22; 32].into(),
         };
         let mut sender = ChannelSendState::new(announce.clone(), key.clone()).expect("send state");
         let mut out = vec![0; 1200];
@@ -2540,7 +4044,7 @@ mod tests {
             channel_id: channel_id(),
             key_sequence: 1,
             from_packet_number: 0,
-            secret: vec![0x22; 32],
+            secret: vec![0x22; 32].into(),
         };
         let mut sender = ChannelSendState::new(announce.clone(), key.clone()).expect("send state");
         let mut out = vec![0; 1200];
@@ -2576,7 +4080,7 @@ mod tests {
                 channel_id: channel_id(),
                 key_sequence: 7,
                 from_packet_number: 0,
-                secret: vec![0xcc; 32],
+                secret: vec![0xcc; 32].into(),
             })
             .expect("insert key");
 

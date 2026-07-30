@@ -92,7 +92,7 @@ impl From<FrameType> for u64 {
 
 impl From<FrameType> for u8 {
     fn from(val: FrameType) -> Self {
-        u8::try_from(u64::from(val)).expect("frame type fits in u8")
+        Self::try_from(u64::from(val)).expect("frame type fits in u8")
     }
 }
 
@@ -351,7 +351,7 @@ impl<'a> Frame<'a> {
     /// If the frame causes a recipient to generate an ACK within its
     /// advertised maximum acknowledgement delay.
     #[must_use]
-    pub fn ack_eliciting(&self) -> bool {
+    pub const fn ack_eliciting(&self) -> bool {
         match self {
             Self::Ack { .. } | Self::Padding { .. } | Self::ConnectionClose { .. } => false,
             #[cfg(feature = "mcquic")]

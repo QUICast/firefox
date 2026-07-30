@@ -33,6 +33,7 @@ namespace dom {
 class ClientManagerParent;
 class ClientSourceParent;
 class ClientHandleParent;
+class ClientInfo;
 class ThreadsafeContentParentHandle;
 
 // Define a singleton service to manage client activity throughout the
@@ -126,6 +127,9 @@ class ClientManagerService final {
   // FutureClientSourceParent or has already been destroyed) or is frozen.
   ClientSourceParent* FindExistingSource(
       const nsID& aID, const mozilla::ipc::PrincipalInfo& aPrincipalInfo) const;
+
+  bool HasMatchingSource(ThreadsafeContentParentHandle* aContentParentHandle,
+                         const ClientInfo& aClientInfo) const;
 
   void AddManager(ClientManagerParent* aManager);
 

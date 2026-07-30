@@ -107,6 +107,7 @@ class Http3WebTransportSession;
 class Http3WebTransportStream;
 class McquicMulticastReceiver;
 class nsHttpConnection;
+class Http3SessionMcquicTestPeer;
 
 // IID for the Http3Session interface
 #define NS_HTTP3SESSION_IID \
@@ -310,7 +311,12 @@ class Http3Session final : public Http3SessionBase,
 
   void SetDontExclude() { mDontExclude = true; }
 
+  void OnWebTransportMulticastResponse(uint64_t aSessionId, bool aAccepted);
+  void RevokeWebTransportMulticast(uint64_t aSessionId);
+
  private:
+  friend class Http3SessionMcquicTestPeer;
+
   ~Http3Session();
 
   void CloseInternal(bool aCallNeqoClose);
@@ -325,13 +331,26 @@ class Http3Session final : public Http3SessionBase,
   nsresult ProcessHttp3Events();
   nsresult EnsureMcquicReceiver();
   nsresult SendMcquicLimits();
+  nsresult AdmitMcquicAnnouncement(const McquicControlFrameExternal& aFrame);
+  bool McquicJoinWithinLimits(const nsACString& aChannelId) const;
   nsresult ProcessMcquicControlFrames();
+  void ProcessMcquicResourceLimits();
   nsresult ProcessMcquicPackets();
   nsresult PumpMcquicAuthenticatedData();
   nsresult SendMcquicState(const nsACString& aChannelId,
                            McquicChannelStateExternal aState,
                            uint64_t aReasonCode);
+  nsresult RevokeMcquicOperation();
+  enum class McquicDisruption : uint8_t {
+    PathMigration,
+    NetworkChange,
+    ReceiverFailure,
+  };
+  nsresult HandleMcquicDisruption(McquicDisruption aDisruption);
+  nsresult CheckMcquicNetworkChange();
+  void ProcessMcquicOwnershipViolation();
   bool HasJoinedMcquicChannel() const;
+  bool McquicOperationActive() const;
   void ScheduleMcquicPoll();
 
   nsresult ProcessTransactionRead(uint64_t stream_id);
@@ -381,7 +400,9 @@ class Http3Session final : public Http3SessionBase,
     nsCString mGroup;
     nsCString mInterface;
     uint16_t mPort = 0;
+    uint8_t mAddressFamily = 0;
     uint64_t mSubscriptionId = 0;
+    uint64_t mMaxRateKibps = 0;
     uint64_t mLatestKeySequence = 0;
     uint64_t mStateSequence = 0;
     uint64_t mLastControlStateSequence = 0;
@@ -392,8 +413,18 @@ class Http3Session final : public Http3SessionBase,
   nsTHashMap<nsCStringHashKey, McquicChannelInfo> mMcquicChannels;
   nsTHashMap<nsUint64HashKey, nsCString> mMcquicSubscriptionToChannel;
   uint64_t mMcquicLimitsSequence = 0;
+  uint64_t mMcquicNetworkGeneration = 0;
   bool mMcquicLimitsSent = false;
   bool mMcquicNeedsOutput = false;
+
+  enum class McquicOperationState : uint8_t {
+    Prohibited,
+    Pending,
+    Active,
+    Revoked,
+  };
+  McquicOperationState mMcquicOperationState = McquicOperationState::Prohibited;
+  Maybe<uint64_t> mMcquicPermittedSessionId;
 
   // We need an extra map to store the mapping of WebTransportSession and
   // WebTransportStreams to handle the case that a stream is already removed

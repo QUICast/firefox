@@ -39,7 +39,7 @@ pub enum Outcome {
 /// near its bottleneck capacity.
 ///
 /// <https://datatracker.ietf.org/doc/html/draft-chung-ccwg-search-09>
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Search {
     /// The circular array used to track acked bytes per bin.
     acked_bins: [usize; Self::NUM_ACKED_BINS],

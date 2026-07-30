@@ -8,6 +8,7 @@
 #include <functional>
 
 #include "mozilla/Mutex.h"
+#include "mozilla/net/WebTransportOperationPolicy.h"
 #include "nsIChannelEventSink.h"
 #include "nsIInterfaceRequestor.h"
 #include "nsIRedirectResultListener.h"
@@ -19,7 +20,8 @@
  * Http3WebTransportSession and coordination of actions that are performed on
  * the main thread and on the socket thread.
  *
- * mChannel, mRedirectChannel, and mListener are used only on the main thread.
+ * mRedirectChannel is used only on the main thread. mChannel and mListener are
+ * protected by mMutex so shutdown can claim them from the socket thread.
  *
  * mWebTransportSession is used only on the socket thread.
  *
@@ -30,9 +32,9 @@
  * WebTransportSessionProxyState:
  * - INIT: before AsyncConnect is called.
  *
- * - NEGOTIATING: It is set during AsyncConnect. During this state HttpChannel
- *   is open but OnStartRequest has not been called yet. This state can
- *   transfer into:
+ * - NEGOTIATING: It is set when AsyncConnect claims the operation. During this
+ *   state HttpChannel setup is in progress or OnStartRequest has not been
+ *   called yet. This state can transfer into:
  *    - NEGOTIATING_SUCCEEDED: when a Http3WebTransportSession has been
  *      negotiated.
  *    - DONE: when a WebTransport session has been canceled.
@@ -121,6 +123,7 @@ namespace mozilla::net {
 class WebTransportEventService;
 
 class WebTransportStreamCallbackWrapper;
+class WebTransportSessionProxyLifecycleTestPeer;
 
 class WebTransportSessionProxy final
     : public nsIWebTransport,
@@ -146,11 +149,12 @@ class WebTransportSessionProxy final
   WebTransportSessionProxy();
 
  private:
+  friend class WebTransportSessionProxyLifecycleTestPeer;
+
   ~WebTransportSessionProxy();
 
-  void CloseSessionInternal();
-  void CloseSessionInternalLocked();
-  void CallOnSessionClosed();
+  nsresult CloseSessionInternal();
+  nsresult CallOnSessionClosed();
   void CallOnSessionClosedLocked();
 
   enum WebTransportSessionProxyState {
@@ -181,7 +185,7 @@ class WebTransportSessionProxy final
   void OnStopSendingInternal(uint64_t aStreamId, nsresult aError);
   void OnResetReceivedInternal(uint64_t aStreamId, nsresult aError);
 
-  nsCOMPtr<nsIChannel> mChannel;
+  nsCOMPtr<nsIChannel> mChannel MOZ_GUARDED_BY(mMutex);
   uint64_t mHttpChannelID = 0;
   nsCOMPtr<nsIChannel> mRedirectChannel;
   RefPtr<WebTransportEventService> mService;
@@ -198,10 +202,12 @@ class WebTransportSessionProxy final
   nsTArray<std::function<void(nsresult)>> mPendingCreateStreamEvents
       MOZ_GUARDED_BY(mMutex);
   nsCOMPtr<nsIEventTarget> mTarget MOZ_GUARDED_BY(mMutex);
+  nsCOMPtr<nsIEventTarget> mCloseCallbackTarget MOZ_GUARDED_BY(mMutex);
   nsTArray<RefPtr<nsIWebTransportHash>> mServerCertHashes
       MOZ_GUARDED_BY(mMutex);
   bool mDedicatedConnection = false;  // for WebTranport
   nsIWebTransport::HTTPVersion mHTTPVersion = nsIWebTransport::HTTPVersion::h3;
+  WebTransportOperationPolicy mOperationPolicy;
 };
 
 }  // namespace mozilla::net

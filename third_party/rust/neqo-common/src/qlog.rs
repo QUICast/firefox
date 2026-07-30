@@ -33,6 +33,14 @@ pub struct Qlog {
 pub struct SharedStreamer {
     qlog_path: PathBuf,
     streamer: QlogStreamer,
+    output_transaction: Option<Vec<(qlog::events::EventData, Instant)>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputTransactionError {
+    AlreadyPending,
+    NotPending,
+    InvalidCheckpoint,
 }
 
 impl Qlog {
@@ -86,6 +94,7 @@ impl Qlog {
             inner: Some(Rc::new(RefCell::new(Some(SharedStreamer {
                 qlog_path,
                 streamer,
+                output_transaction: None,
             })))),
         })
     }
@@ -107,12 +116,29 @@ impl Qlog {
     where
         F: FnOnce() -> Option<qlog::events::EventData>,
     {
-        self.add_event_with_stream(|s| {
-            if let Some(ev_data) = f() {
-                s.add_event_data_with_instant(ev_data, now)?;
-            }
-            Ok(())
-        });
+        let Some(inner) = self.inner.clone() else {
+            return;
+        };
+
+        let mut borrow = inner.borrow_mut();
+        let Some(shared_streamer) = borrow.as_mut() else {
+            drop(borrow);
+            self.inner = None;
+            return;
+        };
+
+        let Some(ev_data) = f() else {
+            return;
+        };
+        if let Some(events) = shared_streamer.output_transaction.as_mut() {
+            events.push((ev_data, now));
+            return;
+        }
+
+        let result = shared_streamer
+            .streamer
+            .add_event_data_with_instant(ev_data, now);
+        Self::handle_result(&mut self.inner, borrow, result);
     }
 
     /// If logging enabled, closure is given the Qlog stream to write events and
@@ -121,7 +147,7 @@ impl Qlog {
     where
         F: FnOnce(&mut QlogStreamer) -> Result<(), qlog::Error>,
     {
-        let Some(inner) = self.inner.as_mut() else {
+        let Some(inner) = self.inner.clone() else {
             return;
         };
 
@@ -134,7 +160,24 @@ impl Qlog {
             return;
         };
 
-        match f(&mut shared_streamer.streamer) {
+        if shared_streamer.output_transaction.is_some() {
+            debug_assert!(
+                false,
+                "add_event_with_stream cannot be used during an output transaction"
+            );
+            return;
+        }
+
+        let result = f(&mut shared_streamer.streamer);
+        Self::handle_result(&mut self.inner, borrow, result);
+    }
+
+    fn handle_result(
+        inner: &mut Option<Rc<RefCell<Option<SharedStreamer>>>>,
+        mut borrow: std::cell::RefMut<'_, Option<SharedStreamer>>,
+        result: Result<(), qlog::Error>,
+    ) {
+        match result {
             // `Error::Done` means "event was below the importance threshold" - not an actual error.
             Ok(()) | Err(qlog::Error::Done) => (),
             Err(e) => {
@@ -144,9 +187,120 @@ impl Qlog {
                 // Explicitly drop the RefCell borrow to release the mutable borrow.
                 drop(borrow);
                 // Set the outer Option to None to prevent future dereferences.
-                self.inner = None;
+                *inner = None;
             }
         }
+    }
+
+    /// Defer qlog writes until generated output is accepted or abandoned.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OutputTransactionError::AlreadyPending`] if a transaction is
+    /// already active on this shared qlog streamer.
+    pub fn begin_output_transaction(&mut self) -> Result<(), OutputTransactionError> {
+        let Some(inner) = self.inner.clone() else {
+            return Ok(());
+        };
+        let mut borrow = inner.borrow_mut();
+        let Some(shared_streamer) = borrow.as_mut() else {
+            drop(borrow);
+            self.inner = None;
+            return Ok(());
+        };
+        if shared_streamer.output_transaction.is_some() {
+            return Err(OutputTransactionError::AlreadyPending);
+        }
+        shared_streamer.output_transaction = Some(Vec::new());
+        Ok(())
+    }
+
+    /// Return the number of deferred events in the active transaction.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OutputTransactionError::NotPending`] if qlog is enabled but
+    /// no transaction is active.
+    pub fn output_transaction_checkpoint(&self) -> Result<usize, OutputTransactionError> {
+        let Some(inner) = self.inner.as_ref() else {
+            return Ok(0);
+        };
+        let borrow = inner.borrow();
+        let Some(shared_streamer) = borrow.as_ref() else {
+            return Ok(0);
+        };
+        shared_streamer
+            .output_transaction
+            .as_ref()
+            .map(Vec::len)
+            .ok_or(OutputTransactionError::NotPending)
+    }
+
+    /// Discard deferred events after `checkpoint`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if there is no active transaction or the checkpoint
+    /// lies beyond the deferred event list.
+    pub fn truncate_output_transaction(
+        &mut self,
+        checkpoint: usize,
+    ) -> Result<(), OutputTransactionError> {
+        let Some(inner) = self.inner.clone() else {
+            return Ok(());
+        };
+        let mut borrow = inner.borrow_mut();
+        let Some(shared_streamer) = borrow.as_mut() else {
+            drop(borrow);
+            self.inner = None;
+            return Ok(());
+        };
+        let events = shared_streamer
+            .output_transaction
+            .as_mut()
+            .ok_or(OutputTransactionError::NotPending)?;
+        if checkpoint > events.len() {
+            return Err(OutputTransactionError::InvalidCheckpoint);
+        }
+        events.truncate(checkpoint);
+        Ok(())
+    }
+
+    /// Finish the active output transaction, writing deferred events when
+    /// `commit` is true and discarding them otherwise.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OutputTransactionError::NotPending`] if qlog is enabled but
+    /// no transaction is active.
+    pub fn finish_output_transaction(
+        &mut self,
+        commit: bool,
+    ) -> Result<(), OutputTransactionError> {
+        let Some(inner) = self.inner.clone() else {
+            return Ok(());
+        };
+        let mut borrow = inner.borrow_mut();
+        let Some(shared_streamer) = borrow.as_mut() else {
+            drop(borrow);
+            self.inner = None;
+            return Ok(());
+        };
+        let events = shared_streamer
+            .output_transaction
+            .take()
+            .ok_or(OutputTransactionError::NotPending)?;
+        if !commit {
+            return Ok(());
+        }
+
+        let result = events.into_iter().try_for_each(|(event, now)| {
+            shared_streamer
+                .streamer
+                .add_event_data_with_instant(event, now)
+        });
+        Self::handle_result(&mut self.inner, borrow, result);
+        Ok(())
     }
 }
 
@@ -263,5 +417,42 @@ mod test {
         let clone = log.clone();
         log.add_event_with_stream(|_| Err(qlog::Error::IoError(std::io::Error::other("e"))));
         assert!(!clone.is_enabled());
+    }
+
+    #[test]
+    fn output_transaction_commit_and_truncate() {
+        let (mut log, contents) = test_fixture::new_neqo_qlog();
+        log.begin_output_transaction().unwrap();
+        log.add_event_at(|| Some(EV_DATA), test_fixture::now());
+        let checkpoint = log.output_transaction_checkpoint().unwrap();
+        log.add_event_at(|| Some(EV_DATA), test_fixture::now());
+        assert_eq!(contents.to_string(), EXPECTED_LOG_HEADER);
+        log.truncate_output_transaction(checkpoint).unwrap();
+        log.finish_output_transaction(true).unwrap();
+        assert!(
+            contents
+                .to_string()
+                .contains("connectivity:spin_bit_updated")
+        );
+        assert_eq!(
+            contents
+                .to_string()
+                .matches("connectivity:spin_bit_updated")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn output_transaction_abandon_and_double_begin() {
+        let (mut log, contents) = test_fixture::new_neqo_qlog();
+        log.begin_output_transaction().unwrap();
+        assert_eq!(
+            format!("{:?}", log.begin_output_transaction().unwrap_err()),
+            "AlreadyPending"
+        );
+        log.add_event_at(|| Some(EV_DATA), test_fixture::now());
+        log.finish_output_transaction(false).unwrap();
+        assert_eq!(contents.to_string(), EXPECTED_LOG_HEADER);
     }
 }

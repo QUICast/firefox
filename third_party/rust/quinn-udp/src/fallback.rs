@@ -37,7 +37,7 @@ impl UdpSocketState {
     /// instead.
     pub fn send(&self, socket: UdpSockRef<'_>, transmit: &Transmit<'_>) -> io::Result<()> {
         match send(socket, transmit) {
-            Ok(()) => Ok(()),
+            Ok(_) => Ok(()),
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => Err(e),
             Err(e) => {
                 log_sendmsg_error(&self.last_send_error, e, transmit);
@@ -49,6 +49,15 @@ impl UdpSocketState {
 
     /// Sends a [`Transmit`] on the given socket without any additional error handling.
     pub fn try_send(&self, socket: UdpSockRef<'_>, transmit: &Transmit<'_>) -> io::Result<()> {
+        self.try_send_segments(socket, transmit).map(|_| ())
+    }
+
+    /// Sends a [`Transmit`] and returns the accepted UDP-segment prefix.
+    pub fn try_send_segments(
+        &self,
+        socket: UdpSockRef<'_>,
+        transmit: &Transmit<'_>,
+    ) -> io::Result<usize> {
         send(socket, transmit)
     }
 
@@ -117,11 +126,16 @@ impl UdpSocketState {
     }
 }
 
-fn send(socket: UdpSockRef<'_>, transmit: &Transmit<'_>) -> io::Result<()> {
-    socket.0.send_to(
+fn send(socket: UdpSockRef<'_>, transmit: &Transmit<'_>) -> io::Result<usize> {
+    let written = socket.0.send_to(
         transmit.contents,
         &socket2::SockAddr::from(transmit.destination),
-    )
+    )?;
+    if written == transmit.contents.len() {
+        Ok(transmit.segment_count())
+    } else {
+        Err(io::Error::from(io::ErrorKind::WriteZero))
+    }
 }
 
 pub(crate) const BATCH_SIZE: usize = 1;

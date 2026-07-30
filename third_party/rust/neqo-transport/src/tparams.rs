@@ -524,6 +524,9 @@ impl TransportParameters {
     }
 
     /// Get decoded MCQUIC client transport parameters.
+    ///
+    /// # Panics
+    /// If the internal transport parameter type does not match its identifier.
     #[cfg(feature = "mcquic")]
     #[must_use]
     pub fn get_mcquic_client_params(&self) -> Option<&crate::mcquic::ClientTransportParams> {
@@ -1060,6 +1063,14 @@ mod tests {
 
         let mut enc = Encoder::default();
         tps.encode(&mut enc);
+        assert_eq!(
+            enc.as_ref(),
+            &[
+                0x8f, 0xf3, 0xe8, 0x00, 0x10, 0x01, 0x80, 0x01, 0x86, 0xa0, 0x20, 0x02, 0x02, 0x00,
+                0x01, 0x00, 0x02, 0x13, 0x01, 0x13, 0x03,
+            ],
+            "draft-08 client transport parameter vector"
+        );
         let decoded =
             TransportParameters::decode(&mut enc.as_decoder()).expect("decode transport params");
 
@@ -1074,6 +1085,11 @@ mod tests {
 
         let mut enc = Encoder::default();
         tps.encode(&mut enc);
+        assert_eq!(
+            enc.as_ref(),
+            &[0x8f, 0xf3, 0xe8, 0x08, 0x00],
+            "draft-08 server-support TP is its four-byte ID plus zero length"
+        );
         let decoded =
             TransportParameters::decode(&mut enc.as_decoder()).expect("decode transport params");
 

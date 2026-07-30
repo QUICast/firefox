@@ -16,6 +16,12 @@ dictionary WebTransportOptions {
   boolean requireUnreliable = false;
   sequence<WebTransportHash> serverCertificateHashes;
   WebTransportCongestionControl congestionControl = "default";
+  WebTransportMulticastPolicy multicast = "prohibit";
+};
+
+enum WebTransportMulticastPolicy {
+  "prohibit",
+  "allow",
 };
 
 enum WebTransportCongestionControl {

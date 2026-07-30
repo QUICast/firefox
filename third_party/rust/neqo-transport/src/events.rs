@@ -23,6 +23,7 @@ use crate::{
 pub enum OutgoingDatagramOutcome {
     DroppedTooBig,
     DroppedQueueFull,
+    Abandoned,
     Lost,
     Acked,
 }

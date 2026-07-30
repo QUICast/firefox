@@ -18,12 +18,15 @@ use neqo_common::{Buffer, Role, qtrace, qwarn};
 
 use crate::{
     AppError, ConnectionEvents, Error, Res,
-    fc::{LocalStreamLimits, ReceiverFlowControl, RemoteStreamLimits, SenderFlowControl},
+    fc::{
+        LocalStreamLimits, ReceiverFlowControl, ReceiverFlowControlOutput, RemoteStreamLimits,
+        SenderFlowControl, SenderFlowControlOutput,
+    },
     frame::Frame,
     packet,
     recovery::{self, StreamRecoveryToken},
-    recv_stream::{RecvStream, RecvStreams},
-    send_stream::{SendStream, SendStreams, TransmissionPriority},
+    recv_stream::{self, RecvStream, RecvStreams},
+    send_stream::{self, SendStream, SendStreams, TransmissionPriority},
     stats::FrameStats,
     stream_id::{StreamId, StreamType},
     tparams::{
@@ -34,6 +37,57 @@ use crate::{
         TransportParametersHandler,
     },
 };
+
+#[derive(Debug)]
+enum StreamOutputUndo {
+    Send(send_stream::OutputUndo),
+    Recv(recv_stream::OutputUndo),
+    ConnectionSenderFlowControl(SenderFlowControlOutput),
+    ConnectionReceiverFlowControl(ReceiverFlowControlOutput),
+    RemoteStreamLimit(StreamType, ReceiverFlowControlOutput),
+    LocalStreamLimit(StreamType, SenderFlowControlOutput),
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct StreamOutputJournal {
+    undos: Vec<StreamOutputUndo>,
+}
+
+impl StreamOutputJournal {
+    pub(crate) fn push_send(&mut self, undo: send_stream::OutputUndo) {
+        self.undos.push(StreamOutputUndo::Send(undo));
+    }
+
+    pub(crate) fn push_recv(&mut self, undo: recv_stream::OutputUndo) {
+        self.undos.push(StreamOutputUndo::Recv(undo));
+    }
+
+    fn undo(self, streams: &mut Streams) {
+        for undo in self.undos.into_iter().rev() {
+            match undo {
+                StreamOutputUndo::Send(undo) => streams.send.undo_output(undo),
+                StreamOutputUndo::Recv(undo) => streams.recv.undo_output(&undo),
+                StreamOutputUndo::ConnectionSenderFlowControl(checkpoint) => {
+                    streams.sender_fc.borrow_mut().restore_output(checkpoint);
+                }
+                StreamOutputUndo::ConnectionReceiverFlowControl(checkpoint) => {
+                    streams.receiver_fc.borrow_mut().restore_output(&checkpoint);
+                }
+                StreamOutputUndo::RemoteStreamLimit(stream_type, checkpoint) => {
+                    streams.remote_stream_limits[stream_type].restore_output(&checkpoint);
+                }
+                StreamOutputUndo::LocalStreamLimit(stream_type, checkpoint) => {
+                    streams.local_stream_limits[stream_type].restore_output(checkpoint);
+                }
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.undos.len()
+    }
+}
 
 pub type SendOrder = i64;
 
@@ -148,7 +202,8 @@ pub struct Streams {
     send: SendStreams,
     recv: RecvStreams,
     #[cfg(feature = "mcquic")]
-    // Actual sparse streams plus compact tombstones; implicit gaps are represented by the high-water mark.
+    // Actual sparse streams plus compact tombstones; implicit gaps are represented by the
+    // high-water mark.
     sparse_remote_uni_seen: Option<SparseStreamIdRanges>,
 }
 
@@ -301,39 +356,93 @@ impl Streams {
         now: Instant,
         rtt: Duration,
     ) {
+        let mut journal = StreamOutputJournal::default();
+        self.write_maintenance_frames_tracked(builder, tokens, stats, now, rtt, &mut journal);
+    }
+
+    pub(crate) fn write_maintenance_frames_tracked<B: Buffer>(
+        &mut self,
+        builder: &mut packet::Builder<B>,
+        tokens: &mut recovery::Tokens,
+        stats: &mut FrameStats,
+        now: Instant,
+        rtt: Duration,
+        journal: &mut StreamOutputJournal,
+    ) {
         // Send `DATA_BLOCKED` as necessary.
-        self.sender_fc
+        if let Some(checkpoint) = self
+            .sender_fc
             .borrow_mut()
-            .write_frames(builder, tokens, stats);
+            .write_frames_tracked(builder, tokens, stats)
+        {
+            journal
+                .undos
+                .push(StreamOutputUndo::ConnectionSenderFlowControl(checkpoint));
+        }
         if builder.is_full() {
             return;
         }
 
         // Send `MAX_DATA` as necessary.
-        self.receiver_fc
+        if let Some(checkpoint) = self
+            .receiver_fc
             .borrow_mut()
-            .write_frames(builder, tokens, stats, now, rtt);
+            .write_frames_tracked(builder, tokens, stats, now, rtt)
+        {
+            journal
+                .undos
+                .push(StreamOutputUndo::ConnectionReceiverFlowControl(checkpoint));
+        }
         if builder.is_full() {
             return;
         }
 
-        self.recv.write_frames(builder, tokens, stats, now, rtt);
+        self.recv
+            .write_frames_tracked(builder, tokens, stats, now, rtt, journal);
 
-        self.remote_stream_limits[StreamType::BiDi].write_frames(builder, tokens, stats);
+        if let Some(checkpoint) =
+            self.remote_stream_limits[StreamType::BiDi].write_frames_tracked(builder, tokens, stats)
+        {
+            journal.undos.push(StreamOutputUndo::RemoteStreamLimit(
+                StreamType::BiDi,
+                checkpoint,
+            ));
+        }
         if builder.is_full() {
             return;
         }
-        self.remote_stream_limits[StreamType::UniDi].write_frames(builder, tokens, stats);
+        if let Some(checkpoint) = self.remote_stream_limits[StreamType::UniDi]
+            .write_frames_tracked(builder, tokens, stats)
+        {
+            journal.undos.push(StreamOutputUndo::RemoteStreamLimit(
+                StreamType::UniDi,
+                checkpoint,
+            ));
+        }
         if builder.is_full() {
             return;
         }
 
-        self.local_stream_limits[StreamType::BiDi].write_frames(builder, tokens, stats);
+        if let Some(checkpoint) =
+            self.local_stream_limits[StreamType::BiDi].write_frames_tracked(builder, tokens, stats)
+        {
+            journal.undos.push(StreamOutputUndo::LocalStreamLimit(
+                StreamType::BiDi,
+                checkpoint,
+            ));
+        }
         if builder.is_full() {
             return;
         }
 
-        self.local_stream_limits[StreamType::UniDi].write_frames(builder, tokens, stats);
+        if let Some(checkpoint) =
+            self.local_stream_limits[StreamType::UniDi].write_frames_tracked(builder, tokens, stats)
+        {
+            journal.undos.push(StreamOutputUndo::LocalStreamLimit(
+                StreamType::UniDi,
+                checkpoint,
+            ));
+        }
     }
 
     pub fn write_frames<B: Buffer>(
@@ -343,7 +452,24 @@ impl Streams {
         tokens: &mut recovery::Tokens,
         stats: &mut FrameStats,
     ) {
-        self.send.write_frames(priority, builder, tokens, stats);
+        let mut journal = StreamOutputJournal::default();
+        self.write_frames_tracked(priority, builder, tokens, stats, &mut journal);
+    }
+
+    pub(crate) fn write_frames_tracked<B: Buffer>(
+        &mut self,
+        priority: TransmissionPriority,
+        builder: &mut packet::Builder<B>,
+        tokens: &mut recovery::Tokens,
+        stats: &mut FrameStats,
+        journal: &mut StreamOutputJournal,
+    ) {
+        self.send
+            .write_frames_tracked(priority, builder, tokens, stats, journal);
+    }
+
+    pub(crate) fn undo_output(&mut self, journal: StreamOutputJournal) {
+        journal.undo(self);
     }
 
     pub fn lost(&mut self, token: &StreamRecoveryToken) {

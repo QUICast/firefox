@@ -477,6 +477,7 @@ struct HttpConnectionInfoCloneArgs
   bool isHttp3;
   bool webTransport;
   uint64_t webTransportId;
+  WebTransportOperationPolicyArgs? webTransportOperationPolicy;
   bool hasIPHintAddress;
   nsCString echConfig;
   bool happyEyeballsEnabled;

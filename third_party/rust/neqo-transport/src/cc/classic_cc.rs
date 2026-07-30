@@ -218,6 +218,15 @@ pub struct ClassicCongestionController<S, T> {
     spurious_recovery: bool,
 }
 
+#[derive(Debug, Clone)]
+pub struct OutputCheckpoint<S> {
+    slow_start: S,
+    bytes_in_flight: usize,
+    first_app_limited: Option<packet::Number>,
+    pmtud: crate::pmtud::OutputCheckpoint,
+    current: State,
+}
+
 impl<S: Display, T: Display> Display for ClassicCongestionController<S, T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -236,6 +245,26 @@ impl<S, T> ClassicCongestionController<S, T> {
     #[cfg(test)]
     pub const fn cwnd_initial(&self) -> usize {
         cwnd_initial(self.pmtud.plpmtu())
+    }
+}
+
+impl<S: Clone, T> ClassicCongestionController<S, T> {
+    pub(crate) fn output_checkpoint(&self) -> OutputCheckpoint<S> {
+        OutputCheckpoint {
+            slow_start: self.slow_start.clone(),
+            bytes_in_flight: self.bytes_in_flight,
+            first_app_limited: self.first_app_limited,
+            pmtud: self.pmtud.output_checkpoint(),
+            current: self.current.clone(),
+        }
+    }
+
+    pub(crate) fn restore_output(&mut self, checkpoint: OutputCheckpoint<S>) {
+        self.slow_start = checkpoint.slow_start;
+        self.bytes_in_flight = checkpoint.bytes_in_flight;
+        self.first_app_limited = checkpoint.first_app_limited;
+        self.pmtud.restore_output(checkpoint.pmtud);
+        self.current = checkpoint.current;
     }
 }
 

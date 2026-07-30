@@ -25,13 +25,13 @@ use static_assertions::const_assert;
 use crate::{
     AppError, Error, MAX_LOCAL_MAX_STREAM_DATA, Res,
     events::ConnectionEvents,
-    fc::SenderFlowControl,
+    fc::{SenderFlowControl, SenderFlowControlOutput},
     frame::{Frame, FrameEncoder as _, FrameType},
     packet,
     recovery::{self, StreamRecoveryToken},
     stats::FrameStats,
     stream_id::StreamId,
-    streams::SendOrder,
+    streams::{SendOrder, StreamOutputJournal},
     tparams::{
         TransportParameterId::{InitialMaxStreamDataBidiRemote, InitialMaxStreamDataUni},
         TransportParameters,
@@ -694,6 +694,36 @@ pub struct SendStream {
     writable_event_low_watermark: NonZeroUsize,
 }
 
+#[derive(Debug)]
+pub(crate) struct StreamFrameOutputCheckpoint {
+    first_unmarked: Option<(u64, Option<u64>)>,
+    bytes_sent: u64,
+    fin_sent: Option<bool>,
+    stream_fc: Option<SenderFlowControlOutput>,
+    connection_fc: Option<SenderFlowControlOutput>,
+}
+
+#[derive(Debug)]
+pub(crate) enum OutputUndo {
+    Stream {
+        stream_id: StreamId,
+        token: RecoveryToken,
+        checkpoint: StreamFrameOutputCheckpoint,
+    },
+    Reset {
+        stream_id: StreamId,
+        priority: Option<TransmissionPriority>,
+    },
+    Blocked {
+        stream_id: StreamId,
+        checkpoint: SenderFlowControlOutput,
+    },
+    OrderCursor {
+        sendorder: Option<SendOrder>,
+        next: usize,
+    },
+}
+
 impl SendStream {
     pub fn new(
         stream_id: StreamId,
@@ -730,12 +760,37 @@ impl SendStream {
         tokens: &mut recovery::Tokens,
         stats: &mut FrameStats,
     ) -> bool {
-        if !self.write_reset_frame(priority, builder, tokens, stats) {
-            self.write_blocked_frame(priority, builder, tokens, stats);
+        let mut journal = StreamOutputJournal::default();
+        self.write_frames_tracked(priority, builder, tokens, stats, &mut journal)
+    }
+
+    fn write_frames_tracked<B: Buffer>(
+        &mut self,
+        priority: TransmissionPriority,
+        builder: &mut packet::Builder<B>,
+        tokens: &mut recovery::Tokens,
+        stats: &mut FrameStats,
+        journal: &mut StreamOutputJournal,
+    ) -> bool {
+        let reset_priority = match &self.state {
+            State::ResetSent { priority, .. } => *priority,
+            _ => None,
+        };
+        if self.write_reset_frame(priority, builder, tokens, stats) {
+            journal.push_send(OutputUndo::Reset {
+                stream_id: self.stream_id,
+                priority: reset_priority,
+            });
+        } else {
+            if let Some(undo) = self.write_blocked_frame_tracked(priority, builder, tokens, stats) {
+                journal.push_send(undo);
+            }
             if builder.is_full() {
                 return false;
             }
-            self.write_stream_frame(priority, builder, tokens, stats);
+            if let Some(undo) = self.write_stream_frame_tracked(priority, builder, tokens, stats) {
+                journal.push_send(undo);
+            }
             if builder.is_full() {
                 return false;
             }
@@ -908,16 +963,28 @@ impl SendStream {
         tokens: &mut recovery::Tokens,
         stats: &mut FrameStats,
     ) {
+        let _: Option<OutputUndo> =
+            self.write_stream_frame_tracked(priority, builder, tokens, stats);
+    }
+
+    fn write_stream_frame_tracked<B: Buffer>(
+        &mut self,
+        priority: TransmissionPriority,
+        builder: &mut packet::Builder<B>,
+        tokens: &mut recovery::Tokens,
+        stats: &mut FrameStats,
+    ) -> Option<OutputUndo> {
         let retransmission = if priority == self.priority {
             false
         } else if priority == self.effective_priority {
             true
         } else {
-            return;
+            return None;
         };
 
         let id = self.stream_id;
         let final_size = self.final_size();
+        let checkpoint = self.stream_frame_output_checkpoint();
         if let Some((offset, data)) = self.next_bytes(retransmission) {
             let overhead = 1 // Frame type
                 + Encoder::varint_len(id.as_u64())
@@ -928,7 +995,8 @@ impl SendStream {
                 };
             if overhead > builder.remaining() {
                 qtrace!("[{self}] write_frame no space for header");
-                return;
+                self.restore_stream_frame_peek(&checkpoint);
+                return None;
             }
 
             let (length, fill) = Self::length_and_fill(data.len(), builder.remaining() - overhead);
@@ -936,7 +1004,8 @@ impl SendStream {
                 .is_some_and(|fs| fs == offset + u64::try_from(length).expect("usize fits in u64"));
             if length == 0 && !fin {
                 qtrace!("[{self}] write_frame no data, no fin");
-                return;
+                self.restore_stream_frame_peek(&checkpoint);
+                return None;
             }
 
             // Write the stream out.
@@ -958,16 +1027,24 @@ impl SendStream {
             debug_assert!(builder.len() <= builder.limit());
 
             self.mark_as_sent(offset, length, fin);
+            let token = RecoveryToken {
+                id,
+                offset,
+                length,
+                fin,
+            };
             tokens.push(recovery::Token::Stream(StreamRecoveryToken::Stream(
-                RecoveryToken {
-                    id,
-                    offset,
-                    length,
-                    fin,
-                },
+                token.clone(),
             )));
             stats.stream += 1;
+            return Some(OutputUndo::Stream {
+                stream_id: id,
+                token,
+                checkpoint,
+            });
         }
+        self.restore_stream_frame_peek(&checkpoint);
+        None
     }
 
     pub fn reset_acked(&mut self) {
@@ -1056,11 +1133,113 @@ impl SendStream {
         tokens: &mut recovery::Tokens,
         stats: &mut FrameStats,
     ) {
+        let _: Option<OutputUndo> =
+            self.write_blocked_frame_tracked(priority, builder, tokens, stats);
+    }
+
+    fn write_blocked_frame_tracked<B: Buffer>(
+        &mut self,
+        priority: TransmissionPriority,
+        builder: &mut packet::Builder<B>,
+        tokens: &mut recovery::Tokens,
+        stats: &mut FrameStats,
+    ) -> Option<OutputUndo> {
         // Send STREAM_DATA_BLOCKED at normal priority always.
         if priority == self.priority
             && let State::Ready { fc, .. } | State::Send { fc, .. } = &mut self.state
+            && let Some(checkpoint) = fc.write_frames_tracked(builder, tokens, stats)
         {
-            fc.write_frames(builder, tokens, stats);
+            return Some(OutputUndo::Blocked {
+                stream_id: self.stream_id,
+                checkpoint,
+            });
+        }
+        None
+    }
+
+    fn stream_frame_output_checkpoint(&self) -> StreamFrameOutputCheckpoint {
+        let (first_unmarked, fin_sent, stream_fc, connection_fc) = match &self.state {
+            State::Ready { fc, conn_fc } => (
+                None,
+                None,
+                Some(fc.output_checkpoint()),
+                Some(conn_fc.borrow().output_checkpoint()),
+            ),
+            State::Send {
+                fc,
+                conn_fc,
+                send_buf,
+            } => (
+                send_buf.ranges.first_unmarked,
+                None,
+                Some(fc.output_checkpoint()),
+                Some(conn_fc.borrow().output_checkpoint()),
+            ),
+            State::DataSent {
+                send_buf, fin_sent, ..
+            } => (send_buf.ranges.first_unmarked, Some(*fin_sent), None, None),
+            State::DataRecvd { .. } | State::ResetSent { .. } | State::ResetRecvd { .. } => {
+                (None, None, None, None)
+            }
+        };
+        StreamFrameOutputCheckpoint {
+            first_unmarked,
+            bytes_sent: self.bytes_sent,
+            fin_sent,
+            stream_fc,
+            connection_fc,
+        }
+    }
+
+    const fn restore_stream_frame_peek(&mut self, checkpoint: &StreamFrameOutputCheckpoint) {
+        if let Some(send_buf) = self.state.tx_buf_mut() {
+            send_buf.ranges.first_unmarked = checkpoint.first_unmarked;
+        }
+    }
+
+    fn undo_output(&mut self, undo: OutputUndo) {
+        match undo {
+            OutputUndo::Stream {
+                token, checkpoint, ..
+            } => {
+                if let Some(send_buf) = self.state.tx_buf_mut() {
+                    send_buf.mark_as_lost(token.offset, token.length);
+                    send_buf.ranges.first_unmarked = checkpoint.first_unmarked;
+                }
+                self.bytes_sent = checkpoint.bytes_sent;
+                match &mut self.state {
+                    State::Ready { fc, conn_fc } | State::Send { fc, conn_fc, .. } => {
+                        if let Some(stream_fc) = checkpoint.stream_fc {
+                            fc.restore_output(stream_fc);
+                        }
+                        if let Some(connection_fc) = checkpoint.connection_fc {
+                            conn_fc.borrow_mut().restore_output(connection_fc);
+                        }
+                    }
+                    State::DataSent { fin_sent, .. } => {
+                        if let Some(previous) = checkpoint.fin_sent {
+                            *fin_sent = previous;
+                        }
+                    }
+                    State::DataRecvd { .. }
+                    | State::ResetSent { .. }
+                    | State::ResetRecvd { .. } => {}
+                }
+            }
+            OutputUndo::Reset { priority, .. } => {
+                if let State::ResetSent {
+                    priority: current, ..
+                } = &mut self.state
+                {
+                    *current = priority;
+                }
+            }
+            OutputUndo::Blocked { checkpoint, .. } => {
+                if let State::Ready { fc, .. } | State::Send { fc, .. } = &mut self.state {
+                    fc.restore_output(checkpoint);
+                }
+            }
+            OutputUndo::OrderCursor { .. } => unreachable!(),
         }
     }
 
@@ -1395,10 +1574,7 @@ pub struct OrderGroupIter<'a> {
 
 impl OrderGroup {
     pub const fn iter(&mut self) -> OrderGroupIter<'_> {
-        // Ids may have been deleted since we last iterated
-        if self.next >= self.vec.len() {
-            self.next = 0;
-        }
+        debug_assert!(self.vec.is_empty() || self.next < self.vec.len());
         OrderGroupIter {
             started_at: None,
             group: self,
@@ -1412,6 +1588,7 @@ impl OrderGroup {
 
     pub fn clear(&mut self) {
         self.vec.clear();
+        self.next = 0;
     }
 
     pub fn push(&mut self, stream_id: StreamId) {
@@ -1421,6 +1598,9 @@ impl OrderGroup {
     #[cfg(test)]
     pub fn truncate(&mut self, position: usize) {
         self.vec.truncate(position);
+        if self.vec.is_empty() || self.next >= self.vec.len() {
+            self.next = 0;
+        }
     }
 
     const fn update_next(&mut self) -> usize {
@@ -1436,7 +1616,11 @@ impl OrderGroup {
             // element already in vector @ `pos`
             panic!("Duplicate stream_id {stream_id}");
         };
+        let preserve_next = !self.vec.is_empty() && pos <= self.next;
         self.vec.insert(pos, stream_id);
+        if preserve_next {
+            self.next += 1;
+        }
     }
 
     /// # Panics
@@ -1447,6 +1631,13 @@ impl OrderGroup {
             panic!("Missing stream_id {stream_id}");
         };
         self.vec.remove(pos);
+        if self.vec.is_empty() {
+            self.next = 0;
+        } else if pos < self.next {
+            self.next -= 1;
+        } else if self.next >= self.vec.len() {
+            self.next = 0;
+        }
     }
 }
 
@@ -1677,12 +1868,25 @@ impl SendStreams {
         removed
     }
 
+    #[cfg(test)]
     pub(crate) fn write_frames<B: Buffer>(
         &mut self,
         priority: TransmissionPriority,
         builder: &mut packet::Builder<B>,
         tokens: &mut recovery::Tokens,
         stats: &mut FrameStats,
+    ) {
+        let mut journal = StreamOutputJournal::default();
+        self.write_frames_tracked(priority, builder, tokens, stats, &mut journal);
+    }
+
+    pub(crate) fn write_frames_tracked<B: Buffer>(
+        &mut self,
+        priority: TransmissionPriority,
+        builder: &mut packet::Builder<B>,
+        tokens: &mut recovery::Tokens,
+        stats: &mut FrameStats,
+        journal: &mut StreamOutputJournal,
     ) {
         // WebTransport data (which is Normal) may have a SendOrder
         // priority attached.  The spec states (6.3 write-chunk 6.1):
@@ -1721,29 +1925,99 @@ impl SendStreams {
         for stream in self.map.values_mut() {
             if !stream.is_fair() {
                 qtrace!("   {stream}");
-                if !stream.write_frames(priority, builder, tokens, stats) {
+                if !stream.write_frames_tracked(priority, builder, tokens, stats, journal) {
                     break;
                 }
             }
         }
         qtrace!("fair streams:");
-        let stream_ids = self.regular.iter().chain(
-            self.sendordered
-                .values_mut()
-                .rev()
-                .flat_map(|group| group.iter()),
-        );
-        for stream_id in stream_ids {
-            if let Some(stream) = self.map.get_mut(&stream_id) {
-                if let Some(order) = stream.sendorder() {
-                    qtrace!("   {stream_id} ({order})");
-                } else {
-                    qtrace!("   None");
-                }
-                if !stream.write_frames(priority, builder, tokens, stats) {
-                    break;
+        let Self {
+            map,
+            sendordered,
+            regular,
+            ..
+        } = self;
+        if !Self::write_group(
+            map, regular, None, priority, builder, tokens, stats, journal,
+        ) {
+            return;
+        }
+        for (sendorder, group) in sendordered.iter_mut().rev() {
+            if !Self::write_group(
+                map,
+                group,
+                Some(*sendorder),
+                priority,
+                builder,
+                tokens,
+                stats,
+                journal,
+            ) {
+                return;
+            }
+        }
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the scheduler inputs are distinct mutable state"
+    )]
+    fn write_group<B: Buffer>(
+        map: &mut IndexMap<StreamId, SendStream>,
+        group: &mut OrderGroup,
+        sendorder: Option<SendOrder>,
+        priority: TransmissionPriority,
+        builder: &mut packet::Builder<B>,
+        tokens: &mut recovery::Tokens,
+        stats: &mut FrameStats,
+        journal: &mut StreamOutputJournal,
+    ) -> bool {
+        let previous_next = group.next;
+        let mut complete = true;
+        {
+            for stream_id in group.iter() {
+                if let Some(stream) = map.get_mut(&stream_id) {
+                    if let Some(order) = stream.sendorder() {
+                        qtrace!("   {stream_id} ({order})");
+                    } else {
+                        qtrace!("   None");
+                    }
+                    if !stream.write_frames_tracked(priority, builder, tokens, stats, journal) {
+                        complete = false;
+                        break;
+                    }
                 }
             }
+        }
+        if !complete {
+            if group.next != previous_next {
+                journal.push_send(OutputUndo::OrderCursor {
+                    sendorder,
+                    next: previous_next,
+                });
+            }
+            return false;
+        }
+        debug_assert_eq!(group.next, previous_next);
+        true
+    }
+
+    pub(crate) fn undo_output(&mut self, undo: OutputUndo) {
+        let stream_id = match &undo {
+            OutputUndo::Stream { stream_id, .. }
+            | OutputUndo::Reset { stream_id, .. }
+            | OutputUndo::Blocked { stream_id, .. } => Some(*stream_id),
+            OutputUndo::OrderCursor { .. } => None,
+        };
+        match undo {
+            OutputUndo::OrderCursor { sendorder, next } => {
+                self.group_mut(sendorder).next = next;
+            }
+            undo => self
+                .map
+                .get_mut(&stream_id.expect("stream undo has stream ID"))
+                .expect("output stream exists until resolution")
+                .undo_output(undo),
         }
     }
 

@@ -70,11 +70,21 @@ const uint32_t MAX_PTO_COUNTS = 16;
 const uint32_t TRANSPORT_ERROR_STATELESS_RESET = 20;
 const uint64_t MCQUIC_POLL_INTERVAL_MS = 20;
 const uint32_t MCQUIC_MAX_PACKETS_PER_POLL = 32;
+const uint32_t MCQUIC_MAX_CHANNEL_IDS = 32;
+const uint32_t MCQUIC_MAX_JOINED_CHANNELS = 32;
+const uint64_t MCQUIC_MAX_AGGREGATE_RATE_KIBPS = 100000;
 const uint64_t MCQUIC_STATE_REASON_UNSPECIFIED_OTHER = 0x0;
 const uint64_t MCQUIC_STATE_REASON_REQUESTED_BY_SERVER = 0x1;
 const uint64_t MCQUIC_STATE_REASON_UNSYNCHRONIZED_PROPERTIES = 0x5;
 static bool McquicTransportEnabled() {
   return StaticPrefs::network_http_http3_mcquic_enabled();
+}
+
+static uint64_t McquicNetworkGeneration() {
+  if (gSocketTransportService) {
+    return gSocketTransportService->NetworkLinkChangeGeneration();
+  }
+  return 0;
 }
 
 static nsCString McquicChannelKey(const nsTArray<uint8_t>& aChannelId) {
@@ -171,6 +181,12 @@ nsresult Http3Session::Init(const nsHttpConnectionInfo* aConnInfo,
       isOuterConnection = proxyInfo->IsHttp3Proxy();
     }
   }
+  if (isOuterConnection) {
+    // The target operation's authorization must never become configuration
+    // for the outer H3/MASQUE peer. The target-side tunnel gets its own
+    // Http3Session and retains the binding there.
+    mConnInfo->ClearWebTransportOperationPolicy();
+  }
 
   // Create security control and info object for quic.
   mSocketControl = new QuicSocketControl(
@@ -187,16 +203,22 @@ nsresult Http3Session::Init(const nsHttpConnectionInfo* aConnInfo,
   NetAddr peerAddr;
   MOZ_ALWAYS_SUCCEEDS(aPeerAddr->GetNetAddr(&peerAddr));
 
-  bool mcquicEnabled = McquicTransportEnabled();
-  LOG3(
-      ("Http3Session::Init origin=%s, alpn=%s, selfAddr=%s, peerAddr=%s,"
-       " qpack table size=%u, max blocked streams=%u webtransport=%d "
-       "mcquic=%d [this=%p]",
-       PromiseFlatCString(mSocketControl->GetHostName()).get(),
-       PromiseFlatCString(alpn).get(), selfAddr.ToString().get(),
-       peerAddr.ToString().get(), gHttpHandler->DefaultQpackTableSize(),
-       gHttpHandler->DefaultHttp3MaxBlockedStreams(),
-       mConnInfo->GetWebTransport(), mcquicEnabled, this));
+  McquicOperationPolicyExternal mcquicPolicy =
+      McquicOperationPolicyExternal::Prohibit;
+  if (mConnInfo->IsWebTransportMulticastEligible(isOuterConnection) &&
+      McquicTransportEnabled()) {
+    mcquicPolicy = McquicOperationPolicyExternal::Allow;
+    mMcquicOperationState = McquicOperationState::Pending;
+  }
+  LOG3((
+      "Http3Session::Init origin=%s, alpn=%s, selfAddr=%s, peerAddr=%s,"
+      " qpack table size=%u, max blocked streams=%u webtransport=%d "
+      "mcquic_policy=%u [this=%p]",
+      PromiseFlatCString(mSocketControl->GetHostName()).get(),
+      PromiseFlatCString(alpn).get(), selfAddr.ToString().get(),
+      peerAddr.ToString().get(), gHttpHandler->DefaultQpackTableSize(),
+      gHttpHandler->DefaultHttp3MaxBlockedStreams(),
+      mConnInfo->GetWebTransport(), static_cast<uint32_t>(mcquicPolicy), this));
 
   if (mConnInfo->GetWebTransport()) {
     ExtState(ExtendedConnectKind::WebTransport).mStatus = NEGOTIATING;
@@ -227,7 +249,7 @@ nsresult Http3Session::Init(const nsHttpConnectionInfo* aConnInfo,
         StaticPrefs::network_http_http3_max_data(),
         StaticPrefs::network_http_http3_max_stream_data(),
         StaticPrefs::network_http_http3_version_negotiation_enabled(),
-        mConnInfo->GetWebTransport(), mcquicEnabled,
+        mConnInfo->GetWebTransport(), mcquicPolicy,
         gHttpHandler->Http3QlogDir(), idleTimeout, fastPto,
         getter_AddRefs(mHttp3Connection));
   } else {
@@ -238,7 +260,7 @@ nsresult Http3Session::Init(const nsHttpConnectionInfo* aConnInfo,
         StaticPrefs::network_http_http3_max_data(),
         StaticPrefs::network_http_http3_max_stream_data(),
         StaticPrefs::network_http_http3_version_negotiation_enabled(),
-        mConnInfo->GetWebTransport(), mcquicEnabled,
+        mConnInfo->GetWebTransport(), mcquicPolicy,
         gHttpHandler->Http3QlogDir(), idleTimeout, fastPto,
         socket->GetFileDescriptor(), isOuterConnection,
         getter_AddRefs(mHttp3Connection));
@@ -288,11 +310,13 @@ nsresult Http3Session::Init(const nsHttpConnectionInfo* aConnInfo,
     mEchExtensionStatus = EchExtensionStatus::kNotPresent;
   }
 
-  // In WebTransport, when servCertHashes is specified, it indicates that the
-  // connection to the WebTransport server should authenticate using the
-  // expected certificate hash. Therefore, 0RTT should be disabled in this
-  // context to ensure the certificate hash is checked.
-  if (StaticPrefs::network_http_http3_enable_0rtt() && !hasServCertHashes()) {
+  // Certificate hashes require a fresh authentication check. MCQUIC-eligible
+  // WebTransport operations likewise use a fresh, operation-isolated
+  // connection and must not transfer authorization through resumption.
+  const bool mcquicIsolatedOperation =
+      mcquicPolicy == McquicOperationPolicyExternal::Allow;
+  if (StaticPrefs::network_http_http3_enable_0rtt() && !hasServCertHashes() &&
+      !mcquicIsolatedOperation) {
     uint32_t maxAttempts =
         StaticPrefs::network_ssl_tokens_cache_records_per_entry();
     for (uint32_t attempt = 0; attempt < maxAttempts; ++attempt) {
@@ -768,7 +792,11 @@ nsresult Http3Session::ProcessHttp3Events() {
         break;
       case Http3Event::Tag::ResumptionToken: {
         LOG(("Http3Session::ProcessEvents - ResumptionToken"));
-        if (StaticPrefs::network_http_http3_enable_0rtt() && !data.IsEmpty()) {
+        const bool mcquicIsolatedOperation =
+            mMcquicOperationState == McquicOperationState::Pending ||
+            McquicOperationActive();
+        if (StaticPrefs::network_http_http3_enable_0rtt() &&
+            !mcquicIsolatedOperation && !data.IsEmpty()) {
           LOG(("Got a resumption token"));
           nsAutoCString peerId;
           mSocketControl->GetPeerId(peerId);
@@ -802,10 +830,6 @@ nsresult Http3Session::ProcessHttp3Events() {
         OnTransportStatus(nullptr, NS_NET_STATUS_CONNECTED_TO, 0);
         mUdpConn->OnConnected();
         ReportHttp3Connection();
-        nsresult rv = SendMcquicLimits();
-        if (NS_FAILED(rv)) {
-          return rv;
-        }
         // Maybe call ResumeSend:
         // In case ZeroRtt has been used and it has been rejected, 2 events will
         // be received: ZeroRttRejected and ConnectionConnected. ZeroRttRejected
@@ -820,6 +844,14 @@ nsresult Http3Session::ProcessHttp3Events() {
         LOG(("Http3Session::ProcessEvents - GoawayReceived"));
         mUdpConn->SetCloseReason(ConnectionCloseReason::GO_AWAY);
         mGoawayReceived = true;
+        break;
+      case Http3Event::Tag::PathMigrated:
+        LOG(("Http3Session::ProcessEvents - PathMigrated"));
+        if (nsresult revokeRv =
+                HandleMcquicDisruption(McquicDisruption::PathMigration);
+            NS_FAILED(revokeRv)) {
+          return revokeRv;
+        }
         break;
       case Http3Event::Tag::ConnectionClosing:
         LOG(("Http3Session::ProcessEvents - ConnectionClosing"));
@@ -1006,6 +1038,16 @@ nsresult Http3Session::ProcessHttp3Events() {
                  event.web_transport._0.new_stream.stream_id,
                  event.web_transport._0.new_stream.session_id));
             uint64_t sessionId = event.web_transport._0.new_stream.session_id;
+            if (McquicOperationActive() &&
+                (mMcquicPermittedSessionId.isNothing() ||
+                 mMcquicPermittedSessionId.ref() != sessionId)) {
+              LOG(
+                  ("MCQUIC stream owner does not match the permitted "
+                   "WebTransport Session; revoking multicast [this=%p]",
+                   this));
+              RevokeMcquicOperation();
+              break;
+            }
             RefPtr<Http3StreamBase> stream = mStreamIdHash.Get(sessionId);
             if (!stream) {
               LOG(
@@ -1020,6 +1062,16 @@ nsresult Http3Session::ProcessHttp3Events() {
                 stream->GetHttp3WebTransportSession();
             if (!wt) {
               break;
+            }
+
+            if (McquicOperationActive() &&
+                event.web_transport._0.new_stream.stream_type ==
+                    WebTransportStreamType::UniDi) {
+              rv = mHttp3Connection->McquicAuthorizeStream(
+                  event.web_transport._0.new_stream.stream_id, sessionId);
+              if (NS_FAILED(rv)) {
+                return rv;
+              }
             }
 
             RefPtr<Http3WebTransportStream> wtStream =
@@ -1208,9 +1260,25 @@ nsresult Http3Session::ProcessHttp3Events() {
 }
 
 nsresult Http3Session::ProcessEvents() {
-  nsresult rv = ProcessHttp3Events();
+  if (McquicOperationActive() && !McquicTransportEnabled()) {
+    nsresult rv = RevokeMcquicOperation();
+    if (NS_FAILED(rv)) {
+      return rv;
+    }
+  }
+  nsresult rv = CheckMcquicNetworkChange();
   if (NS_FAILED(rv)) {
     return rv;
+  }
+
+  rv = ProcessHttp3Events();
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
+  ProcessMcquicResourceLimits();
+  ProcessMcquicOwnershipViolation();
+  if (!McquicOperationActive()) {
+    return NS_OK;
   }
 
   rv = ProcessMcquicControlFrames();
@@ -1221,10 +1289,44 @@ nsresult Http3Session::ProcessEvents() {
   return NS_OK;
 }
 
+nsresult Http3Session::HandleMcquicDisruption(McquicDisruption aDisruption) {
+  if (!McquicOperationActive()) {
+    return NS_OK;
+  }
+
+  const char* reason = "receiver failure";
+  if (aDisruption == McquicDisruption::PathMigration) {
+    reason = "path migration";
+  } else if (aDisruption == McquicDisruption::NetworkChange) {
+    reason = "network change";
+  }
+  LOG(
+      ("MCQUIC %s; abandoning pending output, revoking membership, and "
+       "continuing unicast [this=%p]",
+       reason, this));
+  nsresult rv = RevokeMcquicOperation();
+  if (NS_FAILED(rv) && mMcquicOperationState == McquicOperationState::Revoked) {
+    LOG(
+        ("MCQUIC terminal output failed after %s, but revocation completed; "
+         "continuing unicast [this=%p rv=0x%08" PRIx32 "]",
+         reason, this, static_cast<uint32_t>(rv)));
+    return NS_OK;
+  }
+  return rv;
+}
+
+nsresult Http3Session::CheckMcquicNetworkChange() {
+  if (!McquicOperationActive() ||
+      mMcquicNetworkGeneration == McquicNetworkGeneration()) {
+    return NS_OK;
+  }
+  return HandleMcquicDisruption(McquicDisruption::NetworkChange);
+}
+
 nsresult Http3Session::EnsureMcquicReceiver() {
   MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
-  if (!McquicTransportEnabled()) {
+  if (!McquicOperationActive() || !McquicTransportEnabled()) {
     return NS_ERROR_NOT_AVAILABLE;
   }
 
@@ -1238,7 +1340,8 @@ nsresult Http3Session::EnsureMcquicReceiver() {
 nsresult Http3Session::SendMcquicLimits() {
   MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
-  if (!McquicTransportEnabled() || mMcquicLimitsSent) {
+  if (!McquicOperationActive() || !McquicTransportEnabled() ||
+      mMcquicLimitsSent) {
     return NS_OK;
   }
 
@@ -1298,15 +1401,24 @@ nsresult Http3Session::SendMcquicState(const nsACString& aChannelId,
 }
 
 nsresult Http3Session::PumpMcquicAuthenticatedData() {
+  if (!McquicOperationActive()) {
+    return NS_OK;
+  }
+
   nsresult rv = ProcessHttp3Events();
   if (NS_FAILED(rv)) {
     return rv;
   }
+  ProcessMcquicOwnershipViolation();
+  if (!McquicOperationActive()) {
+    return NS_OK;
+  }
 
-  // STREAM and RESET_STREAM have already entered ordinary Neqo receive-stream
-  // processing and are surfaced by ProcessHttp3Events(). Drain authenticated
-  // legacy channel DATAGRAMs so mixed-version senders cannot grow the bounded
-  // compatibility queue or interfere with STREAM acknowledgements.
+  // Authorized STREAM and RESET_STREAM frames have entered ordinary Neqo
+  // receive-stream processing; frames awaiting a unicast ownership prefix stay
+  // bounded inside Neqo. Drain authenticated legacy channel DATAGRAMs so
+  // mixed-version senders cannot grow the compatibility queue or interfere
+  // with STREAM acknowledgements.
   uint32_t ignoredLegacyDatagrams = 0;
   for (;;) {
     McquicChannelDatagram datagram{};
@@ -1334,10 +1446,122 @@ nsresult Http3Session::PumpMcquicAuthenticatedData() {
   return NS_OK;
 }
 
+nsresult Http3Session::AdmitMcquicAnnouncement(
+    const McquicControlFrameExternal& aFrame) {
+  nsCString channelId = McquicChannelKey(aFrame.channel_id);
+  nsCString channelHex = McquicHexPrefix(aFrame.channel_id);
+  McquicChannelInfo info;
+  const bool isNewChannel = !mMcquicChannels.Contains(channelId);
+  if (isNewChannel && mMcquicChannels.Count() >= MCQUIC_MAX_CHANNEL_IDS) {
+    LOG(
+        ("MCQUIC channel limit reached; announcement gets no subscription "
+         "[this=%p channel=%s]",
+         this, channelHex.get()));
+    return NS_OK;
+  }
+  if (aFrame.address_family != 4 && aFrame.address_family != 6) {
+    LOG(
+        ("MCQUIC unsupported address family; announcement gets no "
+         "subscription [this=%p channel=%s family=%u]",
+         this, channelHex.get(), aFrame.address_family));
+    return NS_OK;
+  }
+
+  uint64_t announcedRateKibps = 0;
+  for (auto iter = mMcquicChannels.ConstIter(); !iter.Done(); iter.Next()) {
+    if (iter.Key().Equals(channelId)) {
+      continue;
+    }
+    if (iter.Data().mMaxRateKibps > UINT64_MAX - announcedRateKibps) {
+      announcedRateKibps = UINT64_MAX;
+      break;
+    }
+    announcedRateKibps += iter.Data().mMaxRateKibps;
+  }
+  if (aFrame.max_rate_kibps >
+      MCQUIC_MAX_AGGREGATE_RATE_KIBPS -
+          std::min(announcedRateKibps, MCQUIC_MAX_AGGREGATE_RATE_KIBPS)) {
+    LOG(
+        ("MCQUIC channel rate exceeds aggregate limit; announcement gets no "
+         "subscription [this=%p channel=%s rate=%" PRIu64 "]",
+         this, channelHex.get(), aFrame.max_rate_kibps));
+    return NS_OK;
+  }
+  if (auto existing = mMcquicChannels.Lookup(channelId)) {
+    info = existing.Data();
+  }
+  info.mSource = aFrame.source_ip;
+  info.mGroup = aFrame.group_ip;
+  info.mInterface = McquicInterfaceForJoin(info.mSource);
+  info.mPort = aFrame.udp_port;
+  info.mAddressFamily = aFrame.address_family;
+  info.mMaxRateKibps = aFrame.max_rate_kibps;
+
+  if (info.mSubscriptionId != 0) {
+    LOG(
+        ("MCQUIC SSM subscription already configured [this=%p channel=%s "
+         "id=%" PRIu64 "]",
+         this, channelHex.get(), info.mSubscriptionId));
+    return NS_OK;
+  }
+
+  nsresult rv = EnsureMcquicReceiver();
+  if (NS_FAILED(rv)) {
+    LOG(
+        ("MCQUIC receiver unavailable for announcement, continuing unicast "
+         "[this=%p rv=0x%08" PRIx32 "]",
+         this, static_cast<uint32_t>(rv)));
+    return NS_OK;
+  }
+
+  rv = mMcquicReceiver->AddSsmSubscription(info.mSource, info.mGroup,
+                                           info.mPort, info.mInterface,
+                                           Nothing(), &info.mSubscriptionId);
+  if (NS_FAILED(rv)) {
+    LOG(
+        ("MCQUIC failed to add SSM subscription [this=%p channel=%s "
+         "rv=0x%08" PRIx32 " continuing_unicast=1]",
+         this, channelHex.get(), static_cast<uint32_t>(rv)));
+    return NS_OK;
+  }
+
+  mMcquicSubscriptionToChannel.InsertOrUpdate(info.mSubscriptionId, channelId);
+  mMcquicChannels.InsertOrUpdate(channelId, info);
+  LOG(
+      ("MCQUIC SSM subscription configured without joining [this=%p "
+       "channel=%s id=%" PRIu64 "]",
+       this, channelHex.get(), info.mSubscriptionId));
+  return NS_OK;
+}
+
+bool Http3Session::McquicJoinWithinLimits(const nsACString& aChannelId) const {
+  auto candidate = mMcquicChannels.Lookup(aChannelId);
+  if (!candidate) {
+    return false;
+  }
+
+  uint32_t joinedCount = 0;
+  uint64_t joinedRateKibps = 0;
+  for (auto iter = mMcquicChannels.ConstIter(); !iter.Done(); iter.Next()) {
+    if (iter.Data().mJoined) {
+      ++joinedCount;
+      if (iter.Data().mMaxRateKibps > UINT64_MAX - joinedRateKibps) {
+        joinedRateKibps = UINT64_MAX;
+      } else {
+        joinedRateKibps += iter.Data().mMaxRateKibps;
+      }
+    }
+  }
+  return joinedCount < MCQUIC_MAX_JOINED_CHANNELS &&
+         candidate.Data().mMaxRateKibps <=
+             MCQUIC_MAX_AGGREGATE_RATE_KIBPS -
+                 std::min(joinedRateKibps, MCQUIC_MAX_AGGREGATE_RATE_KIBPS);
+}
+
 nsresult Http3Session::ProcessMcquicControlFrames() {
   MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
-  if (!McquicTransportEnabled()) {
+  if (!McquicOperationActive() || !McquicTransportEnabled()) {
     return NS_OK;
   }
 
@@ -1364,66 +1588,26 @@ nsresult Http3Session::ProcessMcquicControlFrames() {
 
     switch (frame.tag) {
       case McquicControlFrameTag::Announce: {
-        LOG(
-            ("MCQUIC MC_ANNOUNCE [this=%p channel=%s source=%s group=%s "
-             "port=%u]",
-             this, channelHex.get(), frame.source_ip.get(),
-             frame.group_ip.get(), frame.udp_port));
+        LOG((
+            "MCQUIC MC_ANNOUNCE [this=%p channel=%s source=%s group=%s "
+            "port=%u family=%u max_rate=%" PRIu64 "]",
+            this, channelHex.get(), frame.source_ip.get(), frame.group_ip.get(),
+            frame.udp_port, frame.address_family, frame.max_rate_kibps));
 
-        McquicChannelInfo info;
-        if (auto existing = mMcquicChannels.Lookup(channelId)) {
-          info = existing.Data();
-        }
-        info.mSource = frame.source_ip;
-        info.mGroup = frame.group_ip;
-        info.mInterface = McquicInterfaceForJoin(info.mSource);
-        info.mPort = frame.udp_port;
-
-        // MC_ANNOUNCE only creates local receive state. Membership changes are
-        // exclusively driven by MC_JOIN and MC_LEAVE.
-        if (info.mSubscriptionId != 0) {
-          LOG(
-              ("MCQUIC SSM subscription already configured [this=%p "
-               "channel=%s id=%" PRIu64 "]",
-               this, channelHex.get(), info.mSubscriptionId));
-          break;
-        }
-
-        mMcquicChannels.InsertOrUpdate(channelId, info);
-
-        rv = EnsureMcquicReceiver();
+        rv = AdmitMcquicAnnouncement(frame);
         if (NS_FAILED(rv)) {
-          LOG(
-              ("MCQUIC receiver unavailable for announcement, continuing "
-               "unicast [this=%p rv=0x%08" PRIx32 "]",
-               this, static_cast<uint32_t>(rv)));
-          break;
+          return rv;
         }
-
-        rv = mMcquicReceiver->AddSsmSubscription(
-            info.mSource, info.mGroup, info.mPort, info.mInterface, Nothing(),
-            &info.mSubscriptionId);
-        if (NS_FAILED(rv)) {
-          LOG(
-              ("MCQUIC failed to add SSM subscription [this=%p channel=%s "
-               "rv=0x%08" PRIx32 " continuing_unicast=1]",
-               this, channelHex.get(), static_cast<uint32_t>(rv)));
-          break;
-        }
-
-        mMcquicSubscriptionToChannel.InsertOrUpdate(info.mSubscriptionId,
-                                                    channelId);
-        mMcquicChannels.InsertOrUpdate(channelId, info);
-        LOG(
-            ("MCQUIC SSM subscription configured without joining [this=%p "
-             "channel=%s id=%" PRIu64 "]",
-             this, channelHex.get(), info.mSubscriptionId));
       } break;
       case McquicControlFrameTag::Key: {
         LOG(("MCQUIC MC_KEY [this=%p channel=%s key_sequence=%" PRIu64 "]",
              this, channelHex.get(), frame.key_sequence));
         if (!mMcquicChannels.Contains(channelId)) {
-          mMcquicChannels.InsertOrUpdate(channelId, McquicChannelInfo{});
+          LOG(
+              ("MCQUIC MC_KEY has no admitted announcement [this=%p "
+               "channel=%s]",
+               this, channelHex.get()));
+          break;
         }
         auto channel = mMcquicChannels.Lookup(channelId);
         MOZ_ASSERT(channel);
@@ -1447,17 +1631,19 @@ nsresult Http3Session::ProcessMcquicControlFrames() {
         break;
       case McquicControlFrameTag::Join: {
         LOG(("MCQUIC MC_JOIN [this=%p channel=%s key_sequence=%" PRIu64
-             " state_sequence=%" PRIu64 "]",
-             this, channelHex.get(), frame.key_sequence, frame.state_sequence));
+             " state_sequence=%" PRIu64 " limits_sequence=%" PRIu64 "]",
+             this, channelHex.get(), frame.key_sequence, frame.state_sequence,
+             frame.limits_sequence));
         if (!mMcquicChannels.Contains(channelId)) {
-          mMcquicChannels.InsertOrUpdate(channelId, McquicChannelInfo{});
+          LOG(
+              ("MCQUIC MC_JOIN has no admitted announcement [this=%p "
+               "channel=%s]",
+               this, channelHex.get()));
+          break;
         }
         auto channel = mMcquicChannels.Lookup(channelId);
         MOZ_ASSERT(channel);
         McquicChannelInfo& info = channel.Data();
-        if (info.mLastControlStateSequence < frame.state_sequence) {
-          info.mLastControlStateSequence = frame.state_sequence;
-        }
 
         if (info.mJoined) {
           LOG(
@@ -1467,15 +1653,23 @@ nsresult Http3Session::ProcessMcquicControlFrames() {
           break;
         }
 
+        bool declineJoin = false;
         uint64_t declineReason = MCQUIC_STATE_REASON_UNSPECIFIED_OTHER;
-        if (info.mSource.IsEmpty() ||
+        if (frame.limits_sequence != mMcquicLimitsSequence ||
+            info.mSource.IsEmpty() ||
             info.mLatestKeySequence < frame.key_sequence ||
-            frame.state_sequence < info.mStateSequence) {
+            frame.state_sequence < info.mStateSequence ||
+            frame.state_sequence < info.mLastControlStateSequence) {
+          declineJoin = true;
           declineReason = MCQUIC_STATE_REASON_UNSYNCHRONIZED_PROPERTIES;
         }
 
-        if (!mMcquicReceiver || info.mSubscriptionId == 0 ||
-            declineReason != MCQUIC_STATE_REASON_UNSPECIFIED_OTHER) {
+        if (!McquicJoinWithinLimits(channelId)) {
+          declineJoin = true;
+          declineReason = MCQUIC_STATE_REASON_UNSPECIFIED_OTHER;
+        }
+
+        if (!mMcquicReceiver || info.mSubscriptionId == 0 || declineJoin) {
           LOG(
               ("MCQUIC declining MC_JOIN and continuing unicast [this=%p "
                "channel=%s subscription=%" PRIu64 " latest_key=%" PRIu64
@@ -1512,8 +1706,11 @@ nsresult Http3Session::ProcessMcquicControlFrames() {
         rv = SendMcquicState(channelId, McquicChannelStateExternal::Joined,
                              MCQUIC_STATE_REASON_REQUESTED_BY_SERVER);
         if (NS_FAILED(rv)) {
+          (void)mMcquicReceiver->Leave(info.mSubscriptionId);
+          info.mJoined = false;
           return rv;
         }
+        info.mLastControlStateSequence = frame.state_sequence;
         ScheduleMcquicPoll();
       } break;
       case McquicControlFrameTag::Leave: {
@@ -1560,6 +1757,13 @@ nsresult Http3Session::ProcessMcquicControlFrames() {
       case McquicControlFrameTag::Retire: {
         LOG(("MCQUIC MC_RETIRE [this=%p channel=%s]", this, channelHex.get()));
         if (!mMcquicChannels.Contains(channelId)) {
+          if (mMcquicChannels.Count() >= MCQUIC_MAX_CHANNEL_IDS) {
+            LOG(
+                ("MCQUIC MC_RETIRE omitted for untracked channel at local "
+                 "channel cap [this=%p channel=%s]",
+                 this, channelHex.get()));
+            break;
+          }
           mMcquicChannels.InsertOrUpdate(channelId, McquicChannelInfo{});
         }
         {
@@ -1605,11 +1809,50 @@ nsresult Http3Session::ProcessMcquicControlFrames() {
   return NS_OK;
 }
 
+void Http3Session::ProcessMcquicResourceLimits() {
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
+
+  nsTArray<uint8_t> limitedChannel;
+  while (mHttp3Connection->McquicTakeResourceLimitedChannel(limitedChannel)) {
+    if (limitedChannel.IsEmpty()) {
+      LOG(
+          ("MCQUIC connection resource limit reached; revoking multicast "
+           "[this=%p]",
+           this));
+      RevokeMcquicOperation();
+      return;
+    }
+
+    nsCString channelId = McquicChannelKey(limitedChannel);
+    auto channel = mMcquicChannels.Lookup(channelId);
+    if (!channel) {
+      continue;
+    }
+    McquicChannelInfo& info = channel.Data();
+    LOG(
+        ("MCQUIC channel resource limit reached; leaving and continuing "
+         "unicast [this=%p channel=%s]",
+         this, McquicHexPrefix(limitedChannel).get()));
+    if (info.mJoined) {
+      (void)SendMcquicState(channelId, McquicChannelStateExternal::Left,
+                            MCQUIC_STATE_REASON_UNSPECIFIED_OTHER);
+    }
+    if (mMcquicReceiver && info.mSubscriptionId != 0) {
+      if (info.mJoined) {
+        (void)mMcquicReceiver->Leave(info.mSubscriptionId);
+      }
+      (void)mMcquicReceiver->Remove(info.mSubscriptionId);
+      mMcquicSubscriptionToChannel.Remove(info.mSubscriptionId);
+    }
+    mMcquicChannels.Remove(channelId);
+  }
+}
+
 nsresult Http3Session::ProcessMcquicPackets() {
   MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
-  if (!McquicTransportEnabled() || !mMcquicReceiver ||
-      !HasJoinedMcquicChannel()) {
+  if (!McquicOperationActive() || !McquicTransportEnabled() ||
+      !mMcquicReceiver || !HasJoinedMcquicChannel()) {
     return NS_OK;
   }
 
@@ -1622,7 +1865,7 @@ nsresult Http3Session::ProcessMcquicPackets() {
     if (NS_FAILED(rv)) {
       LOG(("MCQUIC packet poll failed [this=%p rv=0x%08" PRIx32 "]", this,
            static_cast<uint32_t>(rv)));
-      break;
+      return HandleMcquicDisruption(McquicDisruption::ReceiverFailure);
     }
 
     auto channel = mMcquicSubscriptionToChannel.Lookup(packet.subscription_id);
@@ -1652,6 +1895,10 @@ nsresult Http3Session::ProcessMcquicPackets() {
 
   // Pump once per poll. Neqo coalesces MC_ACKs until the announced
   // threshold or deadline, including polls where no new packet arrived.
+  ProcessMcquicResourceLimits();
+  if (!McquicOperationActive()) {
+    return NS_OK;
+  }
   nsresult rv = PumpMcquicAuthenticatedData();
   if (NS_FAILED(rv)) {
     return rv;
@@ -1664,8 +1911,8 @@ nsresult Http3Session::ProcessMcquicPackets() {
 void Http3Session::ScheduleMcquicPoll() {
   MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
-  if (!McquicTransportEnabled() || !mMcquicReceiver ||
-      !HasJoinedMcquicChannel() || IsClosing()) {
+  if (!McquicOperationActive() || !McquicTransportEnabled() ||
+      !mMcquicReceiver || !HasJoinedMcquicChannel() || IsClosing()) {
     return;
   }
 
@@ -1676,6 +1923,175 @@ void Http3Session::ScheduleMcquicPoll() {
   }
 
   SetupTimer(MCQUIC_POLL_INTERVAL_MS);
+}
+
+bool Http3Session::McquicOperationActive() const {
+  return mMcquicOperationState == McquicOperationState::Active;
+}
+
+void Http3Session::OnWebTransportMulticastResponse(uint64_t aSessionId,
+                                                   bool aAccepted) {
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
+
+  if (mMcquicOperationState != McquicOperationState::Pending) {
+    return;
+  }
+
+  if (!aAccepted || !McquicTransportEnabled() || !mHasWebTransportSession ||
+      !mConnInfo->IsWebTransportMulticastEligible() ||
+      mWebTransportSessions.Length() != 1 ||
+      mWebTransportSessions[0]->StreamId() != aSessionId) {
+    nsresult rv = mHttp3Connection->AbandonOutput();
+    if (NS_FAILED(rv)) {
+      LOG(
+          ("MCQUIC could not abandon output while declining negotiation "
+           "[this=%p rv=0x%08" PRIx32 "]",
+           this, static_cast<uint32_t>(rv)));
+      return;
+    }
+    rv = mHttp3Connection->McquicRevokeOperation();
+    if (NS_FAILED(rv)) {
+      LOG(
+          ("MCQUIC could not revoke declined negotiation "
+           "[this=%p rv=0x%08" PRIx32 "]",
+           this, static_cast<uint32_t>(rv)));
+      return;
+    }
+    mMcquicOperationState = McquicOperationState::Prohibited;
+    return;
+  }
+
+  nsresult rv = mHttp3Connection->McquicAcceptOperation(aSessionId);
+  if (NS_FAILED(rv)) {
+    LOG(
+        ("MCQUIC negotiation unavailable; continuing WebTransport over "
+         "unicast [this=%p rv=0x%08" PRIx32 "]",
+         this, static_cast<uint32_t>(rv)));
+    rv = mHttp3Connection->AbandonOutput();
+    if (NS_FAILED(rv)) {
+      LOG(
+          ("MCQUIC could not abandon output after negotiation failure "
+           "[this=%p rv=0x%08" PRIx32 "]",
+           this, static_cast<uint32_t>(rv)));
+      return;
+    }
+    rv = mHttp3Connection->McquicRevokeOperation();
+    if (NS_FAILED(rv)) {
+      LOG(
+          ("MCQUIC could not revoke failed negotiation "
+           "[this=%p rv=0x%08" PRIx32 "]",
+           this, static_cast<uint32_t>(rv)));
+      return;
+    }
+    mMcquicOperationState = McquicOperationState::Prohibited;
+    return;
+  }
+
+  mMcquicPermittedSessionId = Some(aSessionId);
+  mMcquicOperationState = McquicOperationState::Active;
+  mMcquicNetworkGeneration = McquicNetworkGeneration();
+  rv = SendMcquicLimits();
+  if (NS_FAILED(rv)) {
+    LOG(
+        ("MCQUIC limits unavailable after negotiation; continuing over "
+         "unicast [this=%p rv=0x%08" PRIx32 "]",
+         this, static_cast<uint32_t>(rv)));
+    RevokeMcquicOperation();
+  }
+}
+
+void Http3Session::RevokeWebTransportMulticast(uint64_t aSessionId) {
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
+
+  if (mMcquicPermittedSessionId.isSome() &&
+      mMcquicPermittedSessionId.ref() == aSessionId) {
+    RevokeMcquicOperation();
+  }
+}
+
+void Http3Session::ProcessMcquicOwnershipViolation() {
+  if (!McquicOperationActive() ||
+      !mHttp3Connection->McquicTakeOwnershipViolation()) {
+    return;
+  }
+
+  LOG(
+      ("MCQUIC authenticated stream does not belong to the permitted "
+       "WebTransport Session; revoking multicast [this=%p]",
+       this));
+  RevokeMcquicOperation();
+}
+
+nsresult Http3Session::RevokeMcquicOperation() {
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
+
+  if (mMcquicOperationState == McquicOperationState::Revoked ||
+      mMcquicOperationState == McquicOperationState::Prohibited) {
+    return NS_OK;
+  }
+
+  nsresult rv = mHttp3Connection->AbandonOutput();
+  if (NS_FAILED(rv)) {
+    LOG(
+        ("MCQUIC revocation could not abandon pending output "
+         "[this=%p rv=0x%08" PRIx32 "]",
+         this, static_cast<uint32_t>(rv)));
+    return rv;
+  }
+
+  const bool wasActive = McquicOperationActive();
+  nsTArray<nsCString> channels;
+  if (wasActive) {
+    for (auto iter = mMcquicChannels.ConstIter(); !iter.Done(); iter.Next()) {
+      channels.AppendElement(iter.Key());
+    }
+  }
+
+  rv = mHttp3Connection->McquicRevokeOperation();
+  if (NS_FAILED(rv)) {
+    LOG(("MCQUIC transport revocation failed [this=%p rv=0x%08" PRIx32 "]",
+         this, static_cast<uint32_t>(rv)));
+    return rv;
+  }
+
+  nsresult terminalRv = NS_OK;
+  if (wasActive) {
+    rv = mHttp3Connection->McquicSendZeroLimits(++mMcquicLimitsSequence);
+    if (NS_SUCCEEDED(rv)) {
+      mMcquicNeedsOutput = true;
+    } else {
+      terminalRv = rv;
+    }
+
+    for (const auto& channelId : channels) {
+      auto channel = mMcquicChannels.Lookup(channelId);
+      if (!channel) {
+        continue;
+      }
+      McquicChannelInfo& info = channel.Data();
+      if (info.mJoined) {
+        rv = SendMcquicState(channelId, McquicChannelStateExternal::Left,
+                             MCQUIC_STATE_REASON_UNSPECIFIED_OTHER);
+        if (NS_FAILED(rv) && NS_SUCCEEDED(terminalRv)) {
+          terminalRv = rv;
+        }
+      }
+      if (mMcquicReceiver && info.mSubscriptionId != 0) {
+        if (info.mJoined) {
+          (void)mMcquicReceiver->Leave(info.mSubscriptionId);
+        }
+        (void)mMcquicReceiver->Remove(info.mSubscriptionId);
+      }
+    }
+  }
+
+  mMcquicChannels.Clear();
+  mMcquicSubscriptionToChannel.Clear();
+  mMcquicReceiver.reset();
+  mMcquicPermittedSessionId.reset();
+  mMcquicLimitsSent = false;
+  mMcquicOperationState = McquicOperationState::Revoked;
+  return terminalRv;
 }
 
 // This function may return a socket error.
@@ -1710,7 +2126,7 @@ nsresult Http3Session::ProcessOutput(nsIUDPSocket* socket) {
           uint32_t written = 0;
           NetAddr addr;
           if (NS_FAILED(RawBytesToNetAddr(aFamily, aAddr, aPort, &addr))) {
-            return NS_OK;
+            return SendResult{NS_ERROR_INVALID_ARG, 0};
           }
 
           LOG3(
@@ -1729,25 +2145,33 @@ nsresult Http3Session::ProcessOutput(nsIUDPSocket* socket) {
               // becomes NS_ERROR_OUT_OF_MEMORY. On macOS/BSD, ENOBUFS means
               // the NIC transmit queue is momentarily full.
               LOG(
-                  ("Http3Session::ProcessOutput ENOBUFS (transient), dropping "
-                   "datagram [this=%p]",
+                  ("Http3Session::ProcessOutput ENOBUFS (transient), "
+                   "abandoning tracked datagram [this=%p]",
                    self));
             } else {
               self->mSocketError = rv;
               // If there was another error, return from here. We do not need to
               // set a timer, because we will close the connection.
-              return rv;
+              return SendResult{rv, 0};
             }
+            return SendResult{rv, 0};
           }
-          self->mTotalBytesWritten += aLength;
+          if (written != aLength) {
+            return SendResult{NS_ERROR_UNEXPECTED, written};
+          }
+          self->mTotalBytesWritten += written;
           self->mLastWriteTime = PR_IntervalNow();
-          return NS_OK;
+          return SendResult{NS_OK, written};
         },
         [](void* aContext, uint64_t timeout) {
           Http3Session* self = (Http3Session*)aContext;
           self->SetupTimer(timeout);
         });
     mSocket = nullptr;
+    if (rv == NS_BASE_STREAM_WOULD_BLOCK) {
+      socket->EnableWritePoll();
+      return NS_OK;
+    }
     return rv;
   }
 
@@ -2994,6 +3418,10 @@ void Http3Session::DontReuse() {
 
 void Http3Session::CloseWebTransportConn() {
   LOG3(("Http3Session::CloseWebTransportConn %p\n", this));
+  if (mMcquicOperationState == McquicOperationState::Pending ||
+      McquicOperationActive()) {
+    RevokeMcquicOperation();
+  }
   // We need to dispatch, since Http3Session could be released in
   // HttpConnectionUDP::CloseTransaction.
   nsCOMPtr<nsIRunnable> event = NS_NewRunnableFunction(

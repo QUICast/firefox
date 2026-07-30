@@ -34,8 +34,8 @@ WebTransportParent::~WebTransportParent() {
 void WebTransportParent::Create(
     const nsAString& aURL, nsIPrincipal* aPrincipal,
     const uint64_t& aBrowsingContextID, const IPCClientInfo& aClientInfo,
-    const bool& aDedicated, const bool& aRequireUnreliable,
-    const uint32_t& aCongestionControl,
+    const bool& aDedicated, const net::WebTransportMulticastPolicy& aMulticast,
+    const bool& aRequireUnreliable, const uint32_t& aCongestionControl,
     nsTArray<WebTransportHash>&& aServerCertHashes,
     Endpoint<PWebTransportParent>&& aParentEndpoint,
     std::function<void(std::tuple<const nsresult&, const uint8_t&>)>&&
@@ -90,16 +90,36 @@ void WebTransportParent::Create(
       "WebTransport AsyncConnect",
       [self = RefPtr{this}, uri = std::move(uri),
        dedicated = true /* aDedicated, see BUG 1915735.*/,
+       multicast = aMulticast, operationId = nsID::GenerateUUID(),
        nsServerCertHashes = std::move(nsServerCertHashes),
        principal = RefPtr{aPrincipal}, browsingContextID = aBrowsingContextID,
        flags = nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_SEC_CONTEXT_IS_NULL,
        clientInfo = ClientInfo{aClientInfo}] {
         LOG(("WebTransport %p AsyncConnect", self.get()));
-        if (NS_FAILED(self->mWebTransport->AsyncConnectWithClient(
-                uri, dedicated, std::move(nsServerCertHashes), principal,
-                browsingContextID, flags, self, Some(clientInfo),
-                nsIWebTransport::HTTPVersion::h3))) {
-          LOG(("AsyncConnect failure; we should get OnSessionClosed"));
+        nsCOMPtr<nsIWebTransport> webTransport;
+        {
+          MutexAutoLock lock(self->mMutex);
+          if (self->mLifecycle != Lifecycle::ConnectQueued) {
+            return;
+          }
+          self->mLifecycle = Lifecycle::Negotiating;
+          webTransport = self->mWebTransport;
+        }
+        auto operationPolicy = net::CreateWebTransportOperationPolicy(
+            principal, uri, Some(clientInfo), browsingContextID, multicast,
+            operationId);
+        if (operationPolicy.isErr()) {
+          self->OnSessionClosed(false, 0, ""_ns);
+          return;
+        }
+        nsresult rv = webTransport->AsyncConnectWithClient(
+            uri, dedicated, std::move(nsServerCertHashes), principal,
+            browsingContextID, flags, self, Some(clientInfo),
+            operationPolicy.unwrap(), nsIWebTransport::HTTPVersion::h3);
+        if (NS_FAILED(rv)) {
+          LOG(("AsyncConnect failed rv=0x%08" PRIx32,
+               static_cast<uint32_t>(rv)));
+          (void)self->OnSessionClosed(false, 0, ""_ns);
         }
       });
 
@@ -108,49 +128,156 @@ void WebTransportParent::Create(
   // we must call aResolver() on this (PBackground) thread.
   mSocketThread = do_GetService(NS_SOCKETTRANSPORTSERVICE_CONTRACTID, &rv);
   MOZ_ASSERT(NS_SUCCEEDED(rv));
+  {
+    MutexAutoLock lock(mMutex);
+    mResolver = std::move(aResolver);
+  }
 
-  InvokeAsync(mSocketThread, __func__,
-              [parentEndpoint = std::move(aParentEndpoint), runnable = r,
-               resolver = std::move(aResolver), p = RefPtr{this}]() mutable {
-                {
-                  MutexAutoLock lock(p->mMutex);
-                  p->mResolver = resolver;
-                }
+  InvokeAsync(
+      mSocketThread, __func__,
+      [parentEndpoint = std::move(aParentEndpoint), runnable = r,
+       p = RefPtr{this}]() mutable {
+        LOG(("Binding parent endpoint"));
+        if (!parentEndpoint.Bind(p)) {
+          return CreateWebTransportPromise::CreateAndReject(NS_ERROR_FAILURE,
+                                                            __func__);
+        }
+        {
+          MutexAutoLock lock(p->mMutex);
+          if (p->mLifecycle != Lifecycle::Init) {
+            return CreateWebTransportPromise::CreateAndReject(NS_ERROR_ABORT,
+                                                              __func__);
+          }
+          p->mLifecycle = Lifecycle::ConnectQueued;
+        }
+        // IPC now holds a ref to parent
+        // Send connection to the server via MainThread
+        nsresult rv = NS_DispatchToMainThread(runnable, NS_DISPATCH_NORMAL);
+        if (NS_FAILED(rv)) {
+          return CreateWebTransportPromise::CreateAndReject(rv, __func__);
+        }
 
-                LOG(("Binding parent endpoint"));
-                if (!parentEndpoint.Bind(p)) {
-                  return CreateWebTransportPromise::CreateAndReject(
-                      NS_ERROR_FAILURE, __func__);
-                }
-                // IPC now holds a ref to parent
-                // Send connection to the server via MainThread
-                NS_DispatchToMainThread(runnable, NS_DISPATCH_NORMAL);
-
-                return CreateWebTransportPromise::CreateAndResolve(
-                    WebTransportReliabilityMode::Supports_unreliable, __func__);
-              })
+        return CreateWebTransportPromise::CreateAndResolve(
+            WebTransportReliabilityMode::Supports_unreliable, __func__);
+      })
       ->Then(
           GetCurrentSerialEventTarget(), __func__,
           [p = RefPtr{this}](
               const CreateWebTransportPromise::ResolveOrRejectValue& aValue) {
             if (aValue.IsReject()) {
-              std::function<void(ResolveType)> resolver;
-              {
-                MutexAutoLock lock(p->mMutex);
-                resolver = std::move(p->mResolver);
-              }
-              if (resolver) {
-                resolver(
-                    ResolveType(aValue.RejectValue(),
-                                static_cast<uint8_t>(
-                                    WebTransportReliabilityMode::Pending)));
-              }
+              p->CompleteCreate(
+                  aValue.RejectValue(),
+                  static_cast<uint8_t>(WebTransportReliabilityMode::Pending));
             }
           });
 }
 
+void WebTransportParent::CompleteCreate(nsresult aResult,
+                                        uint8_t aReliability) {
+  MOZ_ASSERT(mOwningEventTarget);
+  MOZ_ASSERT(mOwningEventTarget->IsOnCurrentThread());
+
+  Maybe<RemoteCloseInfo> remoteClose;
+  std::function<void(ResolveType)> resolver;
+  {
+    MutexAutoLock lock(mMutex);
+    if (!mResolver) {
+      return;
+    }
+
+    if (NS_SUCCEEDED(aResult)) {
+      if (mLifecycle != Lifecycle::ReadyPending &&
+          mLifecycle != Lifecycle::RemoteClosedPending) {
+        return;
+      }
+    } else if (mLifecycle == Lifecycle::Active ||
+               mLifecycle == Lifecycle::RemoteClosed ||
+               mLifecycle == Lifecycle::Closing ||
+               mLifecycle == Lifecycle::Closed) {
+      return;
+    }
+
+    resolver = std::move(mResolver);
+    if (NS_FAILED(aResult)) {
+      mRemoteClose.reset();
+      mLifecycle = Lifecycle::Closed;
+    } else if (mLifecycle == Lifecycle::RemoteClosedPending) {
+      remoteClose = std::move(mRemoteClose);
+      mLifecycle = Lifecycle::RemoteClosed;
+    } else {
+      mLifecycle = Lifecycle::Active;
+    }
+  }
+
+  // The IPDL resolver can synchronously run teardown code. Publish the
+  // lifecycle transition under the mutex, then invoke external code unlocked.
+  resolver(ResolveType(aResult, aReliability));
+
+  if (remoteClose) {
+    NotifyRemoteClosed(remoteClose->mCleanly, remoteClose->mErrorCode,
+                       remoteClose->mReason);
+  }
+}
+
+nsresult WebTransportParent::DispatchCreateResult(nsresult aResult,
+                                                  uint8_t aReliability) {
+  MOZ_ASSERT(mOwningEventTarget);
+  if (mOwningEventTarget->IsOnCurrentThread()) {
+    CompleteCreate(aResult, aReliability);
+    return NS_OK;
+  }
+
+  nsresult rv = mOwningEventTarget->Dispatch(
+      NS_NewRunnableFunction("WebTransportParent::CompleteCreate",
+                             [self = RefPtr{this}, aResult, aReliability] {
+                               self->CompleteCreate(aResult, aReliability);
+                             }));
+  if (NS_FAILED(rv)) {
+    LOG(
+        ("WebTransportParent %p failed to dispatch create result "
+         "rv=0x%08" PRIx32,
+         this, static_cast<uint32_t>(rv)));
+    nsresult closeRv = Shutdown(0, ""_ns);
+    if (NS_FAILED(closeRv)) {
+      LOG(
+          ("WebTransportParent %p cleanup after dispatch failure failed "
+           "rv=0x%08" PRIx32,
+           this, static_cast<uint32_t>(closeRv)));
+    }
+  }
+  return rv;
+}
+
+nsresult WebTransportParent::Shutdown(uint32_t aCode,
+                                      const nsACString& aReason) {
+  nsCOMPtr<nsIWebTransport> webTransport;
+  {
+    MutexAutoLock lock(mMutex);
+    if (mLifecycle == Lifecycle::Closing || mLifecycle == Lifecycle::Closed) {
+      return NS_OK;
+    }
+    mLifecycle = Lifecycle::Closing;
+    mResolver = nullptr;
+    mRemoteClose.reset();
+    webTransport = mWebTransport;
+  }
+
+  nsresult rv =
+      webTransport ? webTransport->CloseSession(aCode, aReason) : NS_OK;
+  {
+    MutexAutoLock lock(mMutex);
+    mLifecycle = Lifecycle::Closed;
+  }
+  return rv;
+}
+
 void WebTransportParent::ActorDestroy(ActorDestroyReason aWhy) {
   LOG(("ActorDestroy WebTransportParent %d", aWhy));
+  nsresult rv = Shutdown(0, ""_ns);
+  if (NS_FAILED(rv)) {
+    LOG(("WebTransportParent %p ActorDestroy cleanup failed rv=0x%08" PRIx32,
+         this, static_cast<uint32_t>(rv)));
+  }
 }
 
 // We may not receive this response if the child side is destroyed without
@@ -159,15 +286,11 @@ IPCResult WebTransportParent::RecvClose(const uint32_t& aCode,
                                         const nsACString& aReason) {
   LOG(("Close for %p received, code = %u, reason = %s", this, aCode,
        PromiseFlatCString(aReason).get()));
-  if (!mSessionReady) {
-    return IPC_FAIL(this, "Close received before session was ready");
+  nsresult rv = Shutdown(aCode, aReason);
+  if (NS_FAILED(rv)) {
+    LOG(("WebTransportParent %p RecvClose cleanup failed rv=0x%08" PRIx32, this,
+         static_cast<uint32_t>(rv)));
   }
-  {
-    MutexAutoLock lock(mMutex);
-    MOZ_ASSERT(!mClosed);
-    mClosed.Flip();
-  }
-  mWebTransport->CloseSession(aCode, aReason);
   Close();
   return IPC_OK();
 }
@@ -469,48 +592,35 @@ WebTransportParent::OnSessionReady(uint64_t aSessionId) {
   LOG(("Created web transport session, sessionID = %" PRIu64 ", for %p",
        aSessionId, this));
 
-  mSessionReady = true;
-
-  // Retarget to socket thread. After this, WebTransportParent and
-  // |mWebTransport| should be only accessed on the socket thread.
-  nsresult rv = mWebTransport->RetargetTo(mSocketThread);
+  nsCOMPtr<nsIWebTransport> webTransport;
+  nsresult rv;
+  {
+    // Retarget while holding the lifecycle lock so teardown cannot infer
+    // socket-thread ownership until the target switch has completed.
+    MutexAutoLock lock(mMutex);
+    if (mLifecycle != Lifecycle::Negotiating) {
+      return NS_OK;
+    }
+    mLifecycle = Lifecycle::Retargeting;
+    webTransport = mWebTransport;
+    rv = webTransport->RetargetTo(mSocketThread);
+    mLifecycle =
+        NS_SUCCEEDED(rv) ? Lifecycle::ReadyPending : Lifecycle::CreateFailed;
+  }
   if (NS_FAILED(rv)) {
-    mOwningEventTarget->Dispatch(NS_NewRunnableFunction(
-        "WebTransportParent::OnSessionReady Failed",
-        [self = RefPtr{this}, result = rv] {
-          MutexAutoLock lock(self->mMutex);
-          if (!self->mClosed && self->mResolver) {
-            self->mResolver(ResolveType(
-                result, static_cast<uint8_t>(
-                            WebTransportReliabilityMode::Supports_unreliable)));
-            self->mResolver = nullptr;
-          }
-        }));
-    return NS_OK;
+    nsresult closeRv = webTransport->CloseSession(0, ""_ns);
+    if (NS_FAILED(closeRv)) {
+      LOG(("WebTransportParent %p retarget cleanup failed rv=0x%08" PRIx32,
+           this, static_cast<uint32_t>(closeRv)));
+    }
+    return DispatchCreateResult(
+        rv,
+        static_cast<uint8_t>(WebTransportReliabilityMode::Supports_unreliable));
   }
 
-  mOwningEventTarget->Dispatch(NS_NewRunnableFunction(
-      "WebTransportParent::OnSessionReady", [self = RefPtr{this}] {
-        MutexAutoLock lock(self->mMutex);
-        if (!self->mClosed && self->mResolver) {
-          self->mResolver(ResolveType(
-              NS_OK, static_cast<uint8_t>(
-                         WebTransportReliabilityMode::Supports_unreliable)));
-          self->mResolver = nullptr;
-          if (self->mExecuteAfterResolverCallback) {
-            self->mExecuteAfterResolverCallback();
-            self->mExecuteAfterResolverCallback = nullptr;
-          }
-        } else {
-          if (self->mClosed) {
-            LOG(("Session already closed at OnSessionReady %p", self.get()));
-          } else {
-            LOG(("No resolver at OnSessionReady %p", self.get()));
-          }
-        }
-      }));
-
-  return NS_OK;
+  return DispatchCreateResult(
+      NS_OK,
+      static_cast<uint8_t>(WebTransportReliabilityMode::Supports_unreliable));
 }
 
 // We receive this notification from the WebTransportSessionProxy if session
@@ -520,8 +630,6 @@ NS_IMETHODIMP
 WebTransportParent::OnSessionClosed(const bool aCleanly,
                                     const uint32_t aErrorCode,
                                     const nsACString& aReason) {
-  nsresult rv = NS_OK;
-
   MOZ_ASSERT(mOwningEventTarget);
   MOZ_ASSERT(!mOwningEventTarget->IsOnCurrentThread());
 
@@ -529,37 +637,47 @@ WebTransportParent::OnSessionClosed(const bool aCleanly,
   // we need better error propagation from lower-levels of http3
   // webtransport session and it's subsequent error mapping to DOM.
   // XXX See Bug 1806834
-  if (!mSessionReady) {
+  bool creationFailed = false;
+  bool notifyRemoteClose = false;
+  {
+    MutexAutoLock lock(mMutex);
+    switch (mLifecycle) {
+      case Lifecycle::ReadyPending:
+        mLifecycle = Lifecycle::RemoteClosedPending;
+        mRemoteClose =
+            Some(RemoteCloseInfo{aCleanly, aErrorCode, nsCString{aReason}});
+        return NS_OK;
+      case Lifecycle::Active:
+        mLifecycle = Lifecycle::RemoteClosed;
+        notifyRemoteClose = true;
+        break;
+      case Lifecycle::Init:
+      case Lifecycle::ConnectQueued:
+      case Lifecycle::Negotiating:
+      case Lifecycle::Retargeting:
+        mLifecycle = Lifecycle::CreateFailed;
+        creationFailed = true;
+        break;
+      case Lifecycle::RemoteClosedPending:
+      case Lifecycle::RemoteClosed:
+      case Lifecycle::CreateFailed:
+      case Lifecycle::Closing:
+      case Lifecycle::Closed:
+        return NS_OK;
+    }
+  }
+
+  if (creationFailed) {
     // this is an unclean close (we never got to ready)
     LOG(("webtransport %p session creation failed code= %u, reason= %s", this,
          aErrorCode, PromiseFlatCString(aReason).get()));
     // we know we haven't gone Ready yet
-    rv = NS_ERROR_FAILURE;
-    mOwningEventTarget->Dispatch(NS_NewRunnableFunction(
-        "WebTransportParent::OnSessionClosed",
-        [self = RefPtr{this}, result = rv] {
-          MutexAutoLock lock(self->mMutex);
-          if (!self->mClosed && self->mResolver) {
-            self->mResolver(ResolveType(
-                result, static_cast<uint8_t>(
-                            WebTransportReliabilityMode::Supports_unreliable)));
-            self->mResolver = nullptr;
-          }
-        }));
-  } else {
-    {
-      MutexAutoLock lock(mMutex);
-      if (mResolver) {
-        LOG(("[%p] NotifyRemoteClosed to be called later", this));
-        // NotifyRemoteClosed needs to wait until mResolver is invoked.
-        mExecuteAfterResolverCallback = [self = RefPtr{this}, aCleanly,
-                                         aErrorCode,
-                                         reason = nsCString{aReason}]() {
-          self->NotifyRemoteClosed(aCleanly, aErrorCode, reason);
-        };
-        return NS_OK;
-      }
-    }
+    return DispatchCreateResult(
+        NS_ERROR_FAILURE,
+        static_cast<uint8_t>(WebTransportReliabilityMode::Supports_unreliable));
+  }
+
+  if (notifyRemoteClose) {
     // https://w3c.github.io/webtransport/#web-transport-termination
     // Step 1: Let cleanly be a boolean representing whether the HTTP/3
     // stream associated with the CONNECT request that initiated
@@ -611,13 +729,29 @@ void WebTransportParent::NotifyRemoteClosed(bool aCleanly, uint32_t aErrorCode,
                                             const nsACString& aReason) {
   LOG(("webtransport %p session remote closed cleanly=%d code= %u, reason= %s",
        this, aCleanly, aErrorCode, PromiseFlatCString(aReason).get()));
-  mSocketThread->Dispatch(NS_NewRunnableFunction(
+  nsresult rv = mSocketThread->Dispatch(NS_NewRunnableFunction(
       __func__, [self = RefPtr{this}, aErrorCode, reason = nsCString{aReason},
                  aCleanly]() {
+        {
+          MutexAutoLock lock(self->mMutex);
+          if (self->mLifecycle != Lifecycle::RemoteClosed || !self->CanSend()) {
+            return;
+          }
+        }
         // Tell the content side we were closed by the server
         (void)self->SendRemoteClosed(aCleanly, aErrorCode, reason);
         // Let the other end shut down the IPC channel after RecvClose()
       }));
+  if (NS_FAILED(rv)) {
+    LOG((
+        "WebTransportParent %p failed to dispatch remote close rv=0x%08" PRIx32,
+        this, static_cast<uint32_t>(rv)));
+    nsresult closeRv = Shutdown(0, ""_ns);
+    if (NS_FAILED(closeRv)) {
+      LOG(("WebTransportParent %p remote-close cleanup failed rv=0x%08" PRIx32,
+           this, static_cast<uint32_t>(closeRv)));
+    }
+  }
 }
 
 NS_IMETHODIMP

@@ -96,6 +96,8 @@ class Http3WebTransportSession final : public WebTransportSessionBase,
                        const nsACString& aReason);
 
   uint64_t GetStreamId() const override;
+  void OnExtendedConnectResponse(bool aMulticastAccepted) override;
+  void RevokeMulticast() override;
 
   void CreateOutgoingBidirectionalStream(
       std::function<void(Result<RefPtr<WebTransportStreamBase>, nsresult>&&)>&&

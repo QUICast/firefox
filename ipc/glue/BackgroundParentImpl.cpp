@@ -15,6 +15,7 @@
 #include "mozilla/RefPtr.h"
 #include "mozilla/dom/BackgroundSessionStorageServiceParent.h"
 #include "mozilla/dom/ClientManagerActors.h"
+#include "mozilla/dom/ClientManagerService.h"
 #include "mozilla/dom/ContentParent.h"
 #include "mozilla/dom/CookieStoreParent.h"
 #include "mozilla/dom/DOMTypes.h"
@@ -485,18 +486,38 @@ mozilla::ipc::IPCResult BackgroundParentImpl::RecvCreateFileSystemManagerParent(
 mozilla::ipc::IPCResult BackgroundParentImpl::RecvCreateWebTransportParent(
     const nsAString& aURL, nsIPrincipal* aPrincipal,
     const uint64_t& aBrowsingContextID, const IPCClientInfo& aClientInfo,
-    const bool& aDedicated, const bool& aRequireUnreliable,
-    const uint32_t& aCongestionControl,
+    const bool& aDedicated,
+    const mozilla::net::WebTransportMulticastPolicy& aMulticast,
+    const bool& aRequireUnreliable, const uint32_t& aCongestionControl,
     nsTArray<WebTransportHash>&& aServerCertHashes,
     Endpoint<PWebTransportParent>&& aParentEndpoint,
     CreateWebTransportParentResolver&& aResolver) {
   AssertIsInMainProcess();
   AssertIsOnBackgroundThread();
 
+  if (!aPrincipal) {
+    return IPC_FAIL(this, "Missing principal for WebTransport operation");
+  }
+  if (!BackgroundParent::ValidatePrincipal(this, aPrincipal, {})) {
+    ContentParent::LogAndAssertFailedPrincipalValidationInfo(aPrincipal,
+                                                             __func__);
+    return IPC_FAIL(this, "Invalid principal for WebTransport operation");
+  }
+
+  const dom::ClientInfo clientInfo{aClientInfo};
+  RefPtr<dom::ClientManagerService> clientManager =
+      dom::ClientManagerService::GetInstance();
+  RefPtr<ThreadsafeContentParentHandle> contentParent =
+      BackgroundParent::GetContentParentHandle(this);
+  if (!clientManager ||
+      !clientManager->HasMatchingSource(contentParent, clientInfo)) {
+    return IPC_FAIL(this, "WebTransport operation has no matching live client");
+  }
+
   RefPtr<mozilla::dom::WebTransportParent> webt =
       new mozilla::dom::WebTransportParent();
   webt->Create(aURL, aPrincipal, aBrowsingContextID, aClientInfo, aDedicated,
-               aRequireUnreliable, aCongestionControl,
+               aMulticast, aRequireUnreliable, aCongestionControl,
                std::move(aServerCertHashes), std::move(aParentEndpoint),
                std::move(aResolver));
   return IPC_OK();

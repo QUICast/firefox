@@ -14,23 +14,23 @@
 
 namespace mozilla::net {
 
-class McquicMulticastReceiver final {
+class McquicMulticastReceiver {
  public:
   McquicMulticastReceiver() = default;
-  ~McquicMulticastReceiver();
+  virtual ~McquicMulticastReceiver();
 
   static bool Enabled();
 
-  nsresult Init();
-  nsresult AddSsmSubscription(const nsACString& aSource,
-                              const nsACString& aGroup, uint16_t aPort,
-                              const nsACString& aInterface,
-                              Maybe<uint32_t> aInterfaceIndex,
-                              uint64_t* aSubscriptionId);
-  nsresult Join(uint64_t aSubscriptionId);
-  nsresult Leave(uint64_t aSubscriptionId);
-  nsresult Remove(uint64_t aSubscriptionId);
-  nsresult Poll(McquicMcrxPacket& aPacket);
+  virtual nsresult Init();
+  virtual nsresult AddSsmSubscription(const nsACString& aSource,
+                                      const nsACString& aGroup, uint16_t aPort,
+                                      const nsACString& aInterface,
+                                      Maybe<uint32_t> aInterfaceIndex,
+                                      uint64_t* aSubscriptionId);
+  virtual nsresult Join(uint64_t aSubscriptionId);
+  virtual nsresult Leave(uint64_t aSubscriptionId);
+  virtual nsresult Remove(uint64_t aSubscriptionId);
+  virtual nsresult Poll(McquicMcrxPacket& aPacket);
 
  private:
   nsresult EnsureReady() const;

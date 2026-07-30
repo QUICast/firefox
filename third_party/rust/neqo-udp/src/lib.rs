@@ -16,6 +16,7 @@ use std::{
     iter,
     net::SocketAddr,
     slice::{self, ChunksMut},
+    sync::atomic::{AtomicBool, Ordering},
 };
 
 use log::{Level, log_enabled};
@@ -48,6 +49,15 @@ const NUM_BUFS: usize = 1;
 // Value approximated based on neqo-bin "Download" benchmark only.
 const NUM_BUFS: usize = 16;
 
+/// Recovery action for an output batch rejected by the local UDP stack.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SendErrorAction {
+    /// Disable segmentation offload and regenerate the batch immediately.
+    RetryWithoutGso,
+    /// Regenerate the batch after allowing a transient local condition to clear.
+    RetryLater,
+}
+
 /// A UDP receive buffer.
 pub struct RecvBuf(Vec<Vec<u8>>);
 
@@ -62,16 +72,8 @@ pub fn send_inner(
     socket: quinn_udp::UdpSockRef<'_>,
     d: &datagram::Batch,
 ) -> io::Result<()> {
-    let transmit = Transmit {
-        destination: d.destination(),
-        ecn: EcnCodepoint::from_bits(Into::<u8>::into(d.tos())),
-        contents: d.data(),
-        segment_size: Some(d.datagram_size().get()),
-        src_ip: None,
-    };
-
-    match state.try_send(socket, &transmit) {
-        Ok(()) => {}
+    match send_segments_inner(state, socket, d) {
+        Ok(_) => {}
         Err(e) if is_emsgsize(&e) => {
             qdebug!(
                 "Failed to send datagram of size {} bytes, in {} segments, each {} bytes, from {} to {}. PMTUD probe? Ignoring error: {e}",
@@ -90,7 +92,7 @@ pub fn send_inner(
             qdebug!("Interface send queue full (ENOBUFS), dropping packet: {e}");
             return Ok(());
         }
-        e @ Err(_) => return e,
+        Err(e) => return Err(e),
     }
 
     qtrace!(
@@ -103,6 +105,23 @@ pub fn send_inner(
     );
 
     Ok(())
+}
+
+/// Send a datagram batch without suppressing socket errors and return the
+/// accepted UDP-segment prefix.
+pub fn send_segments_inner(
+    state: &UdpSocketState,
+    socket: quinn_udp::UdpSockRef<'_>,
+    d: &datagram::Batch,
+) -> io::Result<usize> {
+    let transmit = Transmit {
+        destination: d.destination(),
+        ecn: EcnCodepoint::from_bits(Into::<u8>::into(d.tos())),
+        contents: d.data(),
+        segment_size: Some(d.datagram_size().get()),
+        src_ip: None,
+    };
+    state.try_send_segments(socket, &transmit)
 }
 
 #[cfg(unix)]
@@ -134,6 +153,39 @@ fn is_enobufs(e: &io::Error) -> bool {
 
 #[cfg(not(any(unix, windows)))]
 fn is_enobufs(_: &io::Error) -> bool {
+    false
+}
+
+fn send_error_action(e: &io::Error, segment_count: usize) -> Option<SendErrorAction> {
+    if segment_count > 1 && is_gso_unsupported(e) {
+        return Some(SendErrorAction::RetryWithoutGso);
+    }
+    if is_emsgsize(e) || is_enobufs(e) {
+        return Some(SendErrorAction::RetryLater);
+    }
+    None
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn is_gso_unsupported(e: &io::Error) -> bool {
+    matches!(e.raw_os_error(), Some(libc::EIO | libc::EINVAL))
+}
+
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
+const fn is_gso_unsupported(_: &io::Error) -> bool {
+    false
+}
+
+#[cfg(windows)]
+fn is_gso_unsupported(e: &io::Error) -> bool {
+    matches!(
+        e.raw_os_error(),
+        Some(c) if c == WinSock::WSAEINVAL.0 || c == WinSock::WSAEMSGSIZE.0
+    )
+}
+
+#[cfg(not(any(unix, windows)))]
+fn is_gso_unsupported(_: &io::Error) -> bool {
     false
 }
 
@@ -241,6 +293,7 @@ impl<'a> Iterator for DatagramIter<'a> {
 pub struct Socket<S> {
     state: UdpSocketState,
     inner: S,
+    gso_disabled: AtomicBool,
 }
 
 impl<S: SocketRef> Socket<S> {
@@ -250,6 +303,7 @@ impl<S: SocketRef> Socket<S> {
         Ok(Self {
             state,
             inner: socket,
+            gso_disabled: AtomicBool::new(false),
         })
     }
 
@@ -273,9 +327,33 @@ impl<S: SocketRef> Socket<S> {
         send_inner(&self.state, (&self.inner).into(), d)
     }
 
+    /// Send a [`datagram::Batch`] without suppressing socket errors and return
+    /// the accepted UDP-segment prefix.
+    pub fn send_segments(&self, d: &datagram::Batch) -> io::Result<usize> {
+        send_segments_inner(&self.state, (&self.inner).into(), d)
+    }
+
+    /// Classify a local send error and apply any socket-level fallback needed
+    /// before the caller regenerates an abandoned tracked output batch.
+    pub fn handle_send_error(
+        &self,
+        e: &io::Error,
+        segment_count: usize,
+    ) -> Option<SendErrorAction> {
+        let action = send_error_action(e, segment_count);
+        if action == Some(SendErrorAction::RetryWithoutGso) {
+            self.gso_disabled.store(true, Ordering::Relaxed);
+        }
+        action
+    }
+
     /// Returns the maximum number of GSO segments supported by this socket.
     pub fn max_gso_segments(&self) -> usize {
-        self.state.max_gso_segments()
+        if self.gso_disabled.load(Ordering::Relaxed) {
+            1
+        } else {
+            self.state.max_gso_segments()
+        }
     }
 
     /// Receive a batch of [`Datagram`]s on the given [`Socket`], each
@@ -315,6 +393,84 @@ mod tests {
         // Reverse non-blocking flag set by `UdpSocketState` to make the test non-racy.
         socket.inner.set_nonblocking(false)?;
         Ok(socket)
+    }
+
+    #[test]
+    fn classify_local_send_errors() {
+        assert_eq!(
+            send_error_action(&io::Error::from_raw_os_error(local_no_buffer_error()), 1),
+            Some(SendErrorAction::RetryLater)
+        );
+        assert_eq!(
+            send_error_action(&io::Error::from_raw_os_error(local_message_size_error()), 1),
+            Some(SendErrorAction::RetryLater)
+        );
+        assert_eq!(send_error_action(&io::Error::from_raw_os_error(1), 1), None);
+    }
+
+    #[cfg(unix)]
+    const fn local_no_buffer_error() -> i32 {
+        libc::ENOBUFS
+    }
+
+    #[cfg(windows)]
+    const fn local_no_buffer_error() -> i32 {
+        WinSock::WSAENOBUFS.0
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    const fn local_no_buffer_error() -> i32 {
+        1
+    }
+
+    #[cfg(unix)]
+    const fn local_message_size_error() -> i32 {
+        libc::EMSGSIZE
+    }
+
+    #[cfg(windows)]
+    const fn local_message_size_error() -> i32 {
+        WinSock::WSAEMSGSIZE.0
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    const fn local_message_size_error() -> i32 {
+        1
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[test]
+    fn gso_errors_disable_segmentation_only_for_batches() -> Result<(), io::Error> {
+        let socket = socket()?;
+        for raw_error in [libc::EIO, libc::EINVAL] {
+            let error = io::Error::from_raw_os_error(raw_error);
+            assert_eq!(
+                socket.handle_send_error(&error, 1),
+                None,
+                "single datagram must not be treated as a GSO failure"
+            );
+            assert_eq!(
+                socket.handle_send_error(&error, 2),
+                Some(SendErrorAction::RetryWithoutGso)
+            );
+            assert_eq!(socket.max_gso_segments(), 1);
+        }
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn gso_errors_disable_segmentation_only_for_batches() -> Result<(), io::Error> {
+        let socket = socket()?;
+        for raw_error in [WinSock::WSAEINVAL.0, WinSock::WSAEMSGSIZE.0] {
+            let error = io::Error::from_raw_os_error(raw_error);
+            assert_eq!(
+                socket.handle_send_error(&error, 2),
+                Some(SendErrorAction::RetryWithoutGso)
+            );
+            assert_eq!(socket.max_gso_segments(), 1);
+        }
+        Ok(())
     }
 
     #[test]

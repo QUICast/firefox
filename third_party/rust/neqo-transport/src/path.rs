@@ -197,6 +197,7 @@ impl Paths {
         &mut self,
         path: &PathRef,
         force: bool,
+        enable_ecn: bool,
         now: Instant,
         stats: &mut Stats,
     ) -> bool {
@@ -206,7 +207,9 @@ impl Paths {
             |p| p.borrow().ecn_info.baseline(),
         );
         path.borrow_mut().set_ecn_baseline(baseline);
-        path.borrow_mut().start_ecn(stats);
+        if enable_ecn {
+            path.borrow_mut().start_ecn(stats);
+        }
         if force || path.borrow().is_valid() {
             path.borrow_mut().set_valid(now);
             drop(self.select_primary(path, now));
@@ -480,7 +483,7 @@ impl Paths {
 }
 
 /// The state of a path with respect to address validation.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum ProbeState {
     /// The path was last valid at the indicated time.
     Valid,
@@ -558,7 +561,38 @@ pub struct Path {
     qlog: Qlog,
 }
 
+#[derive(Debug, Clone)]
+pub struct OutputCheckpoint {
+    state: ProbeState,
+    challenge: Option<[u8; 8]>,
+    sender: crate::sender::OutputCheckpoint,
+    sent_bytes: usize,
+    ecn_info: ecn::Info,
+}
+
 impl Path {
+    pub(crate) fn output_checkpoint(&self) -> OutputCheckpoint {
+        OutputCheckpoint {
+            state: self.state.clone(),
+            challenge: self.challenge,
+            sender: self.sender.output_checkpoint(),
+            sent_bytes: self.sent_bytes,
+            ecn_info: self.ecn_info,
+        }
+    }
+
+    pub(crate) fn restore_output(&mut self, checkpoint: OutputCheckpoint) {
+        self.state = checkpoint.state;
+        self.challenge = checkpoint.challenge;
+        self.sender.restore_output(checkpoint.sender);
+        self.sent_bytes = checkpoint.sent_bytes;
+        self.ecn_info = checkpoint.ecn_info;
+    }
+
+    pub(crate) fn on_datagrams_sent(&mut self, count: usize, stats: &mut Stats) {
+        self.ecn_info.on_packet_sent(count, stats);
+    }
+
     /// The number of times that a path will be probed before it is considered failed.
     ///
     /// Note that with [`crate::ecn`], a path is probed [`Self::MAX_PROBES`] with ECN
@@ -762,7 +796,7 @@ impl Path {
         // Make sure to use the TOS value from before calling ecn::Info::on_packet_sent, which may
         // update the ECN state and can hence change it - this packet should still be sent
         // with the current value.
-        self.ecn_info.on_packet_sent(num_datagrams, stats);
+        self.on_datagrams_sent(num_datagrams, stats);
         datagram::Batch::new(
             self.local,
             self.remote,

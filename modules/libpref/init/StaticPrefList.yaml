@@ -16386,6 +16386,14 @@
   value: true
   mirror: always
 
+# Testing only: permit one pre-ready 421 restart for an MCQUIC-eligible
+# WebTransport operation so retry binding and request regeneration can be
+# exercised without changing ordinary WebTransport retry policy.
+- name: network.http.http3.mcquic.force_webtransport_421_retry_for_testing
+  type: RelaxedAtomicBool
+  value: false
+  mirror: always
+
 # Receive buffer size of QUIC socket
 - name: network.http.http3.recvBufferSize
   type: RelaxedAtomicInt32

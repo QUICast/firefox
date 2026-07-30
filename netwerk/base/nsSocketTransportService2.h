@@ -125,6 +125,9 @@ class nsSocketTransportService final : public nsPISocketTransportService,
 
   bool IsTelemetryEnabledAndNotSleepPhase();
   PRIntervalTime MaxTimeForPrClosePref() { return mMaxTimeForPrClosePref; }
+  uint64_t NetworkLinkChangeGeneration() const {
+    return mNetworkLinkChangeGeneration;
+  }
 
   // According the preference value of `network.socket.forcePort` this method
   // possibly remaps the port number passed as the arg.
@@ -300,6 +303,7 @@ class nsSocketTransportService final : public nsPISocketTransportService,
   // Timestamp of the last network link change event, tracked
   // also on child processes.
   Atomic<PRIntervalTime, Relaxed> mLastNetworkLinkChangeTime{0};
+  Atomic<uint64_t, Relaxed> mNetworkLinkChangeGeneration{0};
   // Preference for how long we do busy wait after network link
   // change has been detected.
   Atomic<PRIntervalTime, Relaxed> mNetworkLinkChangeBusyWaitPeriod;

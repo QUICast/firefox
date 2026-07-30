@@ -180,6 +180,7 @@ parent:
       uint64_t aBrowsingContextID,
       IPCClientInfo aClientInfo,
       bool aDedicated,
+      WebTransportMulticastPolicy aMulticast,
       bool aRequireUnreliable,
       uint32_t aCongestionControl,
       WebTransportHash[] aServerCertHashes,

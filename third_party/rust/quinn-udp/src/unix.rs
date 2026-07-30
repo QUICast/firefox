@@ -15,7 +15,8 @@ use std::{
 use socket2::SockRef;
 
 use super::{
-    EcnCodepoint, IO_ERROR_LOG_INTERVAL, RecvMeta, Transmit, UdpSockRef, cmsg, log_sendmsg_error,
+    EcnCodepoint, IO_ERROR_LOG_INTERVAL, RecvMeta, Transmit, UdpSockRef, cmsg,
+    exact_transmit_segments, log_sendmsg_error,
 };
 
 // Adapted from https://github.com/apple-oss-distributions/xnu/blob/8d741a5de7ff4191bf97d57b9f54c2f6d4a15585/bsd/sys/socket_private.h
@@ -216,7 +217,7 @@ impl UdpSocketState {
     /// instead.
     pub fn send(&self, socket: UdpSockRef<'_>, transmit: &Transmit<'_>) -> io::Result<()> {
         match send(self, socket.0, transmit) {
-            Ok(()) => Ok(()),
+            Ok(_) => Ok(()),
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => Err(e),
             // - EMSGSIZE is expected for MTU probes. Future work might be able to avoid
             //   these by automatically clamping the MTUD upper bound to the interface MTU.
@@ -231,6 +232,15 @@ impl UdpSocketState {
 
     /// Sends a [`Transmit`] on the given socket without any additional error handling.
     pub fn try_send(&self, socket: UdpSockRef<'_>, transmit: &Transmit<'_>) -> io::Result<()> {
+        self.try_send_segments(socket, transmit).map(|_| ())
+    }
+
+    /// Sends a [`Transmit`] and returns the accepted UDP-segment prefix.
+    pub fn try_send_segments(
+        &self,
+        socket: UdpSockRef<'_>,
+        transmit: &Transmit<'_>,
+    ) -> io::Result<usize> {
         send(self, socket.0, transmit)
     }
 
@@ -370,7 +380,7 @@ fn send(
     state: &UdpSocketState,
     io: SockRef<'_>,
     transmit: &Transmit<'_>,
-) -> io::Result<()> {
+) -> io::Result<usize> {
     #[allow(unused_mut)] // only mutable on FreeBSD
     let mut encode_src_ip = true;
     #[cfg(target_os = "freebsd")]
@@ -400,8 +410,8 @@ fn send(
     loop {
         let n = unsafe { libc::sendmsg(io.as_raw_fd(), &msg_hdr, 0) };
 
-        if n >= 0 {
-            return Ok(());
+        if let Ok(written) = usize::try_from(n) {
+            return exact_transmit_segments(written, transmit);
         }
 
         let e = io::Error::last_os_error();
@@ -450,7 +460,7 @@ fn send(
 }
 
 #[cfg(apple_fast)]
-fn send(state: &UdpSocketState, io: SockRef<'_>, transmit: &Transmit<'_>) -> io::Result<()> {
+fn send(state: &UdpSocketState, io: SockRef<'_>, transmit: &Transmit<'_>) -> io::Result<usize> {
     if state.is_apple_fast_path_enabled() {
         send_via_sendmsg_x(state, io, transmit)
     } else {
@@ -464,7 +474,7 @@ fn send_via_sendmsg_x(
     state: &UdpSocketState,
     io: SockRef<'_>,
     transmit: &Transmit<'_>,
-) -> io::Result<()> {
+) -> io::Result<usize> {
     let mut hdrs = unsafe { mem::zeroed::<[msghdr_x; BATCH_SIZE]>() };
     let mut iovs = unsafe { mem::zeroed::<[libc::iovec; BATCH_SIZE]>() };
     let mut ctrls = [cmsg::Aligned([0u8; CMSG_LEN]); BATCH_SIZE];
@@ -500,7 +510,10 @@ fn send_via_sendmsg_x(
         let n = unsafe { sendmsg_x(io.as_raw_fd(), hdrs.as_ptr(), cnt as u32, 0) };
 
         if n >= 0 {
-            return Ok(());
+            return usize::try_from(n)
+                .ok()
+                .filter(|accepted| *accepted <= cnt)
+                .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidData));
         }
 
         let e = io::Error::last_os_error();
@@ -513,13 +526,17 @@ fn send_via_sendmsg_x(
 }
 
 #[cfg(any(target_os = "openbsd", target_os = "netbsd", apple_slow))]
-fn send(state: &UdpSocketState, io: SockRef<'_>, transmit: &Transmit<'_>) -> io::Result<()> {
+fn send(state: &UdpSocketState, io: SockRef<'_>, transmit: &Transmit<'_>) -> io::Result<usize> {
     send_single(state, io, transmit)
 }
 
 #[cfg(any(target_os = "openbsd", target_os = "netbsd", apple))]
 #[cfg_attr(apple_fast, allow(dead_code))] // Unused when apple_fast is enabled
-fn send_single(state: &UdpSocketState, io: SockRef<'_>, transmit: &Transmit<'_>) -> io::Result<()> {
+fn send_single(
+    state: &UdpSocketState,
+    io: SockRef<'_>,
+    transmit: &Transmit<'_>,
+) -> io::Result<usize> {
     let mut hdr: libc::msghdr = unsafe { mem::zeroed() };
     let mut iov: libc::iovec = unsafe { mem::zeroed() };
     let mut ctrl = cmsg::Aligned([0u8; CMSG_LEN]);
@@ -536,8 +553,8 @@ fn send_single(state: &UdpSocketState, io: SockRef<'_>, transmit: &Transmit<'_>)
     loop {
         let n = unsafe { libc::sendmsg(io.as_raw_fd(), &hdr, 0) };
 
-        if n >= 0 {
-            return Ok(());
+        if let Ok(written) = usize::try_from(n) {
+            return exact_transmit_segments(written, transmit);
         }
 
         let e = io::Error::last_os_error();

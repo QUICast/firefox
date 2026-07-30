@@ -30,13 +30,15 @@ use crate::{
 ///
 /// Constant throughout the lifetime of the connection.
 ///
-/// See also <https://github.com/google/quiche/blob/4f1f0fcea045cd71410c2c318773fc24c3523ed7/quiche/quic/core/quic_constants.h#L113-L114>.
+/// See also
+/// <https://github.com/google/quiche/blob/4f1f0fcea045cd71410c2c318773fc24c3523ed7/quiche/quic/core/quic_constants.h#L113-L114>.
 const LOCAL_STREAM_LIMIT_BIDI: u64 = 100;
 /// Maximum number of unidirectional streams that the remote can open.
 ///
 /// Constant throughout the lifetime of the connection.
 ///
-/// See also <https://github.com/google/quiche/blob/4f1f0fcea045cd71410c2c318773fc24c3523ed7/quiche/quic/core/quic_constants.h#L113-L114>.
+/// See also
+/// <https://github.com/google/quiche/blob/4f1f0fcea045cd71410c2c318773fc24c3523ed7/quiche/quic/core/quic_constants.h#L113-L114>.
 const LOCAL_STREAM_LIMIT_UNI: u64 = 100;
 
 /// Factor to multiply stream-level data flow control limits to get
@@ -53,7 +55,8 @@ const CONNECTION_FACTOR: u64 = 2;
 /// Auto-tuned throughout the lifetime of the connection. See flow control
 /// implementation for details.
 ///
-/// See also <https://datatracker.ietf.org/doc/html/rfc9000#name-max_stream_data-frames>.
+/// See also
+/// <https://datatracker.ietf.org/doc/html/rfc9000#name-max_stream_data-frames>.
 pub const INITIAL_LOCAL_MAX_STREAM_DATA: usize = 1024 * 1024;
 /// Initial connection-level receive window size.
 ///
@@ -76,7 +79,8 @@ pub const INITIAL_LOCAL_MAX_DATA: u64 = INITIAL_LOCAL_MAX_STREAM_DATA as u64 * C
 /// - 40ms rtt and 2.1 GBit/s
 /// - 100ms rtt and 0.8 GBit/s
 ///
-/// See also <https://datatracker.ietf.org/doc/html/rfc9000#name-max_stream_data-frames>.
+/// See also
+/// <https://datatracker.ietf.org/doc/html/rfc9000#name-max_stream_data-frames>.
 pub const MAX_LOCAL_MAX_STREAM_DATA: u64 = 10 * 1024 * 1024;
 /// Limit for the maximum amount of bytes active on the connection, i.e. limit
 /// for the size of the connection-level receive window.
@@ -84,7 +88,8 @@ pub const MAX_LOCAL_MAX_STREAM_DATA: u64 = 10 * 1024 * 1024;
 /// See also <https://datatracker.ietf.org/doc/html/rfc9000#frame-max-data>.
 pub const MAX_LOCAL_MAX_DATA: u64 = MAX_LOCAL_MAX_STREAM_DATA * CONNECTION_FACTOR;
 
-// Maximum size of a QUIC DATAGRAM frame, as specified in https://datatracker.ietf.org/doc/html/rfc9221#section-3-4.
+// Maximum size of a QUIC DATAGRAM frame, as specified in
+// https://datatracker.ietf.org/doc/html/rfc9221#section-3-4.
 const MAX_DATAGRAM_FRAME_SIZE: u64 = 65535;
 const MAX_QUEUED_DATAGRAMS_DEFAULT: usize = 10;
 
@@ -98,7 +103,6 @@ pub enum PreferredAddressConfig {
     /// Enabled at both client and server.
     Address(PreferredAddress),
 }
-
 /// `ConnectionParameters` use for setting initial value for QUIC parameters.
 /// This collects configuration like initial limits, protocol version, and
 /// congestion control algorithm.
@@ -111,25 +115,26 @@ pub struct ConnectionParameters {
     hystart_css_baseline: HyStartCssBaseline,
     /// Initial connection-level flow control limit.
     max_data: u64,
-    /// Initial flow control limit for receiving data on bidirectional streams that the peer
-    /// creates.
+    /// Initial flow control limit for receiving data on
+    /// bidirectional streams that the peer creates.
     max_stream_data_bidi_remote: u64,
-    /// Initial flow control limit for receiving data on bidirectional streams that this endpoint
-    /// creates.
+    /// Initial flow control limit for receiving data on bidirectional
+    /// streams that this endpoint creates.
     max_stream_data_bidi_local: u64,
-    /// Initial flow control limit for receiving data on unidirectional streams that the peer
-    /// creates.
+    /// Initial flow control limit for receiving data on unidirectional
+    /// streams that the peer creates.
     max_stream_data_uni: u64,
     /// Initial limit on bidirectional streams that the peer creates.
     max_streams_bidi: u64,
     /// Initial limit on unidirectional streams that this endpoint creates.
     max_streams_uni: u64,
-    /// The ACK ratio determines how many acknowledgements we will request as a
-    /// fraction of both the current congestion window (expressed in packets) and
-    /// as a fraction of the current round trip time.  This value is scaled by
-    /// `ACK_RATIO_SCALE`; that is, if the goal is to have at least five
-    /// acknowledgments every round trip, set the value to `5 * ACK_RATIO_SCALE`.
-    /// Values less than `ACK_RATIO_SCALE` are clamped to `ACK_RATIO_SCALE`.
+    /// The ACK ratio determines how many acknowledgements we will request
+    /// as a fraction of both the current congestion window (expressed in
+    /// packets) and as a fraction of the current round trip time.  This
+    /// value is scaled by `ACK_RATIO_SCALE`; that is, if the goal is to
+    /// have at least five acknowledgments every round trip, set the value
+    /// to `5 * ACK_RATIO_SCALE`. Values less than `ACK_RATIO_SCALE` are
+    /// clamped to `ACK_RATIO_SCALE`.
     ack_ratio: u8,
     /// The duration of the idle timeout for the connection.
     idle_timeout: Duration,
@@ -142,6 +147,8 @@ pub struct ConnectionParameters {
     grease: bool,
     disable_migration: bool,
     pacing: bool,
+    /// Whether the connection may mark outgoing packets with ECN.
+    ecn: bool,
     /// Whether the connection performs PLPMTUD.
     pmtud: bool,
     /// Whether PMTUD should take the local interface MTU into account.
@@ -154,12 +161,16 @@ pub struct ConnectionParameters {
     randomize_first_pn: bool,
     /// Whether to send the SCONE transport parameter.
     scone: bool,
-    /// Whether to recover from spurious congestion events by restoring prior Congestion Controller
-    /// state. Detection and metrics are always active regardless of this setting.
+    /// Whether to recover from spurious congestion events by restoring
+    /// prior Congestion Controller state. Detection and metrics are always
+    /// active regardless of this setting.
     spurious_recovery: bool,
     /// Experimental MCQUIC client transport parameters.
     #[cfg(feature = "mcquic")]
     mcquic_client_params: Option<crate::mcquic::ClientTransportParams>,
+    /// Application policy for the connection-isolated MCQUIC operation.
+    #[cfg(feature = "mcquic")]
+    mcquic_operation_policy: crate::mcquic::OperationPolicy,
     /// Whether to advertise experimental MCQUIC server support.
     #[cfg(feature = "mcquic")]
     mcquic_server_support: bool,
@@ -192,6 +203,7 @@ impl Default for ConnectionParameters {
             grease: true,
             disable_migration: false,
             pacing: true,
+            ecn: true,
             pmtud: false,
             pmtud_iface_mtu: true,
             sni_slicing: true,
@@ -201,6 +213,8 @@ impl Default for ConnectionParameters {
             spurious_recovery: true,
             #[cfg(feature = "mcquic")]
             mcquic_client_params: None,
+            #[cfg(feature = "mcquic")]
+            mcquic_operation_policy: crate::mcquic::OperationPolicy::Prohibit,
             #[cfg(feature = "mcquic")]
             mcquic_server_support: false,
         }
@@ -224,7 +238,6 @@ impl ConnectionParameters {
     pub(crate) const fn get_versions_mut(&mut self) -> &mut version::Config {
         &mut self.versions
     }
-
     /// Describe the initial version that should be attempted and all the
     /// versions that should be enabled.  This list should contain the initial
     /// version and be in order of preference, with more preferred versions
@@ -239,7 +252,6 @@ impl ConnectionParameters {
     pub const fn get_congestion_control(&self) -> CongestionControl {
         self.congestion_control
     }
-
     #[must_use]
     pub const fn congestion_control(mut self, v: CongestionControl) -> Self {
         self.congestion_control = v;
@@ -250,7 +262,6 @@ impl ConnectionParameters {
     pub const fn get_slow_start(&self) -> SlowStart {
         self.slow_start
     }
-
     #[must_use]
     pub const fn slow_start(mut self, v: SlowStart) -> Self {
         self.slow_start = v;
@@ -261,7 +272,6 @@ impl ConnectionParameters {
     pub const fn get_hystart_css_baseline(&self) -> HyStartCssBaseline {
         self.hystart_css_baseline
     }
-
     #[must_use]
     pub const fn hystart_css_baseline(mut self, v: HyStartCssBaseline) -> Self {
         self.hystart_css_baseline = v;
@@ -272,7 +282,6 @@ impl ConnectionParameters {
     pub const fn get_max_data(&self) -> u64 {
         self.max_data
     }
-
     #[must_use]
     pub const fn max_data(mut self, v: u64) -> Self {
         self.max_data = v;
@@ -304,12 +313,13 @@ impl ConnectionParameters {
         self
     }
 
-    /// Set the maximum stream data that we will accept on different types of streams.
+    /// Set the maximum stream data that we will accept on different types of
+    /// streams.
     ///
     /// # Panics
     ///
-    /// If `StreamType::UniDi` and `false` are passed as that is not a valid combination
-    /// or if v >= 62 (the maximum allowed by the protocol).
+    /// If `StreamType::UniDi` and `false` are passed as that is not a valid
+    /// combination or if v >= 62 (the maximum allowed by the protocol).
     #[must_use]
     pub fn max_stream_data(mut self, stream_type: StreamType, remote: bool, v: u64) -> Self {
         assert!(v < (1 << 62), "max stream data is too large");
@@ -348,7 +358,6 @@ impl ConnectionParameters {
     pub const fn get_preferred_address(&self) -> &PreferredAddressConfig {
         &self.preferred_address
     }
-
     #[must_use]
     pub const fn ack_ratio(mut self, ack_ratio: u8) -> Self {
         self.ack_ratio = ack_ratio;
@@ -359,7 +368,6 @@ impl ConnectionParameters {
     pub const fn get_ack_ratio(&self) -> u8 {
         self.ack_ratio
     }
-
     /// # Panics
     ///
     /// If `timeout` is 2^62 milliseconds or more.
@@ -374,7 +382,6 @@ impl ConnectionParameters {
     pub const fn get_idle_timeout(&self) -> Duration {
         self.idle_timeout
     }
-
     #[must_use]
     pub const fn get_initial_rtt(&self) -> Duration {
         self.initial_rtt
@@ -390,7 +397,6 @@ impl ConnectionParameters {
     pub const fn get_datagram_size(&self) -> u64 {
         self.datagram_size
     }
-
     #[must_use]
     pub const fn datagram_size(mut self, v: u64) -> Self {
         self.datagram_size = v;
@@ -401,7 +407,6 @@ impl ConnectionParameters {
     pub const fn get_outgoing_datagram_queue(&self) -> usize {
         self.outgoing_datagram_queue
     }
-
     #[must_use]
     pub fn outgoing_datagram_queue(mut self, v: usize) -> Self {
         // The max queue length must be at least 1.
@@ -413,7 +418,6 @@ impl ConnectionParameters {
     pub const fn get_incoming_datagram_queue(&self) -> usize {
         self.incoming_datagram_queue
     }
-
     #[must_use]
     pub fn incoming_datagram_queue(mut self, v: usize) -> Self {
         // The max queue length must be at least 1.
@@ -425,18 +429,16 @@ impl ConnectionParameters {
     pub const fn get_fast_pto(&self) -> u8 {
         self.fast_pto
     }
-
-    /// Scale the PTO timer.  A value of `FAST_PTO_SCALE` follows the spec, a smaller
-    /// value does not, but produces more probes with the intent of ensuring lower
-    /// latency in the event of tail loss. A value of `FAST_PTO_SCALE/4` is quite
-    /// aggressive. Smaller values (other than zero) are not rejected, but could be
-    /// very wasteful. Values greater than `FAST_PTO_SCALE` delay probes and could
-    /// reduce performance. It should not be possible to increase the PTO timer by
-    /// too much based on the range of valid values, but a maximum value of 255 will
-    /// result in very poor performance.
-    /// Scaling PTO this way does not affect when persistent congestion is declared,
-    /// but may change how many retransmissions are sent before declaring persistent
-    /// congestion.
+    /// Scale the PTO timer.  A value of `FAST_PTO_SCALE` follows the spec, a
+    /// smaller value does not, but produces more probes with the intent of ensuring
+    /// lower latency in the event of tail loss. A value of `FAST_PTO_SCALE/4` is
+    /// quite aggressive. Smaller values (other than zero) are not rejected, but
+    /// could be very wasteful. Values greater than `FAST_PTO_SCALE` delay probes
+    /// and could reduce performance. It should not be possible to increase the PTO
+    /// timer by too much based on the range of valid values, but a maximum value of
+    /// 255 will result in very poor performance. Scaling PTO this way does not
+    /// affect when persistent congestion is declared, but may change how many
+    /// retransmissions are sent before declaring persistent congestion.
     ///
     /// # Panics
     ///
@@ -452,7 +454,6 @@ impl ConnectionParameters {
     pub const fn is_greasing(&self) -> bool {
         self.grease
     }
-
     #[must_use]
     pub const fn grease(mut self, grease: bool) -> Self {
         self.grease = grease;
@@ -469,7 +470,6 @@ impl ConnectionParameters {
     pub const fn pacing_enabled(&self) -> bool {
         self.pacing
     }
-
     #[must_use]
     pub const fn pacing(mut self, pacing: bool) -> Self {
         self.pacing = pacing;
@@ -477,10 +477,19 @@ impl ConnectionParameters {
     }
 
     #[must_use]
+    pub const fn ecn_enabled(&self) -> bool {
+        self.ecn
+    }
+    #[must_use]
+    pub const fn ecn(mut self, ecn: bool) -> Self {
+        self.ecn = ecn;
+        self
+    }
+
+    #[must_use]
     pub const fn pmtud_enabled(&self) -> bool {
         self.pmtud
     }
-
     #[must_use]
     pub const fn pmtud(mut self, pmtud: bool) -> Self {
         self.pmtud = pmtud;
@@ -491,7 +500,6 @@ impl ConnectionParameters {
     pub const fn pmtud_iface_mtu_enabled(&self) -> bool {
         self.pmtud_iface_mtu
     }
-
     #[must_use]
     pub const fn pmtud_iface_mtu(mut self, pmtud_iface_mtu: bool) -> Self {
         self.pmtud_iface_mtu = pmtud_iface_mtu;
@@ -502,7 +510,6 @@ impl ConnectionParameters {
     pub const fn sni_slicing_enabled(&self) -> bool {
         self.sni_slicing
     }
-
     #[must_use]
     pub const fn sni_slicing(mut self, sni_slicing: bool) -> Self {
         self.sni_slicing = sni_slicing;
@@ -513,7 +520,6 @@ impl ConnectionParameters {
     pub const fn mlkem_enabled(&self) -> bool {
         self.mlkem
     }
-
     #[must_use]
     pub const fn mlkem(mut self, mlkem: bool) -> Self {
         self.mlkem = mlkem;
@@ -524,7 +530,6 @@ impl ConnectionParameters {
     pub const fn randomize_first_pn_enabled(&self) -> bool {
         self.randomize_first_pn
     }
-
     #[must_use]
     pub const fn randomize_first_pn(mut self, randomize_first_pn: bool) -> Self {
         self.randomize_first_pn = randomize_first_pn;
@@ -535,7 +540,6 @@ impl ConnectionParameters {
     pub const fn scone_enabled(&self) -> bool {
         self.scone
     }
-
     #[must_use]
     pub const fn scone(mut self, scone: bool) -> Self {
         self.scone = scone;
@@ -546,7 +550,6 @@ impl ConnectionParameters {
     pub const fn spurious_recovery_enabled(&self) -> bool {
         self.spurious_recovery
     }
-
     #[must_use]
     pub const fn spurious_recovery(mut self, spurious_recovery: bool) -> Self {
         self.spurious_recovery = spurious_recovery;
@@ -559,7 +562,6 @@ impl ConnectionParameters {
     pub const fn get_mcquic_client_params(&self) -> Option<&crate::mcquic::ClientTransportParams> {
         self.mcquic_client_params.as_ref()
     }
-
     /// Configure experimental MCQUIC client transport parameters.
     #[cfg(feature = "mcquic")]
     #[must_use]
@@ -571,14 +573,29 @@ impl ConnectionParameters {
         self
     }
 
+    /// Get the application policy for the connection-isolated MCQUIC operation.
+    #[cfg(feature = "mcquic")]
+    #[must_use]
+    pub const fn get_mcquic_operation_policy(&self) -> crate::mcquic::OperationPolicy {
+        self.mcquic_operation_policy
+    }
+    /// Configure the application policy for the connection-isolated MCQUIC
+    /// operation.
+    #[cfg(feature = "mcquic")]
+    #[must_use]
+    pub const fn mcquic_operation_policy(mut self, policy: crate::mcquic::OperationPolicy) -> Self {
+        self.mcquic_operation_policy = policy;
+        self
+    }
+
     /// Return whether this endpoint advertises experimental MCQUIC server support.
     #[cfg(feature = "mcquic")]
     #[must_use]
     pub const fn mcquic_server_support_enabled(&self) -> bool {
         self.mcquic_server_support
     }
-
-    /// Configure whether this endpoint advertises experimental MCQUIC server support.
+    /// Configure whether this endpoint advertises experimental MCQUIC server
+    /// support.
     #[cfg(feature = "mcquic")]
     #[must_use]
     pub const fn mcquic_server_support(mut self, enabled: bool) -> Self {

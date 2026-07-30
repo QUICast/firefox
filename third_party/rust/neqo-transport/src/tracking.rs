@@ -523,7 +523,49 @@ pub struct AckTracker {
     spaces: EnumMap<PacketNumberSpace, Option<RecvdPackets>>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RecvdPacketsOutput {
+    ack_time: Option<Instant>,
+    last_ack_time: Option<Instant>,
+    unacknowledged_count: packet::Number,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AckOutputCheckpoint {
+    spaces: EnumMap<PacketNumberSpace, Option<RecvdPacketsOutput>>,
+}
+
 impl AckTracker {
+    pub(crate) fn output_checkpoint(&self) -> AckOutputCheckpoint {
+        let checkpoint = |space| {
+            self.spaces[space]
+                .as_ref()
+                .map(|packets| RecvdPacketsOutput {
+                    ack_time: packets.ack_time,
+                    last_ack_time: packets.last_ack_time,
+                    unacknowledged_count: packets.unacknowledged_count,
+                })
+        };
+        AckOutputCheckpoint {
+            spaces: EnumMap::from_array([
+                checkpoint(PacketNumberSpace::Initial),
+                checkpoint(PacketNumberSpace::Handshake),
+                checkpoint(PacketNumberSpace::ApplicationData),
+            ]),
+        }
+    }
+
+    pub(crate) fn restore_output(&mut self, checkpoint: &AckOutputCheckpoint) {
+        for (space, output) in &checkpoint.spaces {
+            let (Some(packets), Some(output)) = (self.spaces[space].as_mut(), *output) else {
+                continue;
+            };
+            packets.ack_time = output.ack_time;
+            packets.last_ack_time = output.last_ack_time;
+            packets.unacknowledged_count = output.unacknowledged_count;
+        }
+    }
+
     pub fn drop_space(&mut self, space: PacketNumberSpace) {
         assert_ne!(
             space,

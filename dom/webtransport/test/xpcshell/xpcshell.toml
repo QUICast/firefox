@@ -4,6 +4,10 @@
 
 [DEFAULT]
 head = "head.js"
+support-files = [
+  "data/chrome.manifest",
+  "data/mcquic_permission_worker.js",
+]
 run-if = [
   "!socketprocess_networking",
 ]
@@ -19,6 +23,16 @@ skip-if = [
   "os == 'android' && os_version == '14' && arch == 'x86_64' && opt", # Bug 1982953
 ]
 
+["test_mcquic_permission.js"]
+run-sequentially = ["true"] # http3server
+
+["test_multiple_streams.js"]
+run-sequentially = ["true"] # http3server
+skip-if = [
+  "os == 'android' && os_version == '14' && arch == 'x86_64' && debug", # Bug 1982953
+  "os == 'android' && os_version == '14' && arch == 'x86_64' && opt", # Bug 1982953
+]
+
 ["test_simple_conn.js"]
 run-sequentially = ["true"] # http3server
 skip-if = [
@@ -27,13 +41,6 @@ skip-if = [
 ]
 
 ["test_simple_stream.js"]
-run-sequentially = ["true"] # http3server
-skip-if = [
-  "os == 'android' && os_version == '14' && arch == 'x86_64' && debug", # Bug 1982953
-  "os == 'android' && os_version == '14' && arch == 'x86_64' && opt", # Bug 1982953
-]
-
-["test_multiple_streams.js"]
 run-sequentially = ["true"] # http3server
 skip-if = [
   "os == 'android' && os_version == '14' && arch == 'x86_64' && debug", # Bug 1982953

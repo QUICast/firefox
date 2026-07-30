@@ -5,6 +5,7 @@
 #ifndef DOM_WEBTRANSPORT_API_WEBTRANSPORT_H_
 #define DOM_WEBTRANSPORT_API_WEBTRANSPORT_H_
 
+#include "mozilla/GlobalTeardownObserver.h"
 #include "mozilla/dom/Promise.h"
 #include "mozilla/dom/WebTransportBinding.h"
 #include "mozilla/dom/WebTransportChild.h"
@@ -40,7 +41,8 @@ struct DatagramEntry {
   mozilla::TimeStamp mTimeStamp;
 };
 
-class WebTransport final : public nsISupports, public nsWrapperCache {
+class WebTransport final : public GlobalTeardownObserver,
+                           public nsWrapperCache {
   friend class WebTransportIncomingStreamsAlgorithms;
   // For mSendStreams/mReceiveStreams
   friend class WebTransportSendStream;
@@ -56,7 +58,7 @@ class WebTransport final : public nsISupports, public nsWrapperCache {
 
   static void NotifyBFCacheOnMainThread(nsPIDOMWindowInner* aInner,
                                         bool aCreated);
-  void NotifyToWindow(bool aCreated) const;
+  void NotifyToWindow(bool aCreated);
 
   void Init(const GlobalObject& aGlobal, const nsAString& aUrl,
             const WebTransportOptions& aOptions, ErrorResult& aError);
@@ -119,7 +121,8 @@ class WebTransport final : public nsISupports, public nsWrapperCache {
 
   void SendSetSendOrder(uint64_t aStreamId, Maybe<int64_t> aSendOrder);
 
-  void Shutdown() {}
+  void Shutdown();
+  void DisconnectFromOwner() override;
 
  private:
   ~WebTransport();
@@ -151,6 +154,7 @@ class WebTransport final : public nsISupports, public nsWrapperCache {
   uint64_t mInnerWindowID = 0;
   uint64_t mHttpChannelID = 0;
   uint64_t mBrowsingContextID = 0;
+  bool mBlocksBFCache = false;
   RefPtr<mozilla::net::WebTransportEventService> mService;
   // XXX may not need to be a RefPtr, since we own it through the Streams
   RefPtr<WebTransportIncomingStreamsAlgorithms> mIncomingBidirectionalAlgorithm;

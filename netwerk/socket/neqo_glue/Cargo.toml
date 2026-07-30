@@ -38,6 +38,11 @@ version = "0.13"
 default-features = false
 features = ["gecko"]
 
+[dev-dependencies.nss-test-fixture]
+git = "https://github.com/mozilla/nss-rs"
+package = "test-fixture"
+version = "0.1"
+
 [features]
 bench = [] # no-op, see <https://github.com/mozilla/neqo/issues/2390>
 fuzzing = ["neqo-http3/disable-encryption"]

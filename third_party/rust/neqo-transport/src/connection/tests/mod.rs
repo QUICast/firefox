@@ -43,8 +43,11 @@ mod ecn;
 mod handshake;
 mod idle;
 mod keys;
+#[cfg(feature = "mcquic")]
+mod mcquic;
 mod migration;
 mod null;
+mod output_tracking;
 mod pmtud;
 mod priority;
 mod recovery;
@@ -161,8 +164,8 @@ pub fn resumed_server(client: &Connection) -> Connection {
     new_server(ConnectionParameters::default().versions(client.version(), Version::all()))
 }
 
-/// If state is `AuthenticationNeeded` call `authenticated()`. This function will
-/// consume all outstanding events on the connection.
+/// If state is `AuthenticationNeeded` call `authenticated()`. This function
+/// will consume all outstanding events on the connection.
 pub fn maybe_authenticate(conn: &mut Connection) -> bool {
     let authentication_needed = |e| matches!(e, ConnectionEvent::AuthenticationNeeded);
     if conn.events().any(authentication_needed) {
@@ -217,13 +220,15 @@ where
     let mut did_ping = EnumMap::from_array([false, false]);
     while !is_done(a) {
         _ = maybe_authenticate(a);
-        // Insert a PING frame into the first application data packet an endpoint sends,
-        // in order to force the peer to ACK it. For the server, this is depending on the
-        // client's connection state, which is accessible during the tests.
+        // Insert a PING frame into the first application data packet an endpoint
+        // sends, in order to force the peer to ACK it. For the server, this is
+        // depending on the client's connection state, which is accessible during
+        // the tests.
         //
-        // We're doing this to prevent packet loss from delaying ACKs, which would cause
-        // cwnd to shrink, and also to prevent the delayed ACK timer from being armed after
-        // the handshake, which is not something the tests are written to account for.
+        // We're doing this to prevent packet loss from delaying ACKs, which would
+        // cause cwnd to shrink, and also to prevent the delayed ACK timer from
+        // being armed after the handshake, which is not something the tests are
+        // written to account for.
         let should_ping = !did_ping[a.role()]
             && (a.role() == Role::Client && *a.state() == State::Connected
                 || (a.role() == Role::Server && *b.state() == State::Connected));
@@ -278,7 +283,8 @@ where
 {
     fn check_rtt(stats: &Stats, rtt: Duration) {
         assert_eq!(stats.rtt, rtt);
-        // Validate that rttvar has been computed correctly based on the number of RTT updates.
+        // Validate that rttvar has been computed correctly based on the number of
+        // RTT updates.
         let n = stats.frame_rx.ack + usize::from(stats.rtt_init_guess);
         assert_eq!(stats.rttvar, rttvar_after_n_updates(n, rtt));
     }
@@ -329,9 +335,10 @@ fn exchange_ticket(
     get_tokens(client).pop().expect("should have token")
 }
 
-/// The `handshake` method inserts PING frames into the first application data packets,
-/// which forces each peer to ACK them. As a side effect, that causes both sides of the
-/// connection to be idle aftwerwards. This method simply verifies that this is the case.
+/// The `handshake` method inserts PING frames into the first application data
+/// packets, which forces each peer to ACK them. As a side effect, that causes
+/// both sides of the connection to be idle aftwerwards. This method simply
+/// verifies that this is the case.
 fn assert_idle(client: &mut Connection, server: &mut Connection, rtt: Duration, now: Instant) {
     let idle_timeout = min(
         client.conn_params.get_idle_timeout(),
@@ -430,7 +437,8 @@ fn fill_cwnd(c: &mut Connection, stream: StreamId, mut now: Instant) -> (Vec<Dat
 }
 
 /// This function is like the combination of `fill_cwnd` and `ack_bytes`.
-/// However, it acknowledges everything inline and preserves an RTT of `DEFAULT_RTT`.
+/// However, it acknowledges everything inline and preserves an RTT of
+/// `DEFAULT_RTT`.
 fn increase_cwnd(
     sender: &mut Connection,
     receiver: &mut Connection,
@@ -556,9 +564,9 @@ fn induce_persistent_congestion(
     now
 }
 
-/// This magic number is the size of the client's CWND after the handshake completes.
-/// This is the same as the initial congestion window, because during the handshake
-/// the cc is app limited and cwnd is not increased.
+/// This magic number is the size of the client's CWND after the handshake
+/// completes. This is the same as the initial congestion window, because during
+/// the handshake the cc is app limited and cwnd is not increased.
 ///
 /// As we change how we build packets, or even as NSS changes,
 /// this number might be different.  The tests that depend on this
@@ -591,9 +599,9 @@ fn assert_full_cwnd(packets: &[Datagram], cwnd: usize, mtu: usize) {
     assert_eq!(last.len(), last_packet(cwnd, mtu));
 }
 
-/// Send something on a stream from `sender` to `receiver`, maybe allowing for pacing.
-/// Takes a modifier function that can be used to modify the datagram before it is sent.
-/// Return the resulting datagram and the new time.
+/// Send something on a stream from `sender` to `receiver`, maybe allowing for
+/// pacing. Takes a modifier function that can be used to modify the datagram
+/// before it is sent. Return the resulting datagram and the new time.
 #[must_use]
 fn send_something_paced_with_modifier(
     sender: &mut Connection,

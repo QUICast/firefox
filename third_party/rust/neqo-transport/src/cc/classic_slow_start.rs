@@ -18,7 +18,7 @@ use crate::{cc::classic_cc::SlowStart, packet, rtt::RttEstimate, stats::Congesti
 /// > congestion window.
 ///
 /// <https://datatracker.ietf.org/doc/html/rfc9002#section-7.3.1-2>
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct ClassicSlowStart {}
 
 impl Display for ClassicSlowStart {

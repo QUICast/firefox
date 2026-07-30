@@ -16,9 +16,10 @@ use neqo_http3::{
         STATE_REASON_REQUESTED_BY_SERVER, State as McState, StateReasonScope,
     },
 };
-use neqo_transport::server::ConnectionRef;
+use neqo_transport::{ConnectionParameters, StreamId, server::ConnectionRef};
 use test_fixture::{
-    connect_peers, exchange_packets, http3_client_with_params, http3_server_with_params,
+    connect_peers, exchange_packets, fixture_init, http3_client_with_params,
+    http3_server_with_params, now,
 };
 
 fn client_params() -> ClientTransportParams {
@@ -45,7 +46,7 @@ fn announce() -> Announce {
         group: IpAddr::V4(Ipv4Addr::new(233, 252, 0, 1)),
         udp_port: 4433,
         header_protection_algorithm: 0x1301,
-        header_secret: vec![0x11; 32],
+        header_secret: vec![0x11; 32].into(),
         aead_algorithm: 0x1301,
         integrity_hash_algorithm: 1,
         max_rate_kibps: 10_000,
@@ -58,7 +59,7 @@ fn key() -> Key {
         channel_id: channel_id(),
         key_sequence: 1,
         from_packet_number: 0,
-        secret: vec![0x22; 32],
+        secret: vec![0x22; 32].into(),
     }
 }
 
@@ -126,7 +127,11 @@ fn connected_mcquic() -> (
 ) {
     let params = client_params();
     let mut client = http3_client_with_params(
-        Http3Parameters::default().mcquic_client_params(Some(params.clone())),
+        Http3Parameters::default().connection_parameters(
+            ConnectionParameters::default()
+                .mcquic_operation_policy(neqo_transport::mcquic::OperationPolicy::Allow)
+                .mcquic_client_params(Some(params.clone())),
+        ),
     );
     let mut server =
         http3_server_with_params(Http3Parameters::default().mcquic_server_support(true));
@@ -143,6 +148,10 @@ fn connected_mcquic() -> (
             _ => None,
         })
         .expect("server connection");
+
+    client
+        .mcquic_accept_operation(StreamId::new(0), now())
+        .expect("accept MCQUIC operation");
 
     (client, server, conn, params)
 }
@@ -189,6 +198,7 @@ fn http3_negotiates_and_exchanges_mcquic_control_frames() {
 
 #[test]
 fn http3_reexported_channel_receive_state_releases_datagram() {
+    fixture_init();
     let announce = announce();
     let key = key();
     let mut sender = ChannelSendState::new(announce.clone(), key.clone()).expect("send state");

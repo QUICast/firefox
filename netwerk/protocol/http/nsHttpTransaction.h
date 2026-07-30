@@ -266,6 +266,8 @@ class nsHttpTransaction final : public nsAHttpTransaction,
   virtual ~nsHttpTransaction();
 
   [[nodiscard]] nsresult Restart();
+  [[nodiscard]] nsresult RefreshWebTransportMulticastRequest(
+      nsHttpRequestHead* aRequestHead, bool aRebuildRequestStream);
   char* LocateHttpStart(char* buf, uint32_t len, bool aAllowPartialMatch);
   [[nodiscard]] nsresult ParseLine(nsACString& line);
   [[nodiscard]] nsresult ParseLineSegment(char* seg, uint32_t len);

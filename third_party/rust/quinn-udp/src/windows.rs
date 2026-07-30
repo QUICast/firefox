@@ -17,6 +17,7 @@ use windows_sys::Win32::Networking::WinSock;
 use crate::{
     EcnCodepoint, IO_ERROR_LOG_INTERVAL, RecvMeta, Transmit, UdpSockRef,
     cmsg::{self, CMsgHdr},
+    exact_transmit_segments,
     log::debug,
     log_sendmsg_error,
 };
@@ -203,7 +204,7 @@ impl UdpSocketState {
             self.ecn_v4_supported,
             self.ecn_v6_supported,
         ) {
-            Ok(()) => Ok(()),
+            Ok(_) => Ok(()),
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => Err(e),
             Err(e) => {
                 log_sendmsg_error(&self.last_send_error, e, transmit);
@@ -215,6 +216,15 @@ impl UdpSocketState {
 
     /// Sends a [`Transmit`] on the given socket without any additional error handling.
     pub fn try_send(&self, socket: UdpSockRef<'_>, transmit: &Transmit<'_>) -> io::Result<()> {
+        self.try_send_segments(socket, transmit).map(|_| ())
+    }
+
+    /// Sends a [`Transmit`] and returns the accepted UDP-segment prefix.
+    pub fn try_send_segments(
+        &self,
+        socket: UdpSockRef<'_>,
+        transmit: &Transmit<'_>,
+    ) -> io::Result<usize> {
         send(
             socket,
             transmit,
@@ -385,7 +395,7 @@ fn send(
     transmit: &Transmit<'_>,
     ecn_v4_supported: bool,
     ecn_v6_supported: bool,
-) -> io::Result<()> {
+) -> io::Result<usize> {
     // we cannot use [`socket2::sendmsg()`] and [`socket2::MsgHdr`] as we do not have access
     // to the inner field which holds the WSAMSG
     let mut ctrl_buf = cmsg::Aligned([0; CMSG_LEN]);
@@ -477,7 +487,7 @@ fn send(
     };
 
     match rc {
-        0 => Ok(()),
+        0 => exact_transmit_segments(len as usize, transmit),
         _ => Err(io::Error::last_os_error()),
     }
 }

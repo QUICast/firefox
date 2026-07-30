@@ -18,6 +18,7 @@ UNIFIED_SOURCES += [
     "TestHostRecordQueue.cpp",
     "TestHttp2WebTransport.cpp",
     "TestHttp3ConnectUDPStream.cpp",
+    "TestHttp3SessionMcquic.cpp",
     "TestHttpAtom.cpp",
     "TestHttpAuthUtils.cpp",
     "TestHttpChannel.cpp",
@@ -30,6 +31,7 @@ UNIFIED_SOURCES += [
     "TestMcquicMulticastReceiver.cpp",
     "TestMIMEInputStream.cpp",
     "TestMozURL.cpp",
+    "TestNeqoTrackedOutput.cpp",
     "TestNoVarySearchUtils.cpp",
     "TestPACMan.cpp",
     "TestParseHeaders.cpp",
@@ -48,6 +50,8 @@ UNIFIED_SOURCES += [
     "TestUrlPatternGlue.cpp",
     "TestUseAsDictionary.cpp",
     "TestWebTransportFlowControl.cpp",
+    "TestWebTransportLifecycle.cpp",
+    "TestWebTransportOperationPolicy.cpp",
 ]
 
 # Not in UNIFIED_SOURCES: adding a file to the unified list reshuffles which
@@ -80,12 +84,14 @@ USE_LIBS += [
 ]
 
 LOCAL_INCLUDES += [
+    "/dom/webtransport/parent",
     "/netwerk/base",
     "/netwerk/base/http-sfv",
     "/netwerk/cache2",
     "/netwerk/cookie",
     "/netwerk/dns",
     "/netwerk/protocol/http",
+    "/netwerk/protocol/webtransport",
     "/toolkit/components/jsoncpp/include",
     "/xpcom/tests/gtest",
 ]

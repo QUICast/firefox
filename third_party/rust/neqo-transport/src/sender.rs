@@ -35,7 +35,25 @@ pub struct PacketSender {
     qlog: Qlog,
 }
 
+#[derive(Debug, Clone)]
+pub struct OutputCheckpoint {
+    cc: crate::cc::OutputCheckpoint,
+    pacer: crate::pace::OutputCheckpoint,
+}
+
 impl PacketSender {
+    pub(crate) fn output_checkpoint(&self) -> OutputCheckpoint {
+        OutputCheckpoint {
+            cc: self.cc.output_checkpoint(),
+            pacer: self.pacer.output_checkpoint(),
+        }
+    }
+
+    pub(crate) fn restore_output(&mut self, checkpoint: OutputCheckpoint) {
+        self.cc.restore_output(checkpoint.cc);
+        self.pacer.restore_output(checkpoint.pacer);
+    }
+
     #[must_use]
     pub fn new(conn_params: &ConnectionParameters, pmtud: Pmtud, now: Instant) -> Self {
         let mtu = pmtud.plpmtu();

@@ -151,6 +151,14 @@ pub struct Transmit<'a> {
 }
 
 impl Transmit<'_> {
+    /// Returns the number of UDP segments represented by this transmission.
+    #[must_use]
+    pub fn segment_count(&self) -> usize {
+        self.segment_size
+            .filter(|size| *size != 0)
+            .map_or(1, |size| self.contents.len().div_ceil(size))
+    }
+
     /// Computes the effective segment-size of the packet.
     ///
     /// Some (older) network drivers don't like being told to do GSO even if
@@ -167,6 +175,15 @@ impl Transmit<'_> {
             size if size >= self.contents.len() => None,
             size => Some(size),
         }
+    }
+}
+
+#[cfg(any(unix, windows))]
+fn exact_transmit_segments(written: usize, transmit: &Transmit<'_>) -> std::io::Result<usize> {
+    match written.cmp(&transmit.contents.len()) {
+        std::cmp::Ordering::Equal => Ok(transmit.segment_count()),
+        std::cmp::Ordering::Less => Err(std::io::Error::from(std::io::ErrorKind::WriteZero)),
+        std::cmp::Ordering::Greater => Err(std::io::Error::from(std::io::ErrorKind::InvalidData)),
     }
 }
 
@@ -286,6 +303,25 @@ mod tests {
             make_transmit(&[0u8; 10], Some(5)).effective_segment_size(),
             Some(5),
             "segment_size < content_len should yield effective segment_size"
+        );
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn successful_platform_send_requires_exact_byte_count() {
+        let transmit = make_transmit(&[0u8; 10], Some(4));
+        assert_eq!(exact_transmit_segments(10, &transmit).unwrap(), 3);
+        assert_eq!(
+            exact_transmit_segments(9, &transmit)
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::WriteZero
+        );
+        assert_eq!(
+            exact_transmit_segments(11, &transmit)
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::InvalidData
         );
     }
 

@@ -81,6 +81,12 @@ where
     blocked_frame: bool,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct SenderFlowControlOutput {
+    blocked_at: Option<u64>,
+    blocked_frame: bool,
+}
+
 impl<T> SenderFlowControl<T>
 where
     T: Debug + Sized,
@@ -159,6 +165,18 @@ where
             self.blocked_frame = true;
         }
     }
+
+    pub(crate) const fn output_checkpoint(&self) -> SenderFlowControlOutput {
+        SenderFlowControlOutput {
+            blocked_at: self.blocked_at,
+            blocked_frame: self.blocked_frame,
+        }
+    }
+
+    pub(crate) const fn restore_output(&mut self, checkpoint: SenderFlowControlOutput) {
+        self.blocked_at = checkpoint.blocked_at;
+        self.blocked_frame = checkpoint.blocked_frame;
+    }
 }
 
 impl SenderFlowControl<()> {
@@ -168,6 +186,16 @@ impl SenderFlowControl<()> {
         tokens: &mut recovery::Tokens,
         stats: &mut FrameStats,
     ) {
+        let _: Option<SenderFlowControlOutput> = self.write_frames_tracked(builder, tokens, stats);
+    }
+
+    pub(crate) fn write_frames_tracked<B: Buffer>(
+        &mut self,
+        builder: &mut packet::Builder<B>,
+        tokens: &mut recovery::Tokens,
+        stats: &mut FrameStats,
+    ) -> Option<SenderFlowControlOutput> {
+        let checkpoint = self.output_checkpoint();
         if let Some(limit) = self.blocked_needed()
             && builder.write_varint_frame(&[FrameType::DataBlocked.into(), limit])
         {
@@ -176,7 +204,9 @@ impl SenderFlowControl<()> {
                 limit,
             )));
             self.blocked_sent();
+            return Some(checkpoint);
         }
+        None
     }
 }
 
@@ -187,6 +217,16 @@ impl SenderFlowControl<StreamId> {
         tokens: &mut recovery::Tokens,
         stats: &mut FrameStats,
     ) {
+        let _: Option<SenderFlowControlOutput> = self.write_frames_tracked(builder, tokens, stats);
+    }
+
+    pub(crate) fn write_frames_tracked<B: Buffer>(
+        &mut self,
+        builder: &mut packet::Builder<B>,
+        tokens: &mut recovery::Tokens,
+        stats: &mut FrameStats,
+    ) -> Option<SenderFlowControlOutput> {
+        let checkpoint = self.output_checkpoint();
         if let Some(limit) = self.blocked_needed()
             && builder.write_varint_frame(&[
                 FrameType::StreamDataBlocked.into(),
@@ -202,7 +242,9 @@ impl SenderFlowControl<StreamId> {
                 },
             ));
             self.blocked_sent();
+            return Some(checkpoint);
         }
+        None
     }
 }
 
@@ -213,6 +255,16 @@ impl SenderFlowControl<StreamType> {
         tokens: &mut recovery::Tokens,
         stats: &mut FrameStats,
     ) {
+        let _: Option<SenderFlowControlOutput> = self.write_frames_tracked(builder, tokens, stats);
+    }
+
+    pub(crate) fn write_frames_tracked<B: Buffer>(
+        &mut self,
+        builder: &mut packet::Builder<B>,
+        tokens: &mut recovery::Tokens,
+        stats: &mut FrameStats,
+    ) -> Option<SenderFlowControlOutput> {
+        let checkpoint = self.output_checkpoint();
         if let Some(limit) = self.blocked_needed() {
             let frame = match self.subject {
                 StreamType::BiDi => FrameType::StreamsBlockedBiDi,
@@ -227,8 +279,10 @@ impl SenderFlowControl<StreamType> {
                     },
                 ));
                 self.blocked_sent();
+                return Some(checkpoint);
             }
         }
+        None
     }
 }
 
@@ -257,6 +311,14 @@ where
     consumed: u64,
     /// Retired items.
     retired: u64,
+    frame_pending: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ReceiverFlowControlOutput {
+    max_active: u64,
+    max_allowed: u64,
+    last_update: Option<Instant>,
     frame_pending: bool,
 }
 
@@ -343,6 +405,22 @@ where
 
     pub const fn consumed(&self) -> u64 {
         self.consumed
+    }
+
+    pub(crate) const fn output_checkpoint(&self) -> ReceiverFlowControlOutput {
+        ReceiverFlowControlOutput {
+            max_active: self.max_active,
+            max_allowed: self.max_allowed,
+            last_update: self.last_update,
+            frame_pending: self.frame_pending,
+        }
+    }
+
+    pub(crate) const fn restore_output(&mut self, checkpoint: &ReceiverFlowControlOutput) {
+        self.max_active = checkpoint.max_active;
+        self.max_allowed = checkpoint.max_allowed;
+        self.last_update = checkpoint.last_update;
+        self.frame_pending = checkpoint.frame_pending;
     }
 
     /// Core auto-tuning logic for adjusting the maximum flow control window.
@@ -456,10 +534,23 @@ impl ReceiverFlowControl<()> {
         now: Instant,
         rtt: Duration,
     ) {
+        let _: Option<ReceiverFlowControlOutput> =
+            self.write_frames_tracked(builder, tokens, stats, now, rtt);
+    }
+
+    pub(crate) fn write_frames_tracked<B: Buffer>(
+        &mut self,
+        builder: &mut packet::Builder<B>,
+        tokens: &mut recovery::Tokens,
+        stats: &mut FrameStats,
+        now: Instant,
+        rtt: Duration,
+    ) -> Option<ReceiverFlowControlOutput> {
         if !self.frame_needed() {
-            return;
+            return None;
         }
 
+        let checkpoint = self.output_checkpoint();
         self.auto_tune(now, rtt);
 
         let max_allowed = self.next_limit();
@@ -470,6 +561,10 @@ impl ReceiverFlowControl<()> {
             )));
             self.frame_sent(max_allowed);
             self.last_update = Some(now);
+            Some(checkpoint)
+        } else {
+            self.restore_output(&checkpoint);
+            None
         }
     }
 
@@ -515,10 +610,23 @@ impl ReceiverFlowControl<StreamId> {
         now: Instant,
         rtt: Duration,
     ) {
+        let _: Option<ReceiverFlowControlOutput> =
+            self.write_frames_tracked(builder, tokens, stats, now, rtt);
+    }
+
+    pub(crate) fn write_frames_tracked<B: Buffer>(
+        &mut self,
+        builder: &mut packet::Builder<B>,
+        tokens: &mut recovery::Tokens,
+        stats: &mut FrameStats,
+        now: Instant,
+        rtt: Duration,
+    ) -> Option<ReceiverFlowControlOutput> {
         if !self.frame_needed() {
-            return;
+            return None;
         }
 
+        let checkpoint = self.output_checkpoint();
         self.auto_tune(now, rtt);
 
         let max_allowed = self.next_limit();
@@ -536,6 +644,10 @@ impl ReceiverFlowControl<StreamId> {
             ));
             self.frame_sent(max_allowed);
             self.last_update = Some(now);
+            Some(checkpoint)
+        } else {
+            self.restore_output(&checkpoint);
+            None
         }
     }
 
@@ -585,22 +697,36 @@ impl ReceiverFlowControl<StreamType> {
         tokens: &mut recovery::Tokens,
         stats: &mut FrameStats,
     ) {
+        let _: Option<ReceiverFlowControlOutput> =
+            self.write_frames_tracked(builder, tokens, stats);
+    }
+
+    pub(crate) fn write_frames_tracked<B: Buffer>(
+        &mut self,
+        builder: &mut packet::Builder<B>,
+        tokens: &mut recovery::Tokens,
+        stats: &mut FrameStats,
+    ) -> Option<ReceiverFlowControlOutput> {
         if !self.frame_needed() {
-            return;
+            return None;
         }
+        let checkpoint = self.output_checkpoint();
         let max_streams = self.next_limit();
         let frame = match self.subject {
             StreamType::BiDi => FrameType::MaxStreamsBiDi,
             StreamType::UniDi => FrameType::MaxStreamsUniDi,
         };
-        if builder.write_varint_frame(&[frame.into(), max_streams]) {
-            stats.max_streams += 1;
-            tokens.push(recovery::Token::Stream(StreamRecoveryToken::MaxStreams {
-                stream_type: self.subject,
-                max_streams,
-            }));
-            self.frame_sent(max_streams);
-        }
+        builder
+            .write_varint_frame(&[frame.into(), max_streams])
+            .then(|| {
+                stats.max_streams += 1;
+                tokens.push(recovery::Token::Stream(StreamRecoveryToken::MaxStreams {
+                    stream_type: self.subject,
+                    max_streams,
+                }));
+                self.frame_sent(max_streams);
+                checkpoint
+            })
     }
 
     /// Check if received item exceeds the allowed flow control limit.

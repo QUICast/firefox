@@ -283,26 +283,31 @@ pub fn packet_dropped(qlog: &mut Qlog, decrypt_err: &packet::DecryptionError, no
 }
 
 pub fn packets_lost(qlog: &mut Qlog, pkts: &[sent::Packet], now: Instant) {
-    qlog.add_event_with_stream(|stream| {
-        for pkt in pkts {
-            let header =
-                PacketHeader::with_type(pkt.packet_type().into(), Some(pkt.pn()), None, None, None);
+    for pkt in pkts {
+        qlog.add_event_at(
+            || {
+                let header = PacketHeader::with_type(
+                    pkt.packet_type().into(),
+                    Some(pkt.pn()),
+                    None,
+                    None,
+                    None,
+                );
 
-            let trigger = pkt
-                .loss_info()
-                .map(|info| PacketLostTrigger::from(info.trigger))
-                .or_else(|| pkt.pto_fired().then_some(PacketLostTrigger::PtoExpired));
+                let trigger = pkt
+                    .loss_info()
+                    .map(|info| PacketLostTrigger::from(info.trigger))
+                    .or_else(|| pkt.pto_fired().then_some(PacketLostTrigger::PtoExpired));
 
-            let ev_data = EventData::PacketLost(PacketLost {
-                header: Some(header),
-                trigger,
-                ..Default::default()
-            });
-
-            stream.add_event_data_with_instant(ev_data, now)?;
-        }
-        Ok(())
-    });
+                Some(EventData::PacketLost(PacketLost {
+                    header: Some(header),
+                    trigger,
+                    ..Default::default()
+                }))
+            },
+            now,
+        );
+    }
 }
 
 pub fn recovery_parameters_set(

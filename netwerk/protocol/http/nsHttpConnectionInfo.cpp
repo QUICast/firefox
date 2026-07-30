@@ -360,6 +360,7 @@ already_AddRefed<nsHttpConnectionInfo> nsHttpConnectionInfo::Clone() const {
   clone->SetHasIPHintAddress(HasIPHintAddress());
   clone->SetEchConfig(GetEchConfig());
   clone->SetWebTransportId(GetWebTransportId());
+  CopyWebTransportOperationPolicyTo(clone);
   clone->SetHappyEyeballsEnabled(GetHappyEyeballsEnabled());
 
   MOZ_ASSERT(clone->Equals(this));
@@ -416,6 +417,8 @@ nsHttpConnectionInfo::CloneAndAdoptHTTPSSVCRecord(
   clone->SetIPv4Disabled(GetIPv4Disabled());
   clone->SetIPv6Disabled(GetIPv6Disabled());
   clone->SetHttp3Disabled(GetHttp3Disabled());
+  clone->SetWebTransportId(GetWebTransportId());
+  CopyWebTransportOperationPolicyTo(clone);
   clone->SetHappyEyeballsEnabled(GetHappyEyeballsEnabled());
 
   bool hasIPHint = false;
@@ -474,6 +477,7 @@ nsHttpConnectionInfo::CloneAndAdoptPortAndAlpn(
   // entry as the origin connection info — WebTransport server cert hashes are
   // stored under that entry and looked up by Http3Session::Init.
   clone->SetWebTransportId(GetWebTransportId());
+  CopyWebTransportOperationPolicyTo(clone);
 
   // IPHints and echConfig are handled in HappyEyeballsConnectionAttempt.
   return clone.forget();
@@ -507,6 +511,23 @@ void nsHttpConnectionInfo::SerializeHttpConnectionInfo(
   aArgs.echConfig() = aInfo->GetEchConfig();
   aArgs.webTransport() = aInfo->GetWebTransport();
   aArgs.webTransportId() = aInfo->GetWebTransportId();
+  if (aInfo->GetWebTransportOperationPolicy().isSome() &&
+      (!aInfo->GetWebTransportOperationPolicy().ref().AllowsMulticast() ||
+       aInfo->HasValidWebTransportMulticastBinding())) {
+    const auto& policy = aInfo->GetWebTransportOperationPolicy().ref();
+    mozilla::ipc::WebTransportOperationPolicyArgs policyArgs;
+    policyArgs.multicast() = policy.mMulticast;
+    policyArgs.operationId() = policy.mOperationId;
+    policyArgs.initiatingOrigin() = policy.mInitiatingOrigin;
+    policyArgs.targetOrigin() = policy.mTargetOrigin;
+    policyArgs.originAttributes() = policy.mOriginAttributes;
+    policyArgs.clientContextBound() = policy.mClientContextBound;
+    policyArgs.clientContextId() = policy.mClientContextId;
+    policyArgs.browsingContextBound() = policy.mBrowsingContextBound;
+    policyArgs.browsingContextId() = policy.mBrowsingContextId;
+    policyArgs.webTransportId() = policy.mWebTransportId;
+    aArgs.webTransportOperationPolicy() = Some(std::move(policyArgs));
+  }
   aArgs.happyEyeballsEnabled() = aInfo->GetHappyEyeballsEnabled();
 
   if (!aInfo->ProxyInfo()) {
@@ -541,6 +562,24 @@ nsHttpConnectionInfo::DeserializeHttpConnectionInfoCloneArgs(
   }
   // Transfer Webtransport ids
   cinfo->SetWebTransportId(aInfoArgs.webTransportId());
+  if (aInfoArgs.webTransportOperationPolicy().isSome()) {
+    const auto& policyArgs = aInfoArgs.webTransportOperationPolicy().ref();
+    WebTransportOperationPolicy policy;
+    policy.mMulticast = policyArgs.multicast();
+    policy.mOperationId = policyArgs.operationId();
+    policy.mInitiatingOrigin = policyArgs.initiatingOrigin();
+    policy.mTargetOrigin = policyArgs.targetOrigin();
+    policy.mOriginAttributes = policyArgs.originAttributes();
+    policy.mClientContextBound = policyArgs.clientContextBound();
+    policy.mClientContextId = policyArgs.clientContextId();
+    policy.mBrowsingContextBound = policyArgs.browsingContextBound();
+    policy.mBrowsingContextId = policyArgs.browsingContextId();
+    policy.mWebTransportId = policyArgs.webTransportId();
+    ApplyWebTransportMulticastCapabilityGate(policy);
+    if (policy.IsValid()) {
+      cinfo->SetWebTransportOperationPolicy(policy);
+    }
+  }
 
   // Make sure the anonymous, insecure-scheme, and private flags are transferred
   cinfo->SetAnonymous(aInfoArgs.anonymous());
@@ -657,6 +696,10 @@ void nsHttpConnectionInfo::SetHttp3Disabled(bool aHttp3Disabled) {
 void nsHttpConnectionInfo::SetWebTransport(bool aWebTransport) {
   if (mWebTransport != aWebTransport) {
     mWebTransport = aWebTransport;
+    if (!aWebTransport && mWebTransportOperationPolicy.isSome() &&
+        mWebTransportOperationPolicy.ref().AllowsMulticast()) {
+      mWebTransportOperationPolicy.ref().ProhibitMulticast();
+    }
     RebuildHashKey();
   }
 }
@@ -664,7 +707,74 @@ void nsHttpConnectionInfo::SetWebTransport(bool aWebTransport) {
 void nsHttpConnectionInfo::SetWebTransportId(uint64_t id) {
   if (mWebTransportId != id) {
     mWebTransportId = id;
+    if (mWebTransportOperationPolicy.isSome() &&
+        mWebTransportOperationPolicy.ref().AllowsMulticast() &&
+        mWebTransportOperationPolicy.ref().mWebTransportId != 0 &&
+        mWebTransportOperationPolicy.ref().mWebTransportId != id) {
+      mWebTransportOperationPolicy.ref().ProhibitMulticast();
+    }
     RebuildHashKey();
+  }
+}
+
+void nsHttpConnectionInfo::SetWebTransportOperationPolicy(
+    const WebTransportOperationPolicy& aPolicy) {
+  WebTransportOperationPolicy policy = aPolicy;
+  Maybe<WebTransportOperationPolicy> binding = Some(policy);
+  if (policy.AllowsMulticast() && (!IsWebTransportMulticastBindingValid(
+                                       binding, mWebTransportId, mWebTransport,
+                                       mIsHttp3, false, mOriginAttributes) ||
+                                   !WebTransportTargetOriginMatchesConnection(
+                                       policy, mOrigin, mOriginPort))) {
+    policy.ProhibitMulticast();
+  }
+  mWebTransportOperationPolicy = Some(std::move(policy));
+}
+
+bool nsHttpConnectionInfo::HasValidWebTransportMulticastBinding(
+    bool aIsOuterProxyConnection) const {
+  return IsWebTransportMulticastBindingValid(
+             mWebTransportOperationPolicy, mWebTransportId, mWebTransport,
+             mIsHttp3, aIsOuterProxyConnection, mOriginAttributes) &&
+         WebTransportTargetOriginMatchesConnection(
+             mWebTransportOperationPolicy.ref(), mOrigin, mOriginPort);
+}
+
+bool nsHttpConnectionInfo::IsWebTransportMulticastEligible(
+    bool aIsOuterProxyConnection) const {
+  return IsWebTransportMulticastConnectionEligible(
+             mWebTransportOperationPolicy, mWebTransportId, mWebTransport,
+             mIsHttp3, aIsOuterProxyConnection, mOriginAttributes) &&
+         WebTransportTargetOriginMatchesConnection(
+             mWebTransportOperationPolicy.ref(), mOrigin, mOriginPort);
+}
+
+void nsHttpConnectionInfo::CopyWebTransportOperationPolicyTo(
+    nsHttpConnectionInfo* aDestination) const {
+  MOZ_ASSERT(aDestination);
+  if (mWebTransportOperationPolicy.isNothing()) {
+    return;
+  }
+
+  const WebTransportOperationPolicy& policy =
+      mWebTransportOperationPolicy.ref();
+  if (!policy.AllowsMulticast()) {
+    aDestination->SetWebTransportOperationPolicy(policy);
+    return;
+  }
+
+  if (!HasValidWebTransportMulticastBinding()) {
+    return;
+  }
+
+  Maybe<WebTransportOperationPolicy> binding = Some(policy);
+  if (IsWebTransportMulticastBindingValid(
+          binding, aDestination->GetWebTransportId(),
+          aDestination->GetWebTransport(), aDestination->IsHttp3(), false,
+          aDestination->GetOriginAttributes()) &&
+      WebTransportTargetOriginMatchesConnection(
+          policy, aDestination->GetOrigin(), aDestination->OriginPort())) {
+    aDestination->SetWebTransportOperationPolicy(policy);
   }
 }
 

@@ -20,6 +20,7 @@ class ClientInfo;
 namespace mozilla::net {
 class WebTransportSessionBase;
 class WebTransportStreamBase;
+struct WebTransportOperationPolicy;
 }
 %}
 
@@ -27,8 +28,9 @@ class WebTransportStreamBase;
 [ptr] native WebTransportStreamPtr(mozilla::net::WebTransportStreamBase);
 native Datagram(nsTArray<uint8_t>&&);
 [ref] native const_MaybeClientInfoRef(const mozilla::Maybe<mozilla::dom::ClientInfo>);
+[ref] native const_WebTransportOperationPolicyRef(const mozilla::net::WebTransportOperationPolicy);
 
-[builtinclass, scriptable, uuid(c20d6e77-8cb1-4838-a88d-fff826080aa3)]
+[builtinclass, scriptable, uuid(8a74bd07-2b42-4082-993a-689280077445)]
 interface nsIWebTransport : nsISupports {
   cenum WebTransportError : 16 {
     UNKNOWN_ERROR,
@@ -40,6 +42,11 @@ interface nsIWebTransport : nsISupports {
     h2 = 1,
   };
 
+  cenum MulticastPolicy: 8 {
+    prohibit = 0,
+    allow = 1,
+  };
+
   // When called, perform steps in "Initialization WebTransport over HTTP".
   void asyncConnect(in nsIURI aURI,
                     in boolean aDedicated,
@@ -47,7 +54,8 @@ interface nsIWebTransport : nsISupports {
                     in nsIPrincipal aLoadingPrincipal,
                     in unsigned long aSecurityFlags,
                     in WebTransportSessionEventListener aListener,
-                    [optional] in nsIWebTransport_HTTPVersion aVersion);
+                    [optional] in nsIWebTransport_HTTPVersion aVersion,
+                    [optional] in nsIWebTransport_MulticastPolicy aMulticast);
 
   [noscript]
   void asyncConnectWithClient(in nsIURI aURI,
@@ -58,6 +66,7 @@ interface nsIWebTransport : nsISupports {
                     in unsigned long aSecurityFlags,
                     in WebTransportSessionEventListener aListener,
                     in const_MaybeClientInfoRef aClientInfo,
+                    in const_WebTransportOperationPolicyRef aOperationPolicy,
                     in nsIWebTransport_HTTPVersion aVersion);
 
   // Asynchronously get stats.
@@ -66,6 +75,9 @@ interface nsIWebTransport : nsISupports {
   // Close the session.
   void closeSession(in uint32_t aErrorCode,
                     in ACString aReason);
+
+  // Internal browser/network-policy revocation. The Session remains active.
+  [noscript] void revokeMulticast();
 
   // Create and open a new WebTransport stream.
   void createOutgoingBidirectionalStream(in nsIWebTransportStreamCallback aListener);
@@ -132,12 +144,14 @@ interface WebTransportSessionEventListenerInternal : nsISupports {
   void onDatagramReceivedInternal(in Datagram aData);
 };
 
-[uuid(faad75bd-83c6-420b-9fdb-a70bd70be449)]
+[uuid(0db6528b-4ae9-4d9e-8686-1e9bc6a32499)]
 interface WebTransportConnectionSettings : nsISupports {
   // WebTransport specific connection information
   readonly attribute boolean dedicated;
   void getServerCertificateHashes(out Array<nsIWebTransportHash> aServerCertHashes);
   readonly attribute nsIWebTransport_HTTPVersion httpVersion;
+  [noscript, nostdcall, notxpcom] const_WebTransportOperationPolicyRef
+  GetOperationPolicy();
 };
 
 // This interface is used as a callback when creating an outgoing

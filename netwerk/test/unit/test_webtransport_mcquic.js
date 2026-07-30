@@ -125,7 +125,9 @@ add_task(
       [],
       Services.scriptSecurityManager.getSystemPrincipal(),
       Ci.nsILoadInfo.SEC_ALLOW_CROSS_ORIGIN_SEC_CONTEXT_IS_NULL,
-      listener
+      listener,
+      Ci.nsIWebTransport.h3,
+      Ci.nsIWebTransport.allow
     );
     await ready;
 
@@ -136,11 +138,6 @@ add_task(
       firstStream,
       "the initial unicast fallback body"
     );
-    if (firstMessage.startsWith("MCQUIC-SKIP:")) {
-      info(firstMessage);
-      webTransport.closeSession(0, "");
-      return;
-    }
     Assert.ok(!firstMessage.startsWith("MCQUIC-ERROR:"), firstMessage);
     Assert.equal(firstMessage, "unicast-fallback-before-join");
 
@@ -209,3 +206,84 @@ add_task(
     webTransport.closeSession(0, "");
   }
 );
+
+add_task(async function test_mcquic_policy_revocation_continues_unicast() {
+  Services.prefs.setBoolPref(MCQUIC_PREF, true);
+
+  const port = Services.env.get("MOZHTTP3_PORT");
+  Assert.notEqual(port, null);
+  Assert.notEqual(port, "");
+
+  const streams = makeEventQueue();
+  const listener = new WebTransportListener().QueryInterface(
+    Ci.WebTransportSessionEventListener
+  );
+  const ready = withTimeout(
+    new Promise(resolve => {
+      listener.ready = resolve;
+    }),
+    "the revocation WebTransport session"
+  );
+  listener.streamAvailable = stream => streams.push(stream);
+  listener.onResetReceived = (streamId, error) => {
+    Assert.ok(false, `Unexpected reset for stream ${streamId}: ${error}`);
+  };
+  listener.onStopSending = (streamId, error) => {
+    Assert.ok(
+      false,
+      `Unexpected STOP_SENDING for stream ${streamId}: ${error}`
+    );
+  };
+
+  const webTransport = NetUtil.newWebTransport().QueryInterface(
+    Ci.nsIWebTransport
+  );
+  webTransport.asyncConnect(
+    NetUtil.newURI(
+      `https://foo.example.com:${port}/mcquic_permission_revocation`
+    ),
+    true,
+    [],
+    Services.scriptSecurityManager.getSystemPrincipal(),
+    Ci.nsILoadInfo.SEC_ALLOW_CROSS_ORIGIN_SEC_CONTEXT_IS_NULL,
+    listener,
+    Ci.nsIWebTransport.h3,
+    Ci.nsIWebTransport.allow
+  );
+  await ready;
+
+  const initialFallback = await streams.next(
+    "the pre-join revocation fallback stream"
+  );
+  const initialMessage = await readWebTransportStream(
+    initialFallback,
+    "the pre-join revocation fallback body"
+  );
+  Assert.ok(!initialMessage.startsWith("MCQUIC-ERROR:"), initialMessage);
+  Assert.equal(initialMessage, "unicast-fallback-before-join");
+
+  const multicastStream = await streams.next(
+    "the pre-revocation multicast stream"
+  );
+  Assert.equal(
+    await readWebTransportStream(
+      multicastStream,
+      "the pre-revocation multicast body"
+    ),
+    "multicast-before-revocation"
+  );
+
+  Services.prefs.setBoolPref(MCQUIC_PREF, false);
+  const unicastStream = await streams.next(
+    "the post-revocation unicast stream"
+  );
+  Assert.equal(
+    await readWebTransportStream(
+      unicastStream,
+      "the post-revocation unicast body"
+    ),
+    "unicast-fallback-after-revocation"
+  );
+
+  webTransport.closeSession(0, "");
+});

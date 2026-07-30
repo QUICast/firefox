@@ -31,7 +31,20 @@ use crate::{
     send_stream::SendStreams,
     stats::FrameStats,
     stream_id::StreamId,
+    streams::StreamOutputJournal,
 };
+
+#[derive(Debug)]
+pub(crate) enum OutputUndo {
+    MaxStreamData {
+        stream_id: StreamId,
+        checkpoint: crate::fc::ReceiverFlowControlOutput,
+    },
+    StopSending {
+        stream_id: StreamId,
+        frame_needed: bool,
+    },
+}
 
 #[derive(Debug, Default)]
 pub struct RecvStreams {
@@ -50,12 +63,36 @@ impl RecvStreams {
         now: Instant,
         rtt: Duration,
     ) {
+        let mut journal = StreamOutputJournal::default();
+        self.write_frames_tracked(builder, tokens, stats, now, rtt, &mut journal);
+    }
+
+    pub(crate) fn write_frames_tracked<B: Buffer>(
+        &mut self,
+        builder: &mut packet::Builder<B>,
+        tokens: &mut recovery::Tokens,
+        stats: &mut FrameStats,
+        now: Instant,
+        rtt: Duration,
+        journal: &mut StreamOutputJournal,
+    ) {
         for stream in self.streams.values_mut() {
-            stream.write_frame(builder, tokens, stats, now, rtt);
+            stream.write_frame_tracked(builder, tokens, stats, now, rtt, journal);
             if builder.is_full() {
                 return;
             }
         }
+    }
+
+    pub(crate) fn undo_output(&mut self, undo: &OutputUndo) {
+        let stream_id = match undo {
+            OutputUndo::MaxStreamData { stream_id, .. }
+            | OutputUndo::StopSending { stream_id, .. } => *stream_id,
+        };
+        self.streams
+            .get_mut(&stream_id)
+            .expect("output stream exists until resolution")
+            .undo_output(undo);
     }
 
     pub fn insert(&mut self, id: StreamId, stream: RecvStream) {
@@ -972,9 +1009,30 @@ impl RecvStream {
         now: Instant,
         rtt: Duration,
     ) {
+        let mut journal = StreamOutputJournal::default();
+        self.write_frame_tracked(builder, tokens, stats, now, rtt, &mut journal);
+    }
+
+    fn write_frame_tracked<B: Buffer>(
+        &mut self,
+        builder: &mut packet::Builder<B>,
+        tokens: &mut recovery::Tokens,
+        stats: &mut FrameStats,
+        now: Instant,
+        rtt: Duration,
+        journal: &mut StreamOutputJournal,
+    ) {
         match &mut self.state {
             // Maybe send MAX_STREAM_DATA
-            RecvStreamState::Recv { fc, .. } => fc.write_frames(builder, tokens, stats, now, rtt),
+            RecvStreamState::Recv { fc, .. } => {
+                if let Some(checkpoint) = fc.write_frames_tracked(builder, tokens, stats, now, rtt)
+                {
+                    journal.push_recv(OutputUndo::MaxStreamData {
+                        stream_id: self.stream_id,
+                        checkpoint,
+                    });
+                }
+            }
             // Maybe send STOP_SENDING
             RecvStreamState::AbortReading {
                 frame_needed, err, ..
@@ -985,13 +1043,37 @@ impl RecvStream {
                     *err,
                 ]) =>
             {
+                let previous = *frame_needed;
                 tokens.push(recovery::Token::Stream(StreamRecoveryToken::StopSending {
                     stream_id: self.stream_id,
                 }));
                 stats.stop_sending += 1;
                 *frame_needed = false;
+                journal.push_recv(OutputUndo::StopSending {
+                    stream_id: self.stream_id,
+                    frame_needed: previous,
+                });
             }
             _ => {}
+        }
+    }
+
+    const fn undo_output(&mut self, undo: &OutputUndo) {
+        match undo {
+            OutputUndo::MaxStreamData { checkpoint, .. } => {
+                if let RecvStreamState::Recv { fc, .. } = &mut self.state {
+                    fc.restore_output(checkpoint);
+                }
+            }
+            OutputUndo::StopSending { frame_needed, .. } => {
+                if let RecvStreamState::AbortReading {
+                    frame_needed: current,
+                    ..
+                } = &mut self.state
+                {
+                    *current = *frame_needed;
+                }
+            }
         }
     }
 

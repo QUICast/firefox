@@ -415,7 +415,7 @@ impl Default for LossRecoverySpaces {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct PtoState {
     /// The packet number space that caused the PTO to fire.
     space: PacketNumberSpace,
@@ -424,6 +424,38 @@ struct PtoState {
     packets: usize,
     /// The complete set of packet number spaces that can have probes sent.
     probe: PacketNumberSpaceSet,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct LossRecoverySpaceOutput {
+    last_ack_eliciting: Option<Instant>,
+    in_flight_outstanding: usize,
+}
+
+#[derive(Debug, Clone)]
+#[cfg_attr(
+    not(feature = "bench"),
+    expect(
+        clippy::redundant_pub_crate,
+        reason = "the recovery module is public under the bench feature"
+    )
+)]
+pub(crate) struct OutputCheckpoint {
+    pto_state: Option<PtoState>,
+    spaces: EnumMap<PacketNumberSpace, Option<LossRecoverySpaceOutput>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(
+    not(feature = "bench"),
+    expect(
+        clippy::redundant_pub_crate,
+        reason = "the recovery module is public under the bench feature"
+    )
+)]
+pub(crate) struct SentPacketId {
+    space: PacketNumberSpace,
+    pn: packet::Number,
 }
 
 impl PtoState {
@@ -529,8 +561,17 @@ impl Loss {
         dropped
     }
 
-    pub fn on_packet_sent(&mut self, path: &PathRef, mut sent_packet: sent::Packet, now: Instant) {
+    pub(crate) fn on_packet_sent_tracked(
+        &mut self,
+        path: &PathRef,
+        mut sent_packet: sent::Packet,
+        now: Instant,
+    ) -> Result<SentPacketId, sent::Packet> {
         let pn_space = PacketNumberSpace::from(sent_packet.packet_type());
+        let packet_id = SentPacketId {
+            space: pn_space,
+            pn: sent_packet.pn(),
+        };
         qtrace!("[{self}] packet {pn_space}-{} sent", sent_packet.pn());
         if let Some(pto) = self.pto_state.as_mut() {
             pto.pto_sent(pn_space);
@@ -538,12 +579,59 @@ impl Loss {
         if let Some(space) = self.spaces.get_mut(pn_space) {
             path.borrow_mut().packet_sent(&mut sent_packet, now);
             space.on_packet_sent(sent_packet);
+            Ok(packet_id)
         } else {
             qinfo!(
                 "[{self}] ignoring packet {} from dropped space {pn_space}",
                 sent_packet.pn()
             );
+            Err(sent_packet)
         }
+    }
+
+    #[cfg(test)]
+    fn on_packet_sent(&mut self, path: &PathRef, sent_packet: sent::Packet, now: Instant) {
+        let _ = self.on_packet_sent_tracked(path, sent_packet, now);
+    }
+
+    pub(crate) fn output_checkpoint(&self) -> OutputCheckpoint {
+        let checkpoint = |space| {
+            self.spaces.get(space).map(|space| LossRecoverySpaceOutput {
+                last_ack_eliciting: space.last_ack_eliciting,
+                in_flight_outstanding: space.in_flight_outstanding,
+            })
+        };
+        OutputCheckpoint {
+            pto_state: self.pto_state.clone(),
+            spaces: EnumMap::from_array([
+                checkpoint(PacketNumberSpace::Initial),
+                checkpoint(PacketNumberSpace::Handshake),
+                checkpoint(PacketNumberSpace::ApplicationData),
+            ]),
+        }
+    }
+
+    pub(crate) fn remove_output_packet(&mut self, id: SentPacketId) -> Option<sent::Packet> {
+        self.spaces.get_mut(id.space)?.sent_packets.remove(id.pn)
+    }
+
+    pub(crate) fn restore_output(&mut self, checkpoint: &OutputCheckpoint) {
+        self.pto_state.clone_from(&checkpoint.pto_state);
+        for (space, output) in &checkpoint.spaces {
+            let (Some(recovery), Some(output)) = (self.spaces.get_mut(space), *output) else {
+                continue;
+            };
+            recovery.last_ack_eliciting = output.last_ack_eliciting;
+            recovery.in_flight_outstanding = output.in_flight_outstanding;
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn tracked_packet_count(&self) -> usize {
+        self.spaces
+            .iter()
+            .map(|space| space.sent_packets.len())
+            .sum()
     }
 
     /// Whether to probe the path.

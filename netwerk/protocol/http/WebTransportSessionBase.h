@@ -38,6 +38,8 @@ class WebTransportSessionBase {
       std::function<void(Result<RefPtr<WebTransportStreamBase>, nsresult>&&)>&&
           aCallback) = 0;
   virtual void StartReading() {}
+  virtual void OnExtendedConnectResponse(bool aMulticastAccepted) {}
+  virtual void RevokeMulticast() {}
 
  protected:
   virtual ~WebTransportSessionBase() = default;

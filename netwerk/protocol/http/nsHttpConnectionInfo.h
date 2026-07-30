@@ -9,6 +9,8 @@
 #include "mozilla/AlreadyAddRefed.h"
 #include "mozilla/BasePrincipal.h"
 #include "mozilla/Logging.h"
+#include "mozilla/Maybe.h"
+#include "mozilla/net/WebTransportOperationPolicy.h"
 #include "mozilla/net/happy_eyeballs_glue.h"
 #include "nsCOMPtr.h"
 #include "nsHttp.h"
@@ -265,7 +267,21 @@ class nsHttpConnectionInfo final : public ARefBase {
   bool GetWebTransport() const { return mWebTransport; }
 
   void SetWebTransportId(uint64_t id);
-  uint32_t GetWebTransportId() const { return mWebTransportId; };
+  uint64_t GetWebTransportId() const { return mWebTransportId; };
+
+  void SetWebTransportOperationPolicy(
+      const WebTransportOperationPolicy& aPolicy);
+  void ClearWebTransportOperationPolicy() {
+    mWebTransportOperationPolicy.reset();
+  }
+  const Maybe<WebTransportOperationPolicy>& GetWebTransportOperationPolicy()
+      const {
+    return mWebTransportOperationPolicy;
+  }
+  bool HasValidWebTransportMulticastBinding(
+      bool aIsOuterProxyConnection = false) const;
+  bool IsWebTransportMulticastEligible(
+      bool aIsOuterProxyConnection = false) const;
 
   const nsCString& GetNPNToken() const { return mNPNToken; }
   const nsCString& GetProxyNPNToken() const { return mProxyNPNToken; }
@@ -322,6 +338,8 @@ class nsHttpConnectionInfo final : public ARefBase {
             const nsACString& username, nsProxyInfo* proxyInfo,
             const OriginAttributes& originAttributes, bool e2eSSL,
             bool aIsHttp3, bool aWebTransport);
+  void CopyWebTransportOperationPolicyTo(
+      nsHttpConnectionInfo* aDestination) const;
   void SetOriginServer(const nsACString& host, int32_t port);
   nsCString::char_type GetHashCharAt(HashKeyIndex aIndex) const {
     return mHashKey.CharAt(UnderlyingIndex(aIndex));
@@ -366,6 +384,7 @@ class nsHttpConnectionInfo final : public ARefBase {
 
   uint64_t mWebTransportId = 0;  // current dedicated Id only used for
                                  // Webtransport, zero means not dedicated
+  Maybe<WebTransportOperationPolicy> mWebTransportOperationPolicy;
   bool mIsWildCard = false;
 
   bool mHappyEyeballsEnabled = false;

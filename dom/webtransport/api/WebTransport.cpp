@@ -24,6 +24,7 @@
 #include "mozilla/ipc/BackgroundChild.h"
 #include "mozilla/ipc/Endpoint.h"
 #include "mozilla/ipc/PBackgroundChild.h"
+#include "mozilla/net/WebTransportOperationPolicy.h"
 #include "nsIURL.h"
 #include "nsIWebTransportStream.h"
 #include "nsPIDOMWindowInlines.h"
@@ -54,6 +55,7 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(WebTransport)
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(WebTransport)
+  tmp->DisconnectFromOwner();
   tmp->mSendStreams.Clear();
   tmp->mReceiveStreams.Clear();
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mGlobal)
@@ -66,10 +68,6 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(WebTransport)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mDatagrams)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mReady)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mClosed)
-  if (tmp->mChild) {
-    tmp->mChild->Shutdown(false);
-    tmp->mChild = nullptr;
-  }
   NS_IMPL_CYCLE_COLLECTION_UNLINK_PRESERVED_WRAPPER
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 
@@ -81,7 +79,8 @@ NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(WebTransport)
 NS_INTERFACE_MAP_END
 
 WebTransport::WebTransport(nsIGlobalObject* aGlobal)
-    : mGlobal(aGlobal),
+    : GlobalTeardownObserver(aGlobal),
+      mGlobal(aGlobal),
       mState(WebTransportState::CONNECTING),
       mReliability(WebTransportReliabilityMode::Pending) {
   LOG(("Creating WebTransport %p", this));
@@ -97,9 +96,32 @@ WebTransport::~WebTransport() {
   // sure to clean up the channel.
   // Since child has a raw ptr to us, we MUST call Shutdown() before we're
   // destroyed
+  Shutdown();
+}
+
+void WebTransport::Shutdown() {
+  if (mState != WebTransportState::CLOSED &&
+      mState != WebTransportState::FAILED) {
+    NotifyToWindow(false);
+    mState = WebTransportState::FAILED;
+  }
+
+  mSendStreams.Clear();
+  mReceiveStreams.Clear();
+  mUnidirectionalStreams.Clear();
+  mBidirectionalStreams.Clear();
+  mIncomingBidirectionalAlgorithm = nullptr;
+  mIncomingUnidirectionalAlgorithm = nullptr;
+
   if (mChild) {
     mChild->Shutdown(true);
+    mChild = nullptr;
   }
+}
+
+void WebTransport::DisconnectFromOwner() {
+  Shutdown();
+  GlobalTeardownObserver::DisconnectFromOwner();
 }
 
 // From parent
@@ -251,6 +273,11 @@ void WebTransport::Init(const GlobalObject& aGlobal, const nsAString& aURL,
       WebTransportCongestionControl::Default;  // aOptions.mCongestionControl;
   // Set this to 'default' until we add congestion control setting
 
+  const net::WebTransportMulticastPolicy multicast =
+      aOptions.mMulticast == WebTransportMulticastPolicy::Allow
+          ? net::WebTransportMulticastPolicy::Allow
+          : net::WebTransportMulticastPolicy::Prohibit;
+
   // Setup up WebTransportDatagramDuplexStream
   // Step 12: Let incomingDatagrams be a new ReadableStream.
   // Step 13: Let outgoingDatagrams be a new WritableStream.
@@ -378,7 +405,7 @@ void WebTransport::Init(const GlobalObject& aGlobal, const nsAString& aURL,
   backgroundChild
       ->SendCreateWebTransportParent(
           aURL, principal, mBrowsingContextID, ipcClientInfo, dedicated,
-          requireUnreliable, (uint32_t)congestionControl,
+          multicast, requireUnreliable, (uint32_t)congestionControl,
           std::move(aServerCertHashes), std::move(parentEndpoint))
       ->Then(GetCurrentSerialEventTarget(), __func__,
              [self = RefPtr{this}](
@@ -999,7 +1026,12 @@ class BFCacheNotifyWTRunnable final : public WorkerProxyToMainThreadRunnable {
   bool mCreated;
 };
 
-void WebTransport::NotifyToWindow(bool aCreated) const {
+void WebTransport::NotifyToWindow(bool aCreated) {
+  if (mBlocksBFCache == aCreated) {
+    return;
+  }
+  mBlocksBFCache = aCreated;
+
   if (NS_IsMainThread()) {
     NotifyBFCacheOnMainThread(GetParentObject()->GetAsInnerWindow(), aCreated);
     return;

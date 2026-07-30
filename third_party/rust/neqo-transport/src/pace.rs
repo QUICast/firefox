@@ -31,7 +31,28 @@ pub struct Pacer {
     p: usize,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct OutputCheckpoint {
+    t: Instant,
+    c: isize,
+    p: usize,
+}
+
 impl Pacer {
+    pub(crate) const fn output_checkpoint(&self) -> OutputCheckpoint {
+        OutputCheckpoint {
+            t: self.t,
+            c: self.c,
+            p: self.p,
+        }
+    }
+
+    pub(crate) const fn restore_output(&mut self, checkpoint: OutputCheckpoint) {
+        self.t = checkpoint.t;
+        self.c = checkpoint.c;
+        self.p = checkpoint.p;
+    }
+
     /// This value determines how much faster the pacer operates than the
     /// congestion window.
     ///
